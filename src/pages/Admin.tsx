@@ -1,0 +1,2667 @@
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
+import {
+  Calendar,
+  Users,
+  DollarSign,
+  Settings,
+  LogOut,
+  Trash2,
+  ChevronLeft,
+  ChevronRight,
+  Sparkles,
+  ExternalLink,
+  Mail,
+  Plus,
+  Pencil,
+} from 'lucide-react';
+import { supabase } from '../lib/supabase';
+import type { UserVerificationsRow } from '../lib/supabase';
+import { logSupabaseError } from '../lib/supabaseErrors';
+import { useAuth } from '../contexts/useAuth';
+import FullPageLoader from '../components/FullPageLoader';
+import Logo from '../components/ui/Logo';
+import { env } from '../config/env.js';
+import { uploadCaptainsLogHeroImage } from '../lib/storageUpload';
+import {
+  CAPTAINS_LOG_CATEGORIES,
+  captainsLogArticlePath,
+  slugifyCaptainsLogTitle,
+  type CaptainsLogCategory,
+} from '../lib/captainsLog';
+import {
+  clearIncidentsByBookingIdCache,
+  getAdminAlerts,
+  getAdminSubscribers,
+  getIncidentsByBookingId,
+} from '../lib/adminApi';
+
+interface AdminProps {
+  onNavigate: (page: string) => void;
+}
+
+const PAGE_SIZE = 10;
+
+const LS_CAP_RUN_STATUS = 'lz_admin_captains_log_last_status';
+const LS_CAP_RUN_TIME = 'lz_admin_captains_log_last_at';
+
+let adminAlertsInitialFetchDoneDev = false;
+let adminSubscribersInitialFetchDoneDev = false;
+
+type StatusFilter = 'all' | 'pending' | 'pending_verification' | 'confirmed' | 'cancelled';
+
+type CaptainsLogRow = {
+  id: string;
+  title: string;
+  slug: string;
+  category: string;
+  created_at: string;
+};
+
+type ContactInboxRow = {
+  id: string;
+  full_name: string;
+  email: string;
+  message: string;
+  is_read: boolean;
+  created_at: string;
+};
+
+type AdminAlertRow = {
+  id: string;
+  type: string | null;
+  message: string | null;
+  score: number | null;
+  created_at: string;
+};
+
+type AdminSubscriberRow = {
+  email: string;
+  phone: string | null;
+  created_at: string;
+};
+
+type IncidentPhotoRow = {
+  id?: string;
+  incident_id?: string;
+  file_path: string;
+  file_name?: string | null;
+  content_type?: string | null;
+};
+
+type IncidentRow = {
+  id: string;
+  booking_id: string;
+  description: string;
+  status: 'pending' | 'approved' | 'charged' | 'disputed' | string;
+  estimated_cost?: number | null;
+  actual_cost?: number | null;
+  admin_notes?: string | null;
+  created_at: string;
+  photos?: IncidentPhotoRow[];
+};
+
+function previewMessageBody(text: string, maxLen = 120): string {
+  const t = text.trim();
+  if (t.length <= maxLen) return t;
+  return `${t.slice(0, maxLen)}…`;
+}
+
+/** Joined list row from `select('*, customers(*), boats(*)')`, asserted until DB types are codegen'd */
+type DocStatus = 'pending' | 'verified' | 'rejected';
+
+type AdminBookingRow = {
+  id: string;
+  status: string;
+  total_price: string | number;
+  start_time: string;
+  /** Per-booking Storage URLs when present (fallback: customers.id_document_url / insurance_proof_url). */
+  license_url?: string | null;
+  insurance_url?: string | null;
+  waiver_signed?: boolean | null;
+  stripe_payment_id?: string | null;
+  payment_status?: string | null;
+  /** Present when `select` embeds waivers; used if `waiver_signed` column is missing on `bookings`. */
+  waivers?: { id: string }[] | null;
+  license_status?: DocStatus | string | null;
+  insurance_status?: DocStatus | string | null;
+  customers?: {
+    full_name?: string;
+    email?: string;
+    id_document_url?: string | null;
+    insurance_proof_url?: string | null;
+  } | null;
+  boats?: { name?: string } | null;
+  user_verifications?: UserVerificationsRow | UserVerificationsRow[] | null;
+};
+
+function buoyVerificationRow(
+  raw: UserVerificationsRow | UserVerificationsRow[] | null | undefined
+): UserVerificationsRow | null {
+  if (!raw) return null;
+  return Array.isArray(raw) ? raw[0] ?? null : raw;
+}
+
+/** Maps DB values `pending` | `verified` | `rejected` to operator-facing copy; “submitted” is implied by pending + proof URL. */
+function insuranceStatusCaption(status: string | null | undefined, hasProof: boolean): string {
+  const s = String(status || 'pending');
+  if (s === 'verified') return 'Booking confirmed';
+  if (s === 'rejected') return 'Please re-upload valid insurance';
+  if (hasProof) return 'Under review';
+  return 'Insurance required';
+}
+
+export default function Admin({ onNavigate }: AdminProps) {
+  const { user, isAdmin, signOut, loading: authLoading } = useAuth();
+
+  useEffect(() => {
+    if (import.meta.env.DEV) {
+      console.log('[Admin] gate', {
+        user: user ? { id: user.id, email: user.email } : null,
+        isAdmin,
+        loading: authLoading,
+      });
+    }
+  }, [user, isAdmin, authLoading]);
+  const [bookings, setBookings] = useState<AdminBookingRow[]>([]);
+  const [stats, setStats] = useState({
+    totalBookings: 0,
+    pendingBookings: 0,
+    revenue: 0,
+    customers: 0,
+  });
+  const [loading, setLoading] = useState(true);
+  const [tableLoading, setTableLoading] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [emailSearch, setEmailSearch] = useState('');
+  const [debouncedEmailSearch, setDebouncedEmailSearch] = useState('');
+  const [page, setPage] = useState(0);
+  const [totalCount, setTotalCount] = useState(0);
+  const initialBookingsLoadRef = useRef(true);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [notice, setNotice] = useState<{ variant: 'success' | 'error' | 'info'; text: string } | null>(
+    null
+  );
+  const [lastRunStatus, setLastRunStatus] = useState<string>('N/A');
+  const [lastRunTime, setLastRunTime] = useState<string>('');
+  const [captainsLogArticles, setCaptainsLogArticles] = useState<CaptainsLogRow[]>([]);
+  const [captainsLogFormOpen, setCaptainsLogFormOpen] = useState(false);
+  const [newArticleTitle, setNewArticleTitle] = useState('');
+  const [newArticleSlug, setNewArticleSlug] = useState('');
+  const [newArticleCategory, setNewArticleCategory] = useState<CaptainsLogCategory>('Local Highlights');
+  const [newArticleContent, setNewArticleContent] = useState('');
+  const [newArticleImageUrl, setNewArticleImageUrl] = useState('');
+  const [newArticleImageAlt, setNewArticleImageAlt] = useState('');
+  const [newArticleSummary, setNewArticleSummary] = useState('');
+  const [captainsLogHeroFile, setCaptainsLogHeroFile] = useState<File | null>(null);
+  const captainsLogHeroInputRef = useRef<HTMLInputElement>(null);
+  const [captainsLogSaving, setCaptainsLogSaving] = useState(false);
+  const [captainsLogFormError, setCaptainsLogFormError] = useState<string | null>(null);
+  const [captainsLogEditingId, setCaptainsLogEditingId] = useState<string | null>(null);
+  const [captainsLogEditLoadingId, setCaptainsLogEditLoadingId] = useState<string | null>(null);
+  const [captainsLogDeletingId, setCaptainsLogDeletingId] = useState<string | null>(null);
+  const [contactInbox, setContactInbox] = useState<ContactInboxRow[]>([]);
+  const [contactInboxLoading, setContactInboxLoading] = useState(false);
+  const [alerts, setAlerts] = useState<AdminAlertRow[]>([]);
+  const [alertsLoading, setAlertsLoading] = useState(false);
+  const [alertsError, setAlertsError] = useState<string | null>(null);
+  const [subscribers, setSubscribers] = useState<AdminSubscriberRow[]>([]);
+  const [subscribersLoading, setSubscribersLoading] = useState(false);
+  const [subscribersError, setSubscribersError] = useState<string | null>(null);
+  const [runningAlerts, setRunningAlerts] = useState(false);
+  const [incidentCounts, setIncidentCounts] = useState<Record<string, number>>({});
+  const [selectedIncidentBookingId, setSelectedIncidentBookingId] = useState<string>('');
+  const [bookingIncidents, setBookingIncidents] = useState<IncidentRow[]>([]);
+  const [incidentsLoading, setIncidentsLoading] = useState(false);
+  const [incidentDescription, setIncidentDescription] = useState('');
+  const [incidentFile, setIncidentFile] = useState<File | null>(null);
+  const [incidentSubmitting, setIncidentSubmitting] = useState(false);
+  const [editingIncidentId, setEditingIncidentId] = useState<string | null>(null);
+  const [incidentImageFailures, setIncidentImageFailures] = useState<Record<string, boolean>>({});
+  const [expandedResolvedIncidentId, setExpandedResolvedIncidentId] = useState<string | null>(null);
+  const [incidentEditDrafts, setIncidentEditDrafts] = useState<
+    Record<string, { status: string; estimated_cost: string; actual_cost: string; admin_notes: string }>
+  >({});
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    setLastRunStatus(localStorage.getItem(LS_CAP_RUN_STATUS) || 'N/A');
+    setLastRunTime(localStorage.getItem(LS_CAP_RUN_TIME) || '');
+  }, [isAdmin]);
+
+  useEffect(() => {
+    if (!notice || notice.variant !== 'success') return;
+    const t = window.setTimeout(() => setNotice(null), 5000);
+    return () => window.clearTimeout(t);
+  }, [notice]);
+
+  const loadCaptainsLog = useCallback(async () => {
+    if (!isAdmin) return;
+    const { data, error } = await supabase
+      .from('captains_log')
+      .select('id, title, slug, category, created_at')
+      .order('created_at', { ascending: false })
+      .limit(500);
+    logSupabaseError('Admin.loadCaptainsLog', error);
+    if (data) {
+      setCaptainsLogArticles(data as CaptainsLogRow[]);
+    }
+  }, [isAdmin]);
+
+  const reserveCaptainsLogSlug = useCallback(
+    async (
+      title: string,
+      explicitSlug: string,
+      options?: { excludeArticleId?: string | null }
+    ): Promise<{ slug: string } | { error: string }> => {
+      const excludeArticleId = options?.excludeArticleId ?? null;
+      const root = explicitSlug.trim()
+        ? slugifyCaptainsLogTitle(explicitSlug)
+        : slugifyCaptainsLogTitle(title);
+      if (!root) {
+        return { error: 'Add a title (or a custom URL slug) before saving.' };
+      }
+      for (let n = 0; n < 80; n++) {
+        const candidate = n === 0 ? root : `${root}-${n + 1}`;
+        const { data, error } = await supabase
+          .from('captains_log')
+          .select('id')
+          .eq('slug', candidate)
+          .maybeSingle();
+        if (error) {
+          return { error: error.message };
+        }
+        if (!data) {
+          return { slug: candidate };
+        }
+        if (excludeArticleId && data.id === excludeArticleId) {
+          return { slug: candidate };
+        }
+      }
+      return { slug: `${root}-${Date.now()}` };
+    },
+    []
+  );
+
+  const resetCaptainsLogForm = useCallback(() => {
+    setCaptainsLogEditingId(null);
+    setNewArticleTitle('');
+    setNewArticleSlug('');
+    setNewArticleCategory('Local Highlights');
+    setNewArticleContent('');
+    setNewArticleImageUrl('');
+    setNewArticleImageAlt('');
+    setNewArticleSummary('');
+    setCaptainsLogHeroFile(null);
+    if (captainsLogHeroInputRef.current) {
+      captainsLogHeroInputRef.current.value = '';
+    }
+    setCaptainsLogFormError(null);
+  }, []);
+
+  const handleEditCaptainsLogArticle = async (id: string) => {
+    setCaptainsLogFormError(null);
+    setCaptainsLogEditLoadingId(id);
+    try {
+      const { data, error } = await supabase.from('captains_log').select('*').eq('id', id).maybeSingle();
+      logSupabaseError('Admin.loadCaptainsLogForEdit', error);
+      if (error) {
+        setCaptainsLogFormError(error.message || 'Could not load article.');
+        return;
+      }
+      if (!data) {
+        setCaptainsLogFormError('Article not found.');
+        return;
+      }
+      setCaptainsLogEditingId(id);
+      setNewArticleTitle(data.title ?? '');
+      setNewArticleSlug(data.slug ?? '');
+      setNewArticleCategory((data.category as CaptainsLogCategory) || 'Local Highlights');
+      setNewArticleContent(data.content ?? '');
+      setNewArticleImageUrl(data.image_url ?? '');
+      setNewArticleImageAlt(data.image_alt ?? '');
+      setNewArticleSummary(data.summary ?? '');
+      setCaptainsLogHeroFile(null);
+      if (captainsLogHeroInputRef.current) {
+        captainsLogHeroInputRef.current.value = '';
+      }
+      setCaptainsLogFormOpen(true);
+    } finally {
+      setCaptainsLogEditLoadingId(null);
+    }
+  };
+
+  const handleSaveCaptainsLogArticle = async () => {
+    setCaptainsLogFormError(null);
+    const title = newArticleTitle.trim();
+    const content = newArticleContent.trim();
+    if (!title) {
+      setCaptainsLogFormError('Title is required.');
+      return;
+    }
+    if (!content) {
+      setCaptainsLogFormError('Body content is required (use Markdown).');
+      return;
+    }
+    const slugRes = await reserveCaptainsLogSlug(title, newArticleSlug, {
+      excludeArticleId: captainsLogEditingId,
+    });
+    if ('error' in slugRes) {
+      setCaptainsLogFormError(slugRes.error);
+      return;
+    }
+    const slug = slugRes.slug;
+    const imageAlt = newArticleImageAlt.trim();
+    const summary = newArticleSummary.trim();
+    setCaptainsLogSaving(true);
+    try {
+      let imageUrl = newArticleImageUrl.trim();
+      if (captainsLogHeroFile) {
+        const { url, error: uploadErr } = await uploadCaptainsLogHeroImage(captainsLogHeroFile);
+        if (uploadErr || !url) {
+          setCaptainsLogFormError(uploadErr?.message || 'Image upload failed.');
+          return;
+        }
+        imageUrl = url;
+        setNewArticleImageUrl(url);
+      }
+
+      const payloadBase = {
+        title: title.slice(0, 500),
+        slug: slug.slice(0, 200),
+        content,
+        category: newArticleCategory,
+        image_url: imageUrl || null,
+        image_alt: imageAlt || null,
+        summary: summary || null,
+      };
+
+      if (captainsLogEditingId) {
+        const { data: updatedRow, error } = await supabase
+          .from('captains_log')
+          .update({
+            ...payloadBase,
+            ...(captainsLogHeroFile ? { image_source: 'Manual' as const } : {}),
+          })
+          .eq('id', captainsLogEditingId)
+          .select('id, image_url')
+          .maybeSingle();
+        logSupabaseError('Admin.updateCaptainsLog', error);
+        if (error) {
+          setCaptainsLogFormError(error.message || 'Could not update article.');
+          return;
+        }
+        if (!updatedRow) {
+          setCaptainsLogFormError(
+            'Update did not change any row (check that you are signed in as admin and RLS allows updates).'
+          );
+          return;
+        }
+        setNotice({ variant: 'success', text: 'Article updated.' });
+      } else {
+        const { data: insertedRow, error } = await supabase
+          .from('captains_log')
+          .insert({
+            ...payloadBase,
+            publish_date: null,
+            source: 'Manual',
+            source_url: null,
+            image_source: 'Manual',
+          })
+          .select('id, image_url')
+          .maybeSingle();
+        logSupabaseError('Admin.insertCaptainsLog', error);
+        if (error) {
+          setCaptainsLogFormError(error.message || 'Could not save article.');
+          return;
+        }
+        if (!insertedRow) {
+          setCaptainsLogFormError('Insert did not return a row (check admin permissions).');
+          return;
+        }
+        setNotice({ variant: 'success', text: 'Article published.' });
+      }
+      resetCaptainsLogForm();
+      setCaptainsLogFormOpen(false);
+      await loadCaptainsLog();
+    } finally {
+      setCaptainsLogSaving(false);
+    }
+  };
+
+  const handleDeleteCaptainsLogArticle = async (id: string, title: string) => {
+    if (!window.confirm(`Delete this article?\n\n"${title.slice(0, 120)}${title.length > 120 ? '…' : ''}"\n\nThis cannot be undone.`)) {
+      return;
+    }
+    setCaptainsLogDeletingId(id);
+    try {
+      const { data: deletedOk, error } = await supabase.rpc('admin_delete_captains_log', {
+        article_id: id,
+      });
+      logSupabaseError('Admin.deleteCaptainsLog', error);
+      if (error) {
+        window.alert(error.message || 'Could not delete article. Check that you are signed in as an admin.');
+        return;
+      }
+      if (!deletedOk) {
+        window.alert('No article matched that id. Try refreshing the list.');
+        return;
+      }
+      setNotice({ variant: 'success', text: 'Article deleted.' });
+      await loadCaptainsLog();
+    } finally {
+      setCaptainsLogDeletingId(null);
+    }
+  };
+
+  const loadContactInbox = useCallback(async () => {
+    if (!isAdmin) return;
+    setContactInboxLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('contact_messages')
+        .select('id, full_name, email, message, is_read, created_at')
+        .order('created_at', { ascending: false })
+        .limit(100);
+      logSupabaseError('Admin.loadContactInbox', error);
+      if (data) {
+        setContactInbox(data as ContactInboxRow[]);
+      } else {
+        setContactInbox([]);
+      }
+    } finally {
+      setContactInboxLoading(false);
+    }
+  }, [isAdmin]);
+
+  const loadAlerts = useCallback(async () => {
+    if (!isAdmin) return;
+    if (!env.apiUrlConfigured || !env.apiUrl) {
+      setAlertsError('API server URL is not configured (set VITE_API_URL).');
+      setAlerts([]);
+      setAlertsLoading(false);
+      return;
+    }
+    setAlertsLoading(true);
+    setAlertsError(null);
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      if (!token) {
+        setAlertsError('Admin session unavailable.');
+        setAlerts([]);
+        return;
+      }
+
+      const payload = (await getAdminAlerts(token)) as AdminAlertRow[] | { error?: string };
+      setAlerts(Array.isArray(payload) ? payload : []);
+    } catch (err) {
+      console.error('[admin-alerts]', err);
+      setAlertsError('Could not load alert activity.');
+      setAlerts([]);
+    } finally {
+      setAlertsLoading(false);
+    }
+  }, [isAdmin]);
+
+  const loadSubscribers = useCallback(async () => {
+    if (!isAdmin) return;
+    if (!env.apiUrlConfigured || !env.apiUrl) {
+      setSubscribersError('API server URL is not configured (set VITE_API_URL).');
+      setSubscribers([]);
+      setSubscribersLoading(false);
+      return;
+    }
+    setSubscribersLoading(true);
+    setSubscribersError(null);
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      if (!token) {
+        setSubscribersError('Admin session unavailable.');
+        setSubscribers([]);
+        return;
+      }
+
+      const payload = (await getAdminSubscribers(token)) as AdminSubscriberRow[] | { error?: string };
+      setSubscribers(Array.isArray(payload) ? payload : []);
+    } catch (err) {
+      console.error('[admin-subscribers]', err);
+      setSubscribersError('Could not load subscribers.');
+      setSubscribers([]);
+    } finally {
+      setSubscribersLoading(false);
+    }
+  }, [isAdmin]);
+
+  const handleRunAlerts = useCallback(async () => {
+    if (!isAdmin || runningAlerts) return;
+    if (!env.apiUrlConfigured || !env.apiUrl) {
+      setNotice({ variant: 'error', text: 'API server URL is not configured (set VITE_API_URL).' });
+      return;
+    }
+    setRunningAlerts(true);
+    setNotice(null);
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      if (!token) {
+        setNotice({ variant: 'error', text: 'Admin session unavailable.' });
+        return;
+      }
+
+      const res = await fetch(`${env.apiUrl}/api/admin/run-alerts`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const payload = (await res.json().catch(() => ({}))) as { success?: boolean; error?: string };
+      if (!res.ok || !payload.success) {
+        setNotice({ variant: 'error', text: payload.error || 'Failed to run alerts.' });
+        return;
+      }
+
+      setNotice({ variant: 'success', text: 'Alerts triggered successfully.' });
+      await Promise.all([loadAlerts(), loadSubscribers()]);
+    } catch (err) {
+      console.error('[admin-run-alerts]', err);
+      setNotice({ variant: 'error', text: 'Run alerts failed.' });
+    } finally {
+      setRunningAlerts(false);
+    }
+  }, [isAdmin, runningAlerts, loadAlerts, loadSubscribers]);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    void loadCaptainsLog();
+  }, [isAdmin, loadCaptainsLog]);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    void loadContactInbox();
+  }, [isAdmin, loadContactInbox]);
+
+  useEffect(() => {
+    if (!isAdmin) {
+      adminAlertsInitialFetchDoneDev = false;
+      adminSubscribersInitialFetchDoneDev = false;
+    }
+  }, [isAdmin]);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    if (import.meta.env.DEV && adminAlertsInitialFetchDoneDev) return;
+    adminAlertsInitialFetchDoneDev = true;
+    void loadAlerts();
+  }, [isAdmin, loadAlerts]);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    if (import.meta.env.DEV && adminSubscribersInitialFetchDoneDev) return;
+    adminSubscribersInitialFetchDoneDev = true;
+    void loadSubscribers();
+  }, [isAdmin, loadSubscribers]);
+
+  const getAdminToken = useCallback(async (): Promise<string | null> => {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    return session?.access_token || null;
+  }, []);
+
+  const apiRequest = useCallback(
+    async (path: string, options?: RequestInit) => {
+      if (!env.apiUrlConfigured || !env.apiUrl) {
+        throw new Error('API server URL is not configured (set VITE_API_URL).');
+      }
+      const token = await getAdminToken();
+      if (!token) throw new Error('Admin session unavailable.');
+      const headers: HeadersInit = {
+        Authorization: `Bearer ${token}`,
+        ...(options?.headers || {}),
+      };
+      const res = await fetch(`${env.apiUrl}${path}`, { ...options, headers });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const msg =
+          payload && typeof payload === 'object' && 'error' in payload && typeof payload.error === 'string'
+            ? payload.error
+            : 'Request failed.';
+        throw new Error(msg);
+      }
+      return payload as Record<string, unknown>;
+    },
+    [getAdminToken]
+  );
+
+  const fetchIncidentsForBooking = useCallback(
+    async (bookingId: string, options?: { force?: boolean }): Promise<IncidentRow[]> => {
+      const bid = bookingId.trim();
+      if (!bid) return [];
+      const token = await getAdminToken();
+      if (!token) throw new Error('Admin session unavailable.');
+      if (options?.force) clearIncidentsByBookingIdCache(bid);
+      const payload = (await getIncidentsByBookingId(bid, token, {
+        skipCache: options?.force,
+      })) as { incidents?: IncidentRow[] };
+      return Array.isArray(payload.incidents) ? payload.incidents : [];
+    },
+    [getAdminToken]
+  );
+
+  const loadIncidentsForBooking = useCallback(
+    async (bookingId: string, options?: { force?: boolean }) => {
+      const bid = bookingId.trim();
+      if (!bid) {
+        setBookingIncidents([]);
+        return;
+      }
+      setIncidentsLoading(true);
+      try {
+        const list = await fetchIncidentsForBooking(bid, options);
+        setBookingIncidents(list);
+        setIncidentEditDrafts((prev) => {
+          const next = { ...prev };
+          list.forEach((item) => {
+            if (!next[item.id]) {
+              next[item.id] = {
+                status: String(item.status || 'pending'),
+                estimated_cost:
+                  item.estimated_cost == null || Number.isNaN(Number(item.estimated_cost))
+                    ? ''
+                    : String(item.estimated_cost),
+                actual_cost:
+                  item.actual_cost == null || Number.isNaN(Number(item.actual_cost)) ? '' : String(item.actual_cost),
+                admin_notes: String(item.admin_notes || ''),
+              };
+            }
+          });
+          return next;
+        });
+      } catch (err) {
+        console.error('[admin-incidents-load]', err);
+        setBookingIncidents([]);
+      } finally {
+        setIncidentsLoading(false);
+      }
+    },
+    [fetchIncidentsForBooking]
+  );
+
+  useEffect(() => {
+    const firstId = bookings[0]?.id || '';
+    if (!selectedIncidentBookingId && firstId) {
+      setSelectedIncidentBookingId(firstId);
+      return;
+    }
+    if (selectedIncidentBookingId && !bookings.some((b) => b.id === selectedIncidentBookingId)) {
+      setSelectedIncidentBookingId(firstId || '');
+    }
+  }, [bookings, selectedIncidentBookingId]);
+
+  useEffect(() => {
+    if (!selectedIncidentBookingId) return;
+    void loadIncidentsForBooking(selectedIncidentBookingId);
+  }, [selectedIncidentBookingId, loadIncidentsForBooking]);
+
+  useEffect(() => {
+    if (bookings.length === 0) {
+      setIncidentCounts({});
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const nextCounts: Record<string, number> = {};
+      for (const booking of bookings) {
+        try {
+          const list = await fetchIncidentsForBooking(booking.id);
+          nextCounts[booking.id] = list.length;
+        } catch (_err) {
+          nextCounts[booking.id] = 0;
+        }
+      }
+      if (!cancelled) {
+        setIncidentCounts(nextCounts);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [bookings, fetchIncidentsForBooking]);
+
+  const handleCreateIncident = async () => {
+    const bookingId = selectedIncidentBookingId.trim();
+    const description = incidentDescription.trim();
+    if (!bookingId || !description) return;
+    setIncidentSubmitting(true);
+    try {
+      const createPayload = await apiRequest('/api/incidents/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          booking_id: bookingId,
+          description,
+          reported_by: 'admin',
+        }),
+      });
+      const created = (createPayload.incident as IncidentRow | undefined) ?? null;
+      if (!created?.id) {
+        throw new Error('Could not create incident.');
+      }
+
+      if (incidentFile) {
+        const safeName = incidentFile.name.replace(/[^\w.\-]+/g, '-');
+        const filePath = `incidents/${created.id}/${Date.now()}-${safeName}`;
+        const { error: uploadErr } = await supabase.storage.from('incident-photos').upload(filePath, incidentFile, {
+          upsert: false,
+          contentType: incidentFile.type || 'application/octet-stream',
+        });
+        if (uploadErr) throw uploadErr;
+
+        await apiRequest(`/api/incidents/${encodeURIComponent(created.id)}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            photos: [
+              {
+                file_path: filePath,
+                file_name: incidentFile.name,
+                content_type: incidentFile.type || 'application/octet-stream',
+                uploaded_by: 'admin',
+              },
+            ],
+          }),
+        });
+      }
+
+      setIncidentDescription('');
+      setIncidentFile(null);
+      setIncidentCounts((prev) => ({ ...prev, [bookingId]: (prev[bookingId] || 0) + 1 }));
+      clearIncidentsByBookingIdCache(bookingId);
+      await loadIncidentsForBooking(bookingId, { force: true });
+    } catch (err) {
+      console.error('[admin-incidents-create]', err);
+      window.alert(err instanceof Error ? err.message : 'Could not create incident.');
+    } finally {
+      setIncidentSubmitting(false);
+    }
+  };
+
+  const handleIncidentDraftChange = (
+    incidentId: string,
+    field: 'status' | 'estimated_cost' | 'actual_cost' | 'admin_notes',
+    value: string
+  ) => {
+    setIncidentEditDrafts((prev) => ({
+      ...prev,
+      [incidentId]: {
+        status: prev[incidentId]?.status || 'pending',
+        estimated_cost: prev[incidentId]?.estimated_cost || '',
+        actual_cost: prev[incidentId]?.actual_cost || '',
+        admin_notes: prev[incidentId]?.admin_notes || '',
+        [field]: value,
+      },
+    }));
+  };
+
+  const handleSaveIncident = async (incidentId: string) => {
+    const draft = incidentEditDrafts[incidentId];
+    if (!draft) return;
+    setEditingIncidentId(incidentId);
+    try {
+      await apiRequest(`/api/incidents/${encodeURIComponent(incidentId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          status: draft.status,
+          estimated_cost: draft.estimated_cost.trim() === '' ? null : Number(draft.estimated_cost),
+          actual_cost: draft.actual_cost.trim() === '' ? null : Number(draft.actual_cost),
+          admin_notes: draft.admin_notes.trim() === '' ? null : draft.admin_notes,
+        }),
+      });
+      clearIncidentsByBookingIdCache(selectedIncidentBookingId);
+      await loadIncidentsForBooking(selectedIncidentBookingId, { force: true });
+      setNotice({ variant: 'success', text: 'Incident updated successfully.' });
+    } catch (err) {
+      console.error('[admin-incidents-save]', err);
+      window.alert(err instanceof Error ? err.message : 'Could not update incident.');
+    } finally {
+      setEditingIncidentId(null);
+    }
+  };
+
+  const incidentStatusBadgeClass = (status: string) => {
+    switch (status) {
+      case 'approved':
+        return 'border border-blue-200 bg-blue-100 text-blue-800';
+      case 'charged':
+        return 'border border-green-200 bg-green-100 text-green-800';
+      case 'disputed':
+        return 'border border-red-200 bg-red-100 text-red-800';
+      default:
+        return 'border border-yellow-300 bg-yellow-100 text-yellow-900';
+    }
+  };
+
+  useEffect(() => {
+    const t = window.setTimeout(() => setDebouncedEmailSearch(emailSearch.trim()), 400);
+    return () => window.clearTimeout(t);
+  }, [emailSearch]);
+
+  useEffect(() => {
+    setPage(0);
+  }, [statusFilter, debouncedEmailSearch]);
+
+  const loadStats = useCallback(async () => {
+    const [{ count: totalAll }, { count: pendingCt }, { data: priceRows }] = await Promise.all([
+      supabase.from('bookings').select('*', { count: 'exact', head: true }),
+      supabase
+        .from('bookings')
+        .select('*', { count: 'exact', head: true })
+        .in('status', ['pending', 'pending_verification']),
+      supabase.from('bookings').select('total_price').limit(5000),
+    ]);
+
+    const revenue =
+      priceRows?.reduce((sum, row) => sum + parseFloat(String(row.total_price)), 0) ?? 0;
+
+    setStats({
+      totalBookings: totalAll ?? 0,
+      pendingBookings: pendingCt ?? 0,
+      revenue,
+      customers: totalAll ?? 0,
+    });
+  }, []);
+
+  const loadBookings = useCallback(async () => {
+    if (!isAdmin) return;
+
+    if (initialBookingsLoadRef.current) {
+      setLoading(true);
+    } else {
+      setTableLoading(true);
+    }
+
+    try {
+      let customerIds: string[] | null = null;
+      if (debouncedEmailSearch.trim() !== '') {
+        const { data: custs, error: custErr } = await supabase
+          .from('customers')
+          .select('id')
+          .ilike('email', `%${debouncedEmailSearch.trim()}%`);
+
+        logSupabaseError('Admin.searchCustomers', custErr);
+
+        customerIds = (custs ?? []).map((c) => c.id);
+        if (customerIds.length === 0) {
+          setBookings([]);
+          setTotalCount(0);
+          await loadStats();
+          return;
+        }
+      }
+
+      let countQuery = supabase.from('bookings').select('*', { count: 'exact', head: true });
+
+      if (statusFilter !== 'all') {
+        countQuery = countQuery.eq('status', statusFilter);
+      }
+
+      if (customerIds) {
+        countQuery = countQuery.in('customer_id', customerIds);
+      }
+
+      const { count, error: countErr } = await countQuery;
+      logSupabaseError('Admin.countBookings', countErr);
+
+      const total = count ?? 0;
+      setTotalCount(total);
+
+      const maxPage = total > 0 ? Math.max(0, Math.ceil(total / PAGE_SIZE) - 1) : 0;
+      const safePage = Math.min(page, maxPage);
+
+      if (safePage !== page) {
+        setPage(safePage);
+        return;
+      }
+
+      const from = safePage * PAGE_SIZE;
+      const to = from + PAGE_SIZE - 1;
+
+      const buildEmbedQuery = () => {
+        let q = supabase
+          .from('bookings')
+          .select('*, customers(*), boats(*), user_verifications(*), waivers(id)')
+          .order('created_at', { ascending: false });
+        if (statusFilter !== 'all') {
+          q = q.eq('status', statusFilter);
+        }
+        if (customerIds) {
+          q = q.in('customer_id', customerIds);
+        }
+        return q;
+      };
+
+      const buildPlainQuery = () => {
+        let q = supabase.from('bookings').select('*').order('created_at', { ascending: false });
+        if (statusFilter !== 'all') {
+          q = q.eq('status', statusFilter);
+        }
+        if (customerIds) {
+          q = q.in('customer_id', customerIds);
+        }
+        return q;
+      };
+
+      const embedRes = await buildEmbedQuery().range(from, to);
+      let rows: AdminBookingRow[] = [];
+      let loadError = embedRes.error;
+
+      if (import.meta.env.DEV) {
+        console.log('📦 BOOKINGS RAW:', embedRes.data);
+        console.log('❌ ERROR (embed query):', embedRes.error);
+      }
+
+      if (loadError) {
+        const plain = await buildPlainQuery().range(from, to);
+        if (import.meta.env.DEV) {
+          console.log('📦 BOOKINGS RAW (fallback *):', plain.data);
+          console.log('❌ ERROR (fallback):', plain.error);
+        }
+        rows = (plain.data ?? []) as unknown as AdminBookingRow[];
+        loadError = plain.error;
+      } else {
+        rows = (embedRes.data ?? []) as unknown as AdminBookingRow[];
+      }
+
+      logSupabaseError('Admin.loadBookings', loadError);
+
+      setBookings(rows);
+      if (import.meta.env.DEV) {
+        console.log('✅ FINAL BOOKINGS:', rows);
+      }
+
+      await loadStats();
+    } finally {
+      setLoading(false);
+      setTableLoading(false);
+      initialBookingsLoadRef.current = false;
+    }
+  }, [isAdmin, debouncedEmailSearch, statusFilter, page, loadStats]);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    void loadBookings();
+  }, [isAdmin, loadBookings]);
+
+  const handleStatusUpdate = async (
+    bookingId: string,
+    status: 'pending' | 'pending_verification' | 'confirmed' | 'cancelled' | 'completed'
+  ) => {
+    const { error } = await supabase.from('bookings').update({ status }).eq('id', bookingId);
+
+    logSupabaseError('Admin.handleStatusUpdate', error);
+
+    if (!error) {
+      void loadBookings();
+    }
+    return { error };
+  };
+
+  /** DB uses `confirmed` / `cancelled` (not approved/rejected) — matches bookings_status_check. */
+  const handleApprove = async (id: string) => {
+    if (import.meta.env.DEV) {
+      console.log('🔄 Updating booking status:', id);
+    }
+    const { error } = await handleStatusUpdate(id, 'confirmed');
+    if (import.meta.env.DEV) {
+      console.log('✅ Approved:', id, error);
+    }
+  };
+
+  /** Marks the booking cancelled; keeps the row for records (does not refund via this action). */
+  const handleCancelBooking = async (id: string) => {
+    if (
+      !window.confirm(
+        'Cancel this booking?\n\nStatus will change to Cancelled and the booking will stay on file for your records. Refunds or credits are handled separately per your policy — this button does not refund in Stripe.'
+      )
+    ) {
+      return;
+    }
+    const { error } = await handleStatusUpdate(id, 'cancelled');
+    if (error) {
+      window.alert(error.message || 'Could not cancel booking.');
+    }
+  };
+
+  const handleDocStatusUpdate = async (
+    bookingId: string,
+    field: 'license_status' | 'insurance_status',
+    value: DocStatus
+  ) => {
+    const { error } = await supabase.from('bookings').update({ [field]: value }).eq('id', bookingId);
+
+    logSupabaseError('Admin.handleDocStatusUpdate', error);
+    if (!error) void loadBookings();
+  };
+
+  const handleBuoyStatusUpdate = async (bookingId: string, value: DocStatus) => {
+    const stamp = new Date().toISOString();
+    const { error } = await supabase
+      .from('user_verifications')
+      .update({ buoy_status: value, updated_at: stamp })
+      .eq('booking_id', bookingId);
+
+    logSupabaseError('Admin.handleBuoyStatusUpdate', error);
+    if (!error) void loadBookings();
+  };
+
+  const handleMarkContactMessageRead = async (messageId: string, read: boolean) => {
+    const { error } = await supabase.from('contact_messages').update({ is_read: read }).eq('id', messageId);
+    logSupabaseError('Admin.markContactMessageRead', error);
+    if (!error) {
+      void loadContactInbox();
+    } else {
+      window.alert(error.message || 'Could not update message.');
+    }
+  };
+
+  const handleDeleteContactMessage = async (messageId: string) => {
+    if (!window.confirm('Delete this customer message? This cannot be undone.')) {
+      return;
+    }
+    const { error } = await supabase.from('contact_messages').delete().eq('id', messageId);
+    logSupabaseError('Admin.deleteContactMessage', error);
+    if (!error) {
+      void loadContactInbox();
+    } else {
+      window.alert(error.message || 'Could not delete message.');
+    }
+  };
+
+  const handleDelete = async (bookingId: string) => {
+    if (
+      !window.confirm(
+        'Delete this booking permanently? Related waiver records will be removed. This cannot be undone.'
+      )
+    ) {
+      return;
+    }
+
+    try {
+      await apiRequest(`/api/bookings/${encodeURIComponent(bookingId)}`, { method: 'DELETE' });
+      void loadBookings();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Could not delete booking.';
+      window.alert(msg);
+    }
+  };
+
+  const handleSignOut = async () => {
+    await signOut();
+    onNavigate('home');
+  };
+
+  const persistLastRun = (status: string) => {
+    const iso = new Date().toISOString();
+    localStorage.setItem(LS_CAP_RUN_STATUS, status);
+    localStorage.setItem(LS_CAP_RUN_TIME, iso);
+    setLastRunStatus(status);
+    setLastRunTime(iso);
+  };
+
+  const handleGenerateCaptainsLog = () => {
+    setNotice(null);
+    setIsGenerating(true);
+
+    void (async () => {
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        const token = session?.access_token;
+        if (!token) {
+          setNotice({ variant: 'error', text: 'You must be signed in.' });
+          persistLastRun('Failed');
+          return;
+        }
+
+        if (!env.apiUrlConfigured || !env.apiUrl) {
+          setNotice({ variant: 'error', text: 'API server URL is not configured (set VITE_API_URL).' });
+          persistLastRun('Failed');
+          return;
+        }
+
+        const res = await fetch(`${env.apiUrl}/api/generate-content`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+
+        const payload = (await res.json().catch(() => ({}))) as {
+          success?: boolean;
+          status?: string;
+          message?: string;
+          error?: string;
+          details?: string;
+        };
+
+        const errLine =
+          typeof payload.error === 'string'
+            ? payload.error
+            : typeof payload.message === 'string'
+              ? payload.message
+              : 'Something went wrong.';
+        const detailSuffix =
+          typeof payload.details === 'string' && payload.details.trim()
+            ? ` ${payload.details.trim().slice(0, 500)}`
+            : '';
+
+        if (!res.ok) {
+          console.error('[generate-content]', res.status, payload);
+          setNotice({ variant: 'error', text: `${errLine}${detailSuffix}`.trim() });
+          persistLastRun('Failed');
+          return;
+        }
+
+        if (payload.success === false) {
+          if (payload.message === 'Already generating') {
+            setNotice({ variant: 'info', text: 'Already generating. Wait for the current run to finish.' });
+            persistLastRun('Busy');
+          } else {
+            console.error('[generate-content]', payload);
+            setNotice({ variant: 'error', text: `${errLine}${detailSuffix}`.trim() });
+            persistLastRun('Failed');
+          }
+          return;
+        }
+
+        if (payload.status === 'started') {
+          setNotice({
+            variant: 'info',
+            text:
+              typeof payload.message === 'string' && payload.message.trim()
+                ? `${payload.message.trim()}. Refresh Captain's Log in a few minutes to see new posts.`
+                : "Content generation started in the background. Refresh Captain's Log in a few minutes to see new posts.",
+          });
+          persistLastRun('Started');
+          await Promise.all([loadBookings(), loadCaptainsLog()]);
+          return;
+        }
+
+        setNotice({ variant: 'success', text: 'Content generated successfully' });
+        persistLastRun('Success');
+        await Promise.all([loadBookings(), loadCaptainsLog()]);
+      } catch (err) {
+        console.error('[generate-content]', err);
+        setNotice({ variant: 'error', text: 'Failed to generate content. Check the API and try again.' });
+        persistLastRun('Failed');
+      } finally {
+        setIsGenerating(false);
+      }
+    })();
+  };
+
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+  const currentPage = Math.min(page + 1, totalPages);
+  const selectedIncidentBooking = bookings.find((b) => b.id === selectedIncidentBookingId) || null;
+  const openIncidents = bookingIncidents.filter((inc) => {
+    const s = String(inc.status || '').toLowerCase();
+    return s === 'pending' || s === 'approved';
+  });
+  const pastIncidents = bookingIncidents.filter((inc) => {
+    const s = String(inc.status || '').toLowerCase();
+    return s === 'charged' || s === 'disputed';
+  });
+
+  useEffect(() => {
+    if (!expandedResolvedIncidentId) return;
+    const stillResolved = pastIncidents.some((inc) => inc.id === expandedResolvedIncidentId);
+    if (!stillResolved) {
+      setExpandedResolvedIncidentId(null);
+    }
+  }, [pastIncidents, expandedResolvedIncidentId]);
+
+  const statusBadgeClass = (status: string) => {
+    switch (status) {
+      case 'confirmed':
+        return 'border border-green-200 bg-green-100 text-green-800';
+      case 'pending':
+        return 'border border-yellow-300 bg-yellow-100 text-yellow-900';
+      case 'pending_verification':
+        return 'border border-amber-300 bg-amber-100 text-amber-950';
+      case 'cancelled':
+        return 'border border-red-200 bg-red-100 text-red-800';
+      case 'completed':
+        return 'border border-emerald-200 bg-emerald-50 text-emerald-900';
+      default:
+        return 'border border-slate-200 bg-slate-100 text-slate-800';
+    }
+  };
+
+  const docStatusBadgeClass = (s: string) => {
+    switch (s) {
+      case 'verified':
+        return 'border border-green-200 bg-green-50 text-green-800';
+      case 'rejected':
+        return 'border border-red-200 bg-red-50 text-red-800';
+      default:
+        return 'border border-slate-200 bg-slate-50 text-slate-700';
+    }
+  };
+
+  if (authLoading) {
+    return <FullPageLoader message="Checking admin access…" />;
+  }
+
+  if (!isAdmin) {
+    const signedIn = Boolean(user);
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
+        <div className="w-full max-w-md rounded-xl bg-white p-8 text-center shadow-lg">
+          <h2 className="mb-2 text-2xl font-bold text-slate-900">Access denied</h2>
+          <p className="mb-6 text-slate-600">
+            {signedIn
+              ? 'This account is not authorized for the admin dashboard. If you need access, contact the site owner.'
+              : 'Sign in with an administrator account to open the dashboard.'}
+          </p>
+          <div className="flex flex-col gap-3 sm:flex-row sm:justify-center">
+            <button
+              type="button"
+              onClick={() => onNavigate('admin-login')}
+              className="rounded-lg bg-slate-200 px-6 py-3 font-bold text-slate-900 transition-colors hover:bg-slate-300"
+            >
+              {signedIn ? 'Try another account' : 'Go to Admin Login'}
+            </button>
+            <button
+              type="button"
+              onClick={() => onNavigate('home')}
+              className="rounded-lg bg-amber-600 px-6 py-3 font-bold text-white transition-colors hover:bg-amber-700"
+            >
+              Go Home
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (loading && bookings.length === 0 && !tableLoading) {
+    return <FullPageLoader message="Loading dashboard…" />;
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-50">
+      <div className="bg-slate-900 py-8 text-white">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
+              <Logo variant="admin" className="self-start sm:self-center" />
+              <div>
+                <h1 className="text-3xl font-bold">Admin Dashboard</h1>
+                <p className="mt-1 text-slate-400">Welcome back, {user?.email}</p>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+              <Link
+                to="/admin/boats"
+                className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-amber-500"
+              >
+                Manage boats
+              </Link>
+              <button
+                type="button"
+                onClick={handleSignOut}
+                className="flex items-center space-x-2 rounded-lg bg-slate-800 px-4 py-2 transition-colors hover:bg-slate-700"
+              >
+                <LogOut className="h-5 w-5" />
+                <span>Sign Out</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+        {notice && (
+          <div
+            className={`fixed bottom-6 left-1/2 z-[100] max-w-md -translate-x-1/2 rounded-lg px-4 py-3 text-center text-sm font-semibold shadow-lg ${
+              notice.variant === 'success'
+                ? 'bg-green-700 text-white'
+                : notice.variant === 'info'
+                  ? 'bg-slate-800 text-amber-200'
+                  : 'bg-red-700 text-white'
+            }`}
+            role="status"
+          >
+            {notice.text}
+          </div>
+        )}
+
+        <div className="mb-6 flex flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50/90 p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-slate-900">Captain&apos;s Log</p>
+            <p className="text-xs text-slate-600">
+              Generate new articles via the server pipeline (Python + Ollama). Runs up to ~60s per
+              batch on the server; the admin UI stays responsive.
+            </p>
+            <dl className="mt-2 grid grid-cols-1 gap-1 text-xs text-slate-600 sm:grid-cols-2">
+              <div>
+                <dt className="font-semibold text-slate-700">Last run status</dt>
+                <dd>{lastRunStatus}</dd>
+              </div>
+              <div>
+                <dt className="font-semibold text-slate-700">Last run time</dt>
+                <dd>
+                  {lastRunTime
+                    ? new Date(lastRunTime).toLocaleString(undefined, {
+                        dateStyle: 'medium',
+                        timeStyle: 'short',
+                      })
+                    : 'N/A'}
+                </dd>
+              </div>
+            </dl>
+          </div>
+          <button
+            type="button"
+            onClick={handleGenerateCaptainsLog}
+            disabled={isGenerating}
+            className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-amber-600 px-4 py-2.5 text-sm font-bold text-white shadow transition-colors hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <Sparkles className="h-4 w-4" aria-hidden />
+            {isGenerating ? 'Generating...' : "Generate Captain's Log Content"}
+          </button>
+        </div>
+
+        <div className="mb-8 overflow-hidden rounded-xl border border-slate-200 bg-white shadow">
+          <div className="flex flex-col gap-3 border-b border-slate-100 px-4 py-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <h2 className="text-lg font-bold text-slate-900">Add article manually</h2>
+              <p className="text-xs text-slate-500">
+                Publish Markdown to Captain&apos;s Log without the generator. Slug is derived from the title unless you
+                set a custom one. Use <strong>Edit</strong> on a row below to update an existing post.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setCaptainsLogFormError(null);
+                setCaptainsLogFormOpen((open) => {
+                  if (open) {
+                    resetCaptainsLogForm();
+                    return false;
+                  }
+                  resetCaptainsLogForm();
+                  return true;
+                });
+              }}
+              className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 transition-colors hover:bg-slate-50"
+            >
+              <Plus className="h-4 w-4" aria-hidden />
+              {captainsLogFormOpen ? 'Hide form' : 'Show form'}
+            </button>
+          </div>
+          {captainsLogFormOpen && (
+            <div className="space-y-4 border-b border-slate-100 px-4 py-4">
+              {captainsLogEditingId ? (
+                <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950">
+                  Editing an existing article — saving updates the live page URL if you change the slug.
+                </p>
+              ) : null}
+              {captainsLogFormError && (
+                <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+                  {captainsLogFormError}
+                </p>
+              )}
+              <div className="grid gap-4 sm:grid-cols-2">
+                <label className="block text-sm">
+                  <span className="font-semibold text-slate-700">Title</span>
+                  <input
+                    type="text"
+                    value={newArticleTitle}
+                    onChange={(e) => setNewArticleTitle(e.target.value)}
+                    className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-slate-900"
+                    placeholder="Headline shown on the site"
+                    autoComplete="off"
+                  />
+                </label>
+                <label className="block text-sm">
+                  <span className="font-semibold text-slate-700">URL slug (optional)</span>
+                  <input
+                    type="text"
+                    value={newArticleSlug}
+                    onChange={(e) => setNewArticleSlug(e.target.value)}
+                    className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-slate-900"
+                    placeholder="e.g. my-launch-view-tips"
+                    autoComplete="off"
+                  />
+                </label>
+              </div>
+              <label className="block text-sm">
+                <span className="font-semibold text-slate-700">Category</span>
+                <select
+                  value={newArticleCategory}
+                  onChange={(e) => setNewArticleCategory(e.target.value as CaptainsLogCategory)}
+                  className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-slate-900 sm:max-w-md"
+                >
+                  {CAPTAINS_LOG_CATEGORIES.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="block text-sm">
+                <span className="font-semibold text-slate-700">Body (Markdown)</span>
+                <textarea
+                  value={newArticleContent}
+                  onChange={(e) => setNewArticleContent(e.target.value)}
+                  rows={12}
+                  className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 font-mono text-sm text-slate-900"
+                  placeholder={'## Section\n\nParagraph…'}
+                />
+              </label>
+              <div className="space-y-4">
+                <div className="rounded-md border border-slate-200 bg-slate-50/80 px-3 py-3 sm:px-4">
+                  <span className="text-sm font-semibold text-slate-700">Hero image (optional)</span>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Upload JPEG, PNG, WebP, or GIF (max 10 MB). If you choose a file, it is saved to your site storage
+                    and used instead of the URL field. Run the{' '}
+                    <code className="rounded bg-white px-1 text-[11px]">captains-log</code> storage migration if upload
+                    fails.
+                  </p>
+                  <input
+                    ref={captainsLogHeroInputRef}
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp,image/gif"
+                    className="sr-only"
+                    aria-label="Upload hero image file"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      setCaptainsLogHeroFile(f ?? null);
+                    }}
+                  />
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => captainsLogHeroInputRef.current?.click()}
+                      className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50"
+                    >
+                      Choose image file
+                    </button>
+                    {captainsLogHeroFile ? (
+                      <>
+                        <span className="max-w-[min(100%,280px)] truncate text-sm text-slate-700" title={captainsLogHeroFile.name}>
+                          {captainsLogHeroFile.name}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCaptainsLogHeroFile(null);
+                            if (captainsLogHeroInputRef.current) captainsLogHeroInputRef.current.value = '';
+                          }}
+                          className="text-sm font-semibold text-slate-600 underline hover:text-slate-900"
+                        >
+                          Clear file
+                        </button>
+                      </>
+                    ) : null}
+                  </div>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <label className="block text-sm">
+                    <span className="font-semibold text-slate-700">Hero image URL (optional)</span>
+                    <span className="mt-0.5 block text-xs font-normal text-slate-500">
+                      Use when you don&apos;t upload a file above, or to override after clearing the file.
+                    </span>
+                    <input
+                      type="url"
+                      value={newArticleImageUrl}
+                      onChange={(e) => setNewArticleImageUrl(e.target.value)}
+                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-slate-900"
+                      placeholder="https://…"
+                      autoComplete="off"
+                    />
+                  </label>
+                  <label className="block text-sm">
+                    <span className="font-semibold text-slate-700">Image alt text (optional)</span>
+                    <input
+                      type="text"
+                      value={newArticleImageAlt}
+                      onChange={(e) => setNewArticleImageAlt(e.target.value)}
+                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-slate-900"
+                      placeholder="Describe the hero for accessibility"
+                      autoComplete="off"
+                    />
+                  </label>
+                </div>
+              </div>
+              <label className="block text-sm">
+                <span className="font-semibold text-slate-700">Short summary (optional)</span>
+                <textarea
+                  value={newArticleSummary}
+                  onChange={(e) => setNewArticleSummary(e.target.value)}
+                  rows={2}
+                  className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900"
+                  placeholder="Used for SEO / excerpts when set"
+                />
+              </label>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void handleSaveCaptainsLogArticle()}
+                  disabled={captainsLogSaving}
+                  className="inline-flex items-center justify-center gap-2 rounded-lg bg-amber-600 px-4 py-2.5 text-sm font-bold text-white shadow transition-colors hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {captainsLogSaving
+                    ? 'Saving…'
+                    : captainsLogEditingId
+                      ? 'Save changes'
+                      : 'Publish article'}
+                </button>
+              </div>
+            </div>
+          )}
+          <div className="border-b border-slate-100 px-4 py-3">
+            <h2 className="text-lg font-bold text-slate-900">Recent Captain&apos;s Log articles</h2>
+            <p className="text-xs text-slate-500">
+              Newest first (up to 500 articles). Refreshes when you publish or delete here, or after a successful
+              generation run. Scroll the list to see older posts.
+            </p>
+          </div>
+          <div className="max-h-[min(70vh,36rem)] overflow-y-auto">
+            {captainsLogArticles.length === 0 ? (
+              <p className="px-4 py-6 text-sm text-slate-500">No articles yet.</p>
+            ) : (
+              <table className="w-full text-left text-sm">
+                <thead className="sticky top-0 bg-slate-50 text-xs font-semibold uppercase text-slate-600">
+                  <tr>
+                    <th className="px-4 py-2">Title</th>
+                    <th className="px-4 py-2">Category</th>
+                    <th className="px-4 py-2">Created</th>
+                    <th className="px-4 py-2 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {captainsLogArticles.map((a) => (
+                    <tr key={a.id} className="hover:bg-slate-50">
+                      <td className="max-w-[200px] truncate px-4 py-2 font-medium text-slate-900" title={a.title}>
+                        {a.title}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-2 text-slate-600">{a.category}</td>
+                      <td className="whitespace-nowrap px-4 py-2 text-slate-600">
+                        {new Date(a.created_at).toLocaleDateString()}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-2 text-right">
+                        <a
+                          href={captainsLogArticlePath(a.slug)}
+                          className="font-semibold text-amber-700 hover:text-amber-800"
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          View
+                        </a>
+                        <button
+                          type="button"
+                          onClick={() => void handleEditCaptainsLogArticle(a.id)}
+                          disabled={
+                            !!captainsLogEditLoadingId ||
+                            captainsLogSaving ||
+                            captainsLogDeletingId === a.id
+                          }
+                          className="ml-3 inline-flex items-center gap-1 rounded-md px-2 py-1 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-100 disabled:opacity-50"
+                          title="Edit article"
+                        >
+                          <Pencil className="h-4 w-4" aria-hidden />
+                          {captainsLogEditLoadingId === a.id ? 'Loading…' : 'Edit'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void handleDeleteCaptainsLogArticle(a.id, a.title)}
+                          disabled={captainsLogDeletingId === a.id}
+                          className="ml-3 inline-flex items-center gap-1 rounded-md px-2 py-1 text-sm font-semibold text-red-700 transition-colors hover:bg-red-50 disabled:opacity-50"
+                          title="Delete article"
+                        >
+                          <Trash2 className="h-4 w-4" aria-hidden />
+                          Delete
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+
+        <div className="mb-8 overflow-hidden rounded-xl border border-slate-200 bg-white shadow">
+          <div className="border-b border-slate-100 px-4 py-3">
+            <h2 className="text-lg font-bold text-slate-900">Subscribers</h2>
+            <p className="text-xs text-slate-500">Latest alert subscribers (max 50).</p>
+          </div>
+          <div className="max-h-72 overflow-y-auto">
+            {subscribersLoading ? (
+              <p className="px-4 py-6 text-sm text-slate-500">Loading subscribers…</p>
+            ) : subscribersError ? (
+              <p className="px-4 py-6 text-sm text-red-600">{subscribersError}</p>
+            ) : subscribers.length === 0 ? (
+              <p className="px-4 py-6 text-sm text-slate-500">No subscribers yet.</p>
+            ) : (
+              <table className="w-full text-left text-sm">
+                <thead className="sticky top-0 bg-slate-50 text-xs font-semibold uppercase text-slate-600">
+                  <tr>
+                    <th className="px-4 py-2">Email</th>
+                    <th className="px-4 py-2">Phone</th>
+                    <th className="px-4 py-2">Date joined</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {subscribers.map((user) => (
+                    <tr key={`${user.email}-${user.created_at}`} className="hover:bg-slate-50">
+                      <td className="max-w-[260px] break-all px-4 py-2 font-medium text-slate-900">
+                        {user.email}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-2 text-slate-700">
+                        {user.phone || 'No phone'}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-2 text-slate-600">
+                        {new Date(user.created_at).toLocaleString(undefined, {
+                          dateStyle: 'medium',
+                          timeStyle: 'short',
+                        })}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+
+        <div className="mb-8 overflow-hidden rounded-xl border border-slate-200 bg-white shadow">
+          <div className="border-b border-slate-100 px-4 py-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-bold text-slate-900">Recent Alert Activity</h2>
+                <p className="text-xs text-slate-500">Latest triggered alert events (max 20).</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void handleRunAlerts()}
+                disabled={runningAlerts}
+                className="rounded-lg bg-cyan-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-cyan-600 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {runningAlerts ? 'Running...' : 'Run Alerts'}
+              </button>
+            </div>
+          </div>
+          <div className="max-h-72 overflow-y-auto">
+            {alertsLoading ? (
+              <p className="px-4 py-6 text-sm text-slate-500">Loading alerts…</p>
+            ) : alertsError ? (
+              <p className="px-4 py-6 text-sm text-red-600">{alertsError}</p>
+            ) : alerts.length === 0 ? (
+              <p className="px-4 py-6 text-sm text-slate-500">No alerts logged yet.</p>
+            ) : (
+              <div className="divide-y divide-slate-100">
+                {alerts.map((alert) => (
+                  <div key={alert.id} className="px-4 py-3">
+                    <p className="text-sm font-semibold uppercase tracking-wide text-slate-800">
+                      {alert.type || 'alert'} {alert.score != null ? `· score ${alert.score}` : ''}
+                    </p>
+                    <p className="mt-1 whitespace-pre-line text-sm text-slate-700">
+                      {alert.message || 'No message'}
+                    </p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      {new Date(alert.created_at).toLocaleString(undefined, {
+                        dateStyle: 'medium',
+                        timeStyle: 'short',
+                      })}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="mb-8 overflow-hidden rounded-xl border border-slate-200 bg-white shadow">
+          <div className="border-b border-slate-100 px-4 py-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <Mail className="h-5 w-5 text-amber-600" aria-hidden />
+              <h2 className="text-lg font-bold text-slate-900">Customer Messages</h2>
+            </div>
+            <p className="text-xs text-slate-500">
+              Inbox from the public contact form (newest first). Mark as read when handled; deletes are
+              permanent.
+            </p>
+          </div>
+          <div className="max-h-[28rem] overflow-y-auto">
+            {contactInboxLoading ? (
+              <p className="px-4 py-6 text-sm text-slate-500">Loading messages…</p>
+            ) : contactInbox.length === 0 ? (
+              <p className="px-4 py-6 text-sm text-slate-500">No messages yet.</p>
+            ) : (
+              <table className="w-full text-left text-sm">
+                <thead className="sticky top-0 bg-slate-50 text-xs font-semibold uppercase text-slate-600">
+                  <tr>
+                    <th className="px-4 py-2">Status</th>
+                    <th className="px-4 py-2">Name</th>
+                    <th className="px-4 py-2">Email</th>
+                    <th className="px-4 py-2">Message</th>
+                    <th className="px-4 py-2">Date</th>
+                    <th className="px-4 py-2">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {contactInbox.map((row) => (
+                    <tr
+                      key={row.id}
+                      className={`align-top hover:bg-slate-50 ${row.is_read ? '' : 'bg-amber-50/60'}`}
+                    >
+                      <td className="whitespace-nowrap px-4 py-2">
+                        {row.is_read ? (
+                          <span className="inline-flex rounded-full border border-slate-200 bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">
+                            Read
+                          </span>
+                        ) : (
+                          <span className="inline-flex rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-900">
+                            New
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-2 font-medium text-slate-900">{row.full_name}</td>
+                      <td className="max-w-[200px] break-all px-4 py-2 text-slate-700">
+                        <a href={`mailto:${row.email}`} className="font-semibold text-amber-700 hover:text-amber-800">
+                          {row.email}
+                        </a>
+                      </td>
+                      <td className="max-w-md px-4 py-2 text-slate-700" title={row.message}>
+                        {previewMessageBody(row.message)}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-2 text-slate-600">
+                        {new Date(row.created_at).toLocaleString(undefined, {
+                          dateStyle: 'medium',
+                          timeStyle: 'short',
+                        })}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-2">
+                        <div className="flex flex-col gap-1.5 sm:flex-row sm:flex-wrap sm:items-center">
+                          {!row.is_read ? (
+                            <button
+                              type="button"
+                              onClick={() => void handleMarkContactMessageRead(row.id, true)}
+                              className="inline-flex items-center justify-center rounded border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-800 transition-colors hover:bg-slate-50"
+                            >
+                              Mark read
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => void handleMarkContactMessageRead(row.id, false)}
+                              className="inline-flex items-center justify-center rounded border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-50"
+                            >
+                              Mark unread
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => void handleDeleteContactMessage(row.id)}
+                            className="inline-flex items-center gap-1 rounded border border-red-300 bg-red-50 px-2 py-1 text-xs font-semibold text-red-800 transition-colors hover:bg-red-100"
+                            title="Delete message"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                            Delete
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+
+        <div className="mb-8 grid gap-6 md:grid-cols-4">
+          <div className="rounded-xl bg-white p-6 shadow">
+            <div className="mb-4 flex items-center justify-between">
+              <Calendar className="h-8 w-8 text-blue-600" />
+              <span className="text-3xl font-bold text-slate-900">{stats.totalBookings}</span>
+            </div>
+            <div className="text-sm font-semibold text-slate-600">Total Bookings</div>
+          </div>
+
+          <div className="rounded-xl bg-white p-6 shadow">
+            <div className="mb-4 flex items-center justify-between">
+              <Settings className="h-8 w-8 text-amber-600" />
+              <span className="text-3xl font-bold text-slate-900">{stats.pendingBookings}</span>
+            </div>
+            <div className="text-sm font-semibold text-slate-600">Pending Approval</div>
+          </div>
+
+          <div className="rounded-xl bg-white p-6 shadow">
+            <div className="mb-4 flex items-center justify-between">
+              <DollarSign className="h-8 w-8 text-green-600" />
+              <span className="text-3xl font-bold text-slate-900">
+                ${stats.revenue.toLocaleString()}
+              </span>
+            </div>
+            <div className="text-sm font-semibold text-slate-600">Total Revenue (est.)</div>
+          </div>
+
+          <div className="rounded-xl bg-white p-6 shadow">
+            <div className="mb-4 flex items-center justify-between">
+              <Users className="h-8 w-8 text-purple-600" />
+              <span className="text-3xl font-bold text-slate-900">{stats.customers}</span>
+            </div>
+            <div className="text-sm font-semibold text-slate-600">Customers</div>
+          </div>
+        </div>
+
+        <div className="relative rounded-xl bg-white shadow">
+          {tableLoading && (
+            <div className="absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-white/60">
+              <div className="text-sm font-semibold text-slate-600">Updating…</div>
+            </div>
+          )}
+          <div className="border-b border-slate-200 p-6">
+            <div className="mb-4 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+              <h2 className="text-2xl font-bold text-slate-900">Bookings</h2>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                <label className="flex flex-col text-sm font-medium text-slate-700">
+                  Status
+                  <select
+                    value={statusFilter}
+                    onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
+                    className="mt-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 shadow-sm focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                  >
+                    <option value="all">All</option>
+                    <option value="pending">Pending</option>
+                    <option value="pending_verification">Pending verification</option>
+                    <option value="confirmed">Confirmed</option>
+                    <option value="cancelled">Cancelled</option>
+                  </select>
+                </label>
+                <label className="flex min-w-[240px] flex-col text-sm font-medium text-slate-700">
+                  Search by email
+                  <input
+                    type="search"
+                    value={emailSearch}
+                    onChange={(e) => setEmailSearch(e.target.value)}
+                    placeholder="customer@email.com"
+                    className="mt-1 rounded-lg border border-slate-300 px-3 py-2 text-slate-900 shadow-sm focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                  />
+                </label>
+              </div>
+            </div>
+            <p className="text-sm text-slate-500">
+              Showing {bookings.length} of {totalCount} matching · Page {currentPage} / {totalPages}. Use{' '}
+              <span className="font-medium text-slate-700">Cancel booking</span> to stop a trip while keeping the
+              record; <span className="font-medium text-slate-700">Delete</span> only removes unpaid draft bookings.
+            </p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="bg-slate-50">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-semibold uppercase text-slate-600">
+                    Customer
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-semibold uppercase text-slate-600">
+                    Boat
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-semibold uppercase text-slate-600">
+                    Date
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-semibold uppercase text-slate-600">
+                    Status
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-semibold uppercase text-slate-600">
+                    Waiver
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-semibold uppercase text-slate-600">
+                    License
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-semibold uppercase text-slate-600">
+                    Insurance
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-semibold uppercase text-slate-600">
+                    Buoy
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-semibold uppercase text-slate-600">
+                    Docs
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-semibold uppercase text-slate-600">
+                    Incidents
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-semibold uppercase text-slate-600">
+                    Total
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-semibold uppercase text-slate-600">
+                    Actions
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200">
+                {bookings.map((booking) => {
+                  const buoy = buoyVerificationRow(booking.user_verifications);
+                  const canApproveReject =
+                    booking.status === 'pending' || booking.status === 'pending_verification';
+                  const stripePid = booking.stripe_payment_id;
+                  const hasStripePayment = stripePid != null && String(stripePid).trim() !== '';
+                  const payStatus = String(booking.payment_status || 'pending');
+                  const canDeleteBooking =
+                    canApproveReject && !hasStripePayment && payStatus !== 'deposit_paid';
+                  const canCancelBooking =
+                    booking.status !== 'cancelled' && booking.status !== 'completed';
+                  const licenseDocHref =
+                    booking.license_url?.trim() || booking.customers?.id_document_url || '';
+                  const insuranceDocHref =
+                    booking.insurance_url?.trim() || booking.customers?.insurance_proof_url || '';
+                  const insuranceProofHref =
+                    insuranceDocHref || buoy?.buoy_proof_url?.trim() || '';
+                  return (
+                  <tr
+                    key={booking.id}
+                    className="transition-colors hover:bg-slate-100"
+                  >
+                    <td className="px-6 py-4">
+                      <div>
+                        <div className="font-semibold text-slate-900">
+                          {booking.customers?.full_name}
+                        </div>
+                        <div className="text-sm text-slate-600">{booking.customers?.email}</div>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 text-slate-900">{booking.boats?.name}</td>
+                    <td className="px-6 py-4 text-slate-900">
+                      {new Date(booking.start_time).toLocaleDateString()}
+                    </td>
+                    <td className="px-6 py-4">
+                      <span
+                        className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold capitalize ${statusBadgeClass(
+                          booking.status
+                        )}`}
+                      >
+                        {booking.status.replace(/_/g, ' ')}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 text-sm text-slate-800">
+                      {booking.waiver_signed === true ||
+                      (Array.isArray(booking.waivers) && booking.waivers.length > 0) ? (
+                        <span className="font-semibold text-green-700">Yes</span>
+                      ) : (
+                        <span className="text-slate-500">No</span>
+                      )}
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="flex flex-col gap-1">
+                        <span
+                          className={`inline-flex w-fit rounded-full px-2 py-0.5 text-xs font-semibold ${docStatusBadgeClass(
+                            String(booking.license_status || 'pending')
+                          )}`}
+                        >
+                          {booking.license_status || 'pending'}
+                        </span>
+                        <select
+                          value={(booking.license_status as DocStatus) || 'pending'}
+                          onChange={(e) =>
+                            handleDocStatusUpdate(booking.id, 'license_status', e.target.value as DocStatus)
+                          }
+                          className="max-w-[9rem] rounded border border-slate-300 bg-white px-2 py-1 text-xs"
+                          aria-label="License verification status"
+                        >
+                          <option value="pending">Pending</option>
+                          <option value="verified">Verified</option>
+                          <option value="rejected">Rejected</option>
+                        </select>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="flex flex-col gap-1">
+                        <span
+                          className={`inline-flex w-fit rounded-full px-2 py-0.5 text-xs font-semibold ${docStatusBadgeClass(
+                            String(booking.insurance_status || 'pending')
+                          )}`}
+                        >
+                          {booking.insurance_status || 'pending'}
+                        </span>
+                        <select
+                          value={(booking.insurance_status as DocStatus) || 'pending'}
+                          onChange={(e) =>
+                            handleDocStatusUpdate(
+                              booking.id,
+                              'insurance_status',
+                              e.target.value as DocStatus
+                            )
+                          }
+                          className="max-w-[9rem] rounded border border-slate-300 bg-white px-2 py-1 text-xs"
+                          aria-label="Insurance verification status"
+                        >
+                          <option value="pending">Pending</option>
+                          <option value="verified">Verified</option>
+                          <option value="rejected">Rejected</option>
+                        </select>
+                        <p className="max-w-[14rem] text-[10px] leading-snug text-slate-600">
+                          {insuranceStatusCaption(booking.insurance_status, Boolean(insuranceProofHref))}
+                        </p>
+                        {insuranceProofHref ? (
+                          <a
+                            href={insuranceProofHref}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex w-fit items-center gap-1 text-xs font-semibold text-amber-700 hover:text-amber-800"
+                          >
+                            <ExternalLink className="h-3 w-3 shrink-0" />
+                            View insurance file
+                          </a>
+                        ) : null}
+                      </div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="flex min-w-[10rem] flex-col gap-2">
+                        <span
+                          className={`inline-flex w-fit rounded-full px-2 py-0.5 text-xs font-semibold ${docStatusBadgeClass(
+                            String(buoy?.buoy_status || 'pending')
+                          )}`}
+                        >
+                          {buoy?.buoy_proof_url ? buoy.buoy_status || 'pending' : 'N/A'}
+                        </span>
+                        <a
+                          href={buoy?.buoy_proof_url || '#'}
+                          target="_blank"
+                          rel="noreferrer"
+                          className={`inline-flex items-center gap-1 text-xs font-semibold ${
+                            buoy?.buoy_proof_url
+                              ? 'text-amber-700 hover:text-amber-800'
+                              : 'pointer-events-none text-slate-400'
+                          }`}
+                        >
+                          <ExternalLink className="h-3 w-3 shrink-0" />
+                          View Buoy proof
+                        </a>
+                        <div className="flex flex-wrap gap-1">
+                          <button
+                            type="button"
+                            disabled={!buoy?.buoy_proof_url}
+                            onClick={() => handleBuoyStatusUpdate(booking.id, 'verified')}
+                            className="rounded bg-green-600 px-2 py-1 text-xs font-semibold text-white disabled:opacity-40 hover:bg-green-700"
+                          >
+                            Approve
+                          </button>
+                          <button
+                            type="button"
+                            disabled={!buoy?.buoy_proof_url}
+                            onClick={() => handleBuoyStatusUpdate(booking.id, 'rejected')}
+                            className="rounded bg-red-600 px-2 py-1 text-xs font-semibold text-white disabled:opacity-40 hover:bg-red-700"
+                          >
+                            Reject
+                          </button>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="flex flex-col gap-2">
+                        <div
+                          className="flex flex-col gap-0.5"
+                          aria-label="License document upload"
+                        >
+                          <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                            License
+                          </span>
+                          {licenseDocHref ? (
+                            <a
+                              href={licenseDocHref}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              title="Click to view uploaded document"
+                              className="inline-flex w-fit items-center rounded px-2 py-1 text-sm font-semibold bg-green-100 text-green-700 hover:underline"
+                            >
+                              ✅ View
+                            </a>
+                          ) : (
+                            <span
+                              className="inline-flex w-fit items-center rounded px-2 py-1 text-sm font-semibold bg-red-100 text-red-700"
+                              role="status"
+                            >
+                              ❌ Missing
+                            </span>
+                          )}
+                        </div>
+                        <div
+                          className="flex flex-col gap-0.5"
+                          aria-label="Insurance document upload"
+                        >
+                          <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                            Insurance
+                          </span>
+                          {insuranceProofHref ? (
+                            <a
+                              href={insuranceProofHref}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              title="Click to view uploaded document"
+                              className="inline-flex w-fit items-center rounded px-2 py-1 text-sm font-semibold bg-green-100 text-green-700 hover:underline"
+                            >
+                              ✅ View
+                            </a>
+                          ) : (
+                            <span
+                              className="inline-flex w-fit items-center rounded px-2 py-1 text-sm font-semibold bg-red-100 text-red-700"
+                              role="status"
+                            >
+                              ❌ Missing
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedIncidentBookingId(booking.id)}
+                        className="inline-flex items-center rounded-full border border-slate-300 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-800 hover:bg-slate-100"
+                      >
+                        {incidentCounts[booking.id] ?? 0}
+                      </button>
+                    </td>
+                    <td className="px-6 py-4 font-semibold text-slate-900">
+                      ${parseFloat(String(booking.total_price)).toFixed(2)}
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          disabled={!canApproveReject || tableLoading}
+                          onClick={() => void handleApprove(booking.id)}
+                          className="rounded bg-green-600 px-3 py-1 text-sm font-semibold text-white transition-colors hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          Approve
+                        </button>
+                        <button
+                          type="button"
+                          disabled={!canCancelBooking || tableLoading}
+                          onClick={() => void handleCancelBooking(booking.id)}
+                          title="Stop the booking without removing the record (use instead of Delete for paid or confirmed trips)"
+                          className="rounded border border-slate-300 bg-white px-3 py-1 text-sm font-semibold text-slate-800 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          Cancel booking
+                        </button>
+                        <button
+                          type="button"
+                          disabled={!canDeleteBooking || tableLoading}
+                          onClick={() => void handleDelete(booking.id)}
+                          className="inline-flex items-center gap-1 rounded border border-red-300 bg-red-50 px-3 py-1 text-sm font-medium text-red-800 transition-colors hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-40"
+                          title={
+                            canDeleteBooking
+                              ? 'Delete booking'
+                              : 'Delete only for pending / pending_verification without payment or deposit paid'
+                          }
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                          Delete
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="flex flex-col items-center justify-between gap-4 border-t border-slate-200 px-6 py-4 sm:flex-row">
+            <button
+              type="button"
+              disabled={page <= 0 || tableLoading}
+              onClick={() => setPage((p) => Math.max(0, p - 1))}
+              className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 disabled:opacity-40"
+            >
+              <ChevronLeft className="h-4 w-4" />
+              Previous
+            </button>
+            <span className="text-sm text-slate-600">
+              Page {currentPage} of {totalPages}
+            </span>
+            <button
+              type="button"
+              disabled={page >= totalPages - 1 || tableLoading}
+              onClick={() => setPage((p) => p + 1)}
+              className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 disabled:opacity-40"
+            >
+              Next
+              <ChevronRight className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+
+        <div className="mb-8 overflow-hidden rounded-xl border border-slate-200 bg-white shadow">
+          <div className="border-b border-slate-100 bg-slate-50/60 px-5 py-4">
+            <h2 className="text-lg font-bold text-slate-900">Incidents</h2>
+            <p className="mt-1 text-sm text-slate-600">
+              Create and manage booking incidents without changing booking, payment, or legal workflow.
+            </p>
+          </div>
+          <div className="space-y-5 px-5 py-5">
+            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <h3 className="text-sm font-bold uppercase tracking-wide text-slate-700">Create Incident</h3>
+              <p className="mt-1 text-xs text-slate-500">
+                Attach a new incident to a booking and optionally upload a supporting photo.
+              </p>
+              <div className="mt-4 grid gap-4 lg:grid-cols-3">
+                <label className="block text-sm font-medium text-gray-700">
+                  <span className="font-medium text-gray-700">Booking</span>
+                  <select
+                    value={selectedIncidentBookingId}
+                    onChange={(e) => setSelectedIncidentBookingId(e.target.value)}
+                    className="mt-1 h-11 w-full rounded-lg border border-gray-300 bg-white px-4 text-sm text-gray-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-500 disabled:bg-gray-100 disabled:text-gray-400"
+                  >
+                    {bookings.map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {(b.customers?.email || 'Unknown customer').slice(0, 60)} - #{b.id.slice(0, 8)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="block text-sm font-medium text-gray-700 lg:col-span-2">
+                  <span className="font-medium text-gray-700">Description</span>
+                  <input
+                    type="text"
+                    value={incidentDescription}
+                    onChange={(e) => setIncidentDescription(e.target.value)}
+                    placeholder="Describe damage or issue"
+                    className="mt-1 h-11 w-full rounded-lg border border-gray-300 bg-white px-4 text-sm text-gray-900 placeholder:text-gray-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-500 disabled:bg-gray-100 disabled:text-gray-400"
+                  />
+                </label>
+              </div>
+              {selectedIncidentBooking ? (
+                <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                  Incident will be attached to booking #{selectedIncidentBooking.id.slice(0, 8)} for{' '}
+                  {selectedIncidentBooking.customers?.email || 'Unknown customer'} on{' '}
+                  {new Date(selectedIncidentBooking.start_time).toLocaleDateString()}.
+                </div>
+              ) : null}
+              <div className="mt-4 grid gap-3 md:grid-cols-[1fr_auto] md:items-end">
+                <label className="block text-sm font-medium text-gray-700">
+                  <span className="font-medium text-gray-700">Upload image (optional)</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={(e) => setIncidentFile(e.target.files?.[0] || null)}
+                    className="mt-1 block h-11 w-full rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm text-gray-900 shadow-sm file:mr-3 file:rounded-md file:border-0 file:bg-gray-100 file:px-2.5 file:py-1.5 file:text-xs file:font-semibold file:text-gray-700 focus:outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-500 disabled:bg-gray-100 disabled:text-gray-400"
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={() => void handleCreateIncident()}
+                  disabled={incidentSubmitting || !selectedIncidentBookingId || !incidentDescription.trim()}
+                  className="h-11 rounded-lg bg-orange-600 px-5 text-sm font-medium text-white shadow-sm transition hover:bg-orange-700 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
+                >
+                  {incidentSubmitting ? 'Creating...' : 'Create Incident'}
+                </button>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
+              <div className="border-b border-slate-100 px-4 py-3">
+                <h3 className="text-sm font-bold uppercase tracking-wide text-slate-700">Existing Incidents</h3>
+              </div>
+              {incidentsLoading ? (
+                <p className="px-4 py-5 text-sm text-slate-500">Loading incidents...</p>
+              ) : bookingIncidents.length === 0 ? (
+                <p className="px-4 py-5 text-sm text-slate-500">No incidents for this booking.</p>
+              ) : (
+                <div className="space-y-6 p-4">
+                  <section>
+                    <div className="mb-3 flex items-center justify-between">
+                      <h4 className="text-sm font-bold uppercase tracking-wide text-slate-700">Open Incidents</h4>
+                      <span className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700">
+                        {openIncidents.length}
+                      </span>
+                    </div>
+                    {openIncidents.length === 0 ? (
+                      <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500">
+                        No open incidents.
+                      </p>
+                    ) : (
+                      <div className="space-y-4">
+                        {openIncidents.map((inc) => {
+                          const draft = incidentEditDrafts[inc.id] || {
+                            status: String(inc.status || 'pending'),
+                            estimated_cost:
+                              inc.estimated_cost == null || Number.isNaN(Number(inc.estimated_cost))
+                                ? ''
+                                : String(inc.estimated_cost),
+                            actual_cost:
+                              inc.actual_cost == null || Number.isNaN(Number(inc.actual_cost))
+                                ? ''
+                                : String(inc.actual_cost),
+                            admin_notes: String(inc.admin_notes || ''),
+                          };
+                          return (
+                            <article key={inc.id} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                              <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                                <div className="min-w-0">
+                                  <p className="truncate text-base font-semibold text-slate-900">{inc.description}</p>
+                                  <p className="mt-1 text-xs text-slate-500">
+                                    {new Date(inc.created_at).toLocaleString(undefined, {
+                                      dateStyle: 'medium',
+                                      timeStyle: 'short',
+                                    })}
+                                  </p>
+                                </div>
+                                <span
+                                  className={`inline-flex w-fit rounded-full px-2.5 py-1 text-xs font-semibold capitalize ${incidentStatusBadgeClass(
+                                    draft.status
+                                  )}`}
+                                >
+                                  {draft.status}
+                                </span>
+                              </div>
+                              <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(180px,220px)_1fr_1fr_auto] lg:items-end">
+                                <label className="block text-sm font-medium text-gray-700">
+                                  <span className="font-medium text-gray-700">Status</span>
+                                  <select
+                                    value={draft.status}
+                                    onChange={(e) => handleIncidentDraftChange(inc.id, 'status', e.target.value)}
+                                    className="mt-1 h-10 w-full rounded-lg border border-gray-300 bg-white px-4 text-sm text-gray-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-500 disabled:bg-gray-100 disabled:text-gray-400"
+                                  >
+                                    <option value="pending">pending</option>
+                                    <option value="approved">approved</option>
+                                    <option value="charged">charged</option>
+                                    <option value="disputed">disputed</option>
+                                  </select>
+                                </label>
+                                <label className="block text-sm font-medium text-gray-700">
+                                  <span className="font-medium text-gray-700">Estimated Cost</span>
+                                  <input
+                                    type="number"
+                                    step="0.01"
+                                    value={draft.estimated_cost}
+                                    onChange={(e) => handleIncidentDraftChange(inc.id, 'estimated_cost', e.target.value)}
+                                    placeholder="0.00"
+                                    className="mt-1 h-10 w-full rounded-lg border border-gray-300 bg-white px-4 text-sm text-gray-900 placeholder:text-gray-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-500 disabled:bg-gray-100 disabled:text-gray-400"
+                                  />
+                                </label>
+                                <label className="block text-sm font-medium text-gray-700">
+                                  <span className="font-medium text-gray-700">Actual Cost</span>
+                                  <input
+                                    type="number"
+                                    step="0.01"
+                                    value={draft.actual_cost}
+                                    onChange={(e) => handleIncidentDraftChange(inc.id, 'actual_cost', e.target.value)}
+                                    placeholder="0.00"
+                                    className="mt-1 h-10 w-full rounded-lg border border-gray-300 bg-white px-4 text-sm text-gray-900 placeholder:text-gray-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-500 disabled:bg-gray-100 disabled:text-gray-400"
+                                  />
+                                </label>
+                                <button
+                                  type="button"
+                                  onClick={() => void handleSaveIncident(inc.id)}
+                                  disabled={editingIncidentId === inc.id}
+                                  className="rounded-lg bg-orange-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-orange-700 disabled:bg-gray-100 disabled:text-gray-400"
+                                >
+                                  {editingIncidentId === inc.id ? 'Saving...' : 'Save'}
+                                </button>
+                              </div>
+                              <label className="mt-4 block text-sm font-medium text-gray-700">
+                                <span className="font-medium text-gray-700">Admin Notes</span>
+                                <textarea
+                                  value={draft.admin_notes}
+                                  onChange={(e) => handleIncidentDraftChange(inc.id, 'admin_notes', e.target.value)}
+                                  placeholder="Add internal notes for follow-up, customer communication, or charges."
+                                  rows={3}
+                                  className="mt-1 min-h-[100px] w-full rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm text-gray-900 placeholder:text-gray-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-500 disabled:bg-gray-100 disabled:text-gray-400"
+                                />
+                              </label>
+                              {Array.isArray(inc.photos) && inc.photos.length > 0 ? (
+                                <div className="mt-4">
+                                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Photos</p>
+                                  <div className="flex flex-wrap gap-3">
+                                    {inc.photos.map((photo, idx) => {
+                                      const filePath = String(photo.file_path || '').trim();
+                                      const { data } = supabase.storage.from('incident-photos').getPublicUrl(filePath);
+                                      const url = data?.publicUrl || '';
+                                      const key = `${inc.id}-${idx}-${filePath}`;
+                                      if (!url) return null;
+                                      return (
+                                        <a
+                                          key={key}
+                                          href={url}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                          className="group block h-24 w-24 overflow-hidden rounded-lg border border-slate-200 bg-slate-100 md:h-28 md:w-28"
+                                          title="Open full image"
+                                        >
+                                          {incidentImageFailures[key] ? (
+                                            <div className="flex h-full w-full items-center justify-center px-2 text-center text-xs font-medium text-slate-500">
+                                              Image unavailable
+                                            </div>
+                                          ) : (
+                                            <img
+                                              src={url}
+                                              alt={photo.file_name || 'Incident photo'}
+                                              className="h-full w-full object-cover transition-transform group-hover:scale-105"
+                                              loading="lazy"
+                                              onError={() =>
+                                                setIncidentImageFailures((prev) => ({ ...prev, [key]: true }))
+                                              }
+                                            />
+                                          )}
+                                        </a>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              ) : null}
+                            </article>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </section>
+
+                  <section>
+                    <div className="mb-3 flex items-center justify-between">
+                      <h4 className="text-sm font-bold uppercase tracking-wide text-slate-700">Past / Resolved Incidents</h4>
+                      <span className="inline-flex rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-700">
+                        {pastIncidents.length}
+                      </span>
+                    </div>
+                    {pastIncidents.length === 0 ? (
+                      <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500">
+                        No past incidents.
+                      </p>
+                    ) : (
+                      <div className="space-y-4">
+                        {pastIncidents.map((inc) => {
+                          const draft = incidentEditDrafts[inc.id] || {
+                            status: String(inc.status || 'pending'),
+                            estimated_cost:
+                              inc.estimated_cost == null || Number.isNaN(Number(inc.estimated_cost))
+                                ? ''
+                                : String(inc.estimated_cost),
+                            actual_cost:
+                              inc.actual_cost == null || Number.isNaN(Number(inc.actual_cost))
+                                ? ''
+                                : String(inc.actual_cost),
+                            admin_notes: String(inc.admin_notes || ''),
+                          };
+                          const isExpanded = expandedResolvedIncidentId === inc.id;
+                          const estimatedCostText =
+                            inc.estimated_cost == null || Number.isNaN(Number(inc.estimated_cost))
+                              ? '-'
+                              : `$${Number(inc.estimated_cost).toFixed(2)}`;
+                          const actualCostText =
+                            inc.actual_cost == null || Number.isNaN(Number(inc.actual_cost))
+                              ? '-'
+                              : `$${Number(inc.actual_cost).toFixed(2)}`;
+                          const photoCount = Array.isArray(inc.photos) ? inc.photos.length : 0;
+                          return (
+                            <article key={inc.id} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setExpandedResolvedIncidentId((current) => (current === inc.id ? null : inc.id))
+                                }
+                                className="w-full rounded-lg border border-transparent px-1 py-1 text-left transition-colors hover:border-slate-200 hover:bg-slate-50"
+                                aria-expanded={isExpanded}
+                              >
+                                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                                  <div className="min-w-0">
+                                    <p className="truncate text-base font-semibold text-slate-900">{inc.description}</p>
+                                    <p className="mt-1 text-xs text-slate-500">
+                                      {new Date(inc.created_at).toLocaleString(undefined, {
+                                        dateStyle: 'medium',
+                                        timeStyle: 'short',
+                                      })}
+                                    </p>
+                                  </div>
+                                  <div className="flex flex-wrap items-center gap-2 md:justify-end">
+                                    <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">
+                                      Est: {estimatedCostText}
+                                    </span>
+                                    <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">
+                                      Actual: {actualCostText}
+                                    </span>
+                                    {photoCount > 0 ? (
+                                      <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">
+                                        Photos: {photoCount}
+                                      </span>
+                                    ) : null}
+                                    <span
+                                      className={`inline-flex w-fit rounded-full px-2.5 py-1 text-xs font-semibold capitalize ${incidentStatusBadgeClass(
+                                        draft.status
+                                      )}`}
+                                    >
+                                      {draft.status}
+                                    </span>
+                                    <span className="text-xs font-semibold text-amber-700">
+                                      {isExpanded ? 'Hide Details' : 'View Details'}
+                                    </span>
+                                  </div>
+                                </div>
+                              </button>
+                              {isExpanded ? (
+                                <>
+                                  <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(180px,220px)_1fr_1fr_auto] lg:items-end">
+                                    <label className="block text-sm font-medium text-gray-700">
+                                      <span className="font-medium text-gray-700">Status</span>
+                                      <select
+                                        value={draft.status}
+                                        onChange={(e) => handleIncidentDraftChange(inc.id, 'status', e.target.value)}
+                                        className="mt-1 h-10 w-full rounded-lg border border-gray-300 bg-white px-4 text-sm text-gray-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-500 disabled:bg-gray-100 disabled:text-gray-400"
+                                      >
+                                        <option value="pending">pending</option>
+                                        <option value="approved">approved</option>
+                                        <option value="charged">charged</option>
+                                        <option value="disputed">disputed</option>
+                                      </select>
+                                    </label>
+                                    <label className="block text-sm font-medium text-gray-700">
+                                      <span className="font-medium text-gray-700">Estimated Cost</span>
+                                      <input
+                                        type="number"
+                                        step="0.01"
+                                        value={draft.estimated_cost}
+                                        onChange={(e) => handleIncidentDraftChange(inc.id, 'estimated_cost', e.target.value)}
+                                        placeholder="0.00"
+                                        className="mt-1 h-10 w-full rounded-lg border border-gray-300 bg-white px-4 text-sm text-gray-900 placeholder:text-gray-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-500 disabled:bg-gray-100 disabled:text-gray-400"
+                                      />
+                                    </label>
+                                    <label className="block text-sm font-medium text-gray-700">
+                                      <span className="font-medium text-gray-700">Actual Cost</span>
+                                      <input
+                                        type="number"
+                                        step="0.01"
+                                        value={draft.actual_cost}
+                                        onChange={(e) => handleIncidentDraftChange(inc.id, 'actual_cost', e.target.value)}
+                                        placeholder="0.00"
+                                        className="mt-1 h-10 w-full rounded-lg border border-gray-300 bg-white px-4 text-sm text-gray-900 placeholder:text-gray-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-500 disabled:bg-gray-100 disabled:text-gray-400"
+                                      />
+                                    </label>
+                                    <button
+                                      type="button"
+                                      onClick={() => void handleSaveIncident(inc.id)}
+                                      disabled={editingIncidentId === inc.id}
+                                      className="rounded-lg bg-orange-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-orange-700 disabled:bg-gray-100 disabled:text-gray-400"
+                                    >
+                                      {editingIncidentId === inc.id ? 'Saving...' : 'Save'}
+                                    </button>
+                                  </div>
+                                  <label className="mt-4 block text-sm font-medium text-gray-700">
+                                    <span className="font-medium text-gray-700">Admin Notes</span>
+                                    <textarea
+                                      value={draft.admin_notes}
+                                      onChange={(e) => handleIncidentDraftChange(inc.id, 'admin_notes', e.target.value)}
+                                      placeholder="Add internal notes for follow-up, customer communication, or charges."
+                                      rows={3}
+                                      className="mt-1 min-h-[100px] w-full rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm text-gray-900 placeholder:text-gray-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-500 disabled:bg-gray-100 disabled:text-gray-400"
+                                    />
+                                  </label>
+                                  {Array.isArray(inc.photos) && inc.photos.length > 0 ? (
+                                    <div className="mt-4">
+                                      <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Photos</p>
+                                      <div className="flex flex-wrap gap-3">
+                                        {inc.photos.map((photo, idx) => {
+                                          const filePath = String(photo.file_path || '').trim();
+                                          const { data } = supabase.storage.from('incident-photos').getPublicUrl(filePath);
+                                          const url = data?.publicUrl || '';
+                                          const key = `${inc.id}-${idx}-${filePath}`;
+                                          if (!url) return null;
+                                          return (
+                                            <a
+                                              key={key}
+                                              href={url}
+                                              target="_blank"
+                                              rel="noreferrer"
+                                              className="group block h-24 w-24 overflow-hidden rounded-lg border border-slate-200 bg-slate-100 md:h-28 md:w-28"
+                                              title="Open full image"
+                                            >
+                                              {incidentImageFailures[key] ? (
+                                                <div className="flex h-full w-full items-center justify-center px-2 text-center text-xs font-medium text-slate-500">
+                                                  Image unavailable
+                                                </div>
+                                              ) : (
+                                                <img
+                                                  src={url}
+                                                  alt={photo.file_name || 'Incident photo'}
+                                                  className="h-full w-full object-cover transition-transform group-hover:scale-105"
+                                                  loading="lazy"
+                                                  onError={() =>
+                                                    setIncidentImageFailures((prev) => ({ ...prev, [key]: true }))
+                                                  }
+                                                />
+                                              )}
+                                            </a>
+                                          );
+                                        })}
+                                      </div>
+                                    </div>
+                                  ) : null}
+                                </>
+                              ) : null}
+                            </article>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </section>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+

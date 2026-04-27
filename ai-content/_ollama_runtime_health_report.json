@@ -1,0 +1,53 @@
+{
+  "tags_health": {
+    "ok": true,
+    "status": 200,
+    "latency_ms": 31.9,
+    "err": ""
+  },
+  "installed_models": [
+    "phi3:mini",
+    "mistral:latest"
+  ],
+  "selected_small_model": "phi3:mini",
+  "tests": {
+    "default_nonstream_np16_t20": {
+      "ok": true,
+      "latency_ms": 9255.1,
+      "first_chunk_ms": null,
+      "chars": 73,
+      "err": ""
+    },
+    "default_stream_np16_t20": {
+      "ok": true,
+      "latency_ms": 1816.7,
+      "first_chunk_ms": 148.2,
+      "chars": 73,
+      "err": ""
+    },
+    "small_nonstream_np16_t20": {
+      "ok": true,
+      "latency_ms": 1824.9,
+      "first_chunk_ms": null,
+      "chars": 73,
+      "err": ""
+    },
+    "small_stream_np16_t20": {
+      "ok": true,
+      "latency_ms": 1843.1,
+      "first_chunk_ms": 148.6,
+      "chars": 73,
+      "err": ""
+    },
+    "small_stream_np64_t45": {
+      "ok": true,
+      "latency_ms": 4059.0,
+      "first_chunk_ms": 149.5,
+      "chars": 158,
+      "err": ""
+    }
+  },
+  "likely_root_cause": [
+    "inconclusive"
+  ]
+}

@@ -1,0 +1,154 @@
+/**
+ * Incomplete-verification reminder (Resend). At most one send per booking (DB flag).
+ * Future: delayed job can call maybeSendVerificationReminder with the same guards.
+ */
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function publicAppBase() {
+  return (process.env.APP_PUBLIC_URL || process.env.FRONTEND_URL || '')
+    .trim()
+    .replace(/\/$/, '');
+}
+
+/**
+ * @param {object} opts
+ * @param {import('@supabase/supabase-js').SupabaseClient} opts.supabaseAdmin
+ * @param {import('resend').Resend | null} opts.resend
+ * @param {string} opts.resendFrom
+ * @param {string} opts.bookingId
+ * @param {string} opts.email - must match customers.email for booking.customer_id
+ * @returns {Promise<{ sent: boolean; reason?: string }>}
+ */
+async function maybeSendVerificationReminder(opts) {
+  const { supabaseAdmin, resend, resendFrom, bookingId, email } = opts;
+
+  if (!supabaseAdmin) {
+    console.warn('[verification-reminder] skipped: no supabase admin client');
+    return { sent: false, reason: 'no_db' };
+  }
+  if (!resend || !resendFrom) {
+    console.warn('[verification-reminder] skipped: Resend not configured');
+    return { sent: false, reason: 'no_resend' };
+  }
+
+  const emailNorm = String(email).trim().toLowerCase();
+  const id = String(bookingId).trim();
+
+  const { data: booking, error: fetchErr } = await supabaseAdmin
+    .from('bookings')
+    .select('id, status, verification_reminder_sent_at, customer_id')
+    .eq('id', id)
+    .maybeSingle();
+
+  if (fetchErr) {
+    console.error('[verification-reminder] fetch booking:', fetchErr);
+    return { sent: false, reason: 'fetch_error' };
+  }
+  if (!booking) {
+    return { sent: false, reason: 'no_booking' };
+  }
+
+  const { data: customer, error: custErr } = await supabaseAdmin
+    .from('customers')
+    .select('email')
+    .eq('id', booking.customer_id)
+    .maybeSingle();
+
+  if (custErr || !customer || !customer.email) {
+    console.error('[verification-reminder] fetch customer:', custErr);
+    return { sent: false, reason: 'no_customer' };
+  }
+
+  if (customer.email.trim().toLowerCase() !== emailNorm) {
+    console.warn('[verification-reminder] email mismatch for booking', id);
+    return { sent: false, reason: 'email_mismatch' };
+  }
+
+  if (booking.status !== 'pending_verification') {
+    return { sent: false, reason: 'not_pending_verification' };
+  }
+  if (booking.verification_reminder_sent_at) {
+    return { sent: false, reason: 'already_sent' };
+  }
+
+  const base = publicAppBase();
+  if (!base) {
+    console.warn('[verification-reminder] skipped: APP_PUBLIC_URL/FRONTEND_URL not configured');
+    return { sent: false, reason: 'no_public_base' };
+  }
+  const verifyUrl = `${base}/verify?bookingId=${encodeURIComponent(id)}`;
+  const subject = 'Complete Your Booking Verification - Launch Zone Charters';
+
+  const textBody = `You're almost set!
+
+Please complete:
+- Waiver
+- Insurance
+- Boater License
+
+Finish here:
+${verifyUrl}`;
+
+  const htmlBody = `
+    <p>You're almost set!</p>
+    <p><strong>Please complete:</strong></p>
+    <ul>
+      <li>Waiver</li>
+      <li>Insurance</li>
+      <li>Boater License</li>
+    </ul>
+    <p><a href="${escapeHtml(verifyUrl)}">Finish your verification here</a></p>
+    <p>If you have questions, call <a href="tel:803-542-1761">803-542-1761</a>.</p>
+  `;
+
+  try {
+    const result = await resend.emails.send({
+      from: resendFrom,
+      to: emailNorm,
+      subject,
+      text: textBody,
+      html: htmlBody,
+    });
+    if (result.error) {
+      console.error('[verification-reminder] Resend error:', result.error);
+      return { sent: false, reason: 'resend_error' };
+    }
+
+    const stamp = { verification_reminder_sent_at: new Date().toISOString() };
+    const markSent = () =>
+      supabaseAdmin
+        .from('bookings')
+        .update(stamp)
+        .eq('id', id)
+        .eq('status', 'pending_verification')
+        .is('verification_reminder_sent_at', null)
+        .select('id')
+        .maybeSingle();
+
+    let { data: updated, error: updErr } = await markSent();
+    if (updErr) {
+      await new Promise((r) => setTimeout(r, 150));
+      ({ data: updated, error: updErr } = await markSent());
+    }
+
+    if (updErr) {
+      console.error('[verification-reminder] failed to set sent_at (may resend on retry):', updErr);
+    } else if (!updated) {
+      console.warn('[verification-reminder] email sent but sent_at race lost; id=', id);
+    }
+
+    return { sent: true };
+  } catch (err) {
+    console.error('[verification-reminder] unexpected:', err);
+    return { sent: false, reason: 'exception' };
+  }
+}
+
+module.exports = { maybeSendVerificationReminder, publicAppBase };

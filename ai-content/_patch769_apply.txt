@@ -1,0 +1,125 @@
+*** Begin Patch
+*** Update File: c:/Users/Josh/MyProjects/Launch_Zone_Charters_New_version/project/ai-content/upload.py
+@@
+ def run_pipeline() -> dict[str, Any]:
+@@
+     processed = 0
+     inserted = 0
+     failed = 0
++    print("⬆️ UPLOAD PIPELINE STARTED")
+     log("STEP 1: Start")
+@@
+     articles = fetch_all()
++    print("📰 RAW ARTICLES FETCHED:", len(articles))
+@@
+     for article_item in items:
+         url = (article_item.get("url") or "").strip()
+         source_url = url or None
++        print("🌐 ARTICLE SOURCE:", source_url)
+         if not is_valid_source_url(source_url):
+             print(f"[SKIP] invalid source_url → {source_url!r}")
++            print("❌ REJECTED SOURCE (NOT ALLOWED):", source_url)
+             stats["skipped_validation"] += 1
+             continue
+@@
+     while phase < 2:
+@@
+         for article_item, is_dup in valid_items:
+             delta = _empty_stats_delta()
+@@
+             attempts += 1
++            print("🔁 LOOP ITERATION:", attempts)
+             if attempts > PIPELINE_MAX_ATTEMPTS_PER_RUN:
+                 print(
+                     f"[PIPELINE] max attempts reached ({PIPELINE_MAX_ATTEMPTS_PER_RUN}) — stopping run loop"
+                 )
++                print("🛑 MAX ATTEMPTS REACHED")
+                 _merge_stats(stats, delta)
+                 phase = 99
+                 break
+@@
+                 if not title:
+                     title = "Captain's Log — Space Coast and lagoon updates"
++                print("🧾 TITLE HASH CHECK:", title[:220])
+                 t_hash = _title_hash(title)
+                 if t_hash in recent_title_hashes:
+                     print(f"[SKIP] duplicate title hash → {title[:160]}")
++                    print("❌ DUPLICATE TITLE:", title[:220])
+                     delta["skipped_title_duplicate"] += 1
+                     _merge_stats(stats, delta)
+                     continue
+                 if _title_too_similar(title, recent_titles):
+                     print(f"[SKIP] similar title to recent post → {title[:160]}")
++                    print("❌ DUPLICATE TITLE:", title[:220])
+                     delta["skipped_similar_title"] += 1
+                     _merge_stats(stats, delta)
+                     continue
+@@
+                 if not _strict_niche_keyword_match(check_title, str(article.get("content") or ""), check_summary):
+                     print(f"[SKIP] strict niche keyword gate failed → {check_title[:200]!r}")
++                    print("❌ FINAL REJECT (STRICT KEYWORD FAIL):", check_title[:220])
+                     delta["skipped_validation"] += 1
+                     _merge_stats(stats, delta)
+                     continue
++                print("🚨 FINAL KEYWORD CHECK:", check_title[:220])
+@@
+                 log(
+                     f"STEP 4: rewrite_pipeline_article url={url!r} category={article['category']!r} "
+                     f"keyword_topic={article['keyword_topic']!r}"
+                 )
++                print("✍️ SENDING TO REWRITE:", (article.get("title") or title)[:220])
+                 try:
+                     rewritten = rewrite_pipeline_article(article)
+                     if rewritten is None:
+@@
+                     else:
+                         print(
+                             f"[DEBUG] Rewritten content preview: {rewritten.get('content', '')[:300]}"
+                         )
+                         article = rewritten
+                         print("[REWRITE SUCCESS]")
++                        print("✅ REWRITE COMPLETE:", (article.get("title") or title)[:220])
+@@
+                 if not _strict_niche_keyword_match(seo_title, content, str(article.get("summary") or "")):
+                     print(f"[SKIP] strict niche keyword gate (final) failed → {seo_title[:200]!r}")
++                    print("❌ FINAL REJECT (STRICT KEYWORD FAIL):", seo_title[:220])
+                     delta["skipped_validation"] += 1
+                     _merge_stats(stats, delta)
+                     continue
+@@
+                 try:
++                    print("💾 INSERTING ARTICLE:", seo_title[:220])
+                     client.table("captains_log").insert(insert_payload).execute()
+                     print("[INSERT SUCCESS]")
++                    print("✅ INSERT SUCCESS:", seo_title[:220])
+                     save_last_article_title_for_rotation(seo_title)
+@@
+         if stats["inserted"] == inserted_before_phase:
+             no_new_passes += 1
+         else:
+             no_new_passes = 0
+         if no_new_passes >= 1:
+             print("[PIPELINE] no new valid content inserted in this pass — stopping")
++            print("🛑 NO VALID CONTENT FOUND — EXITING")
+             break
+         phase += 1
+@@
+     print("PIPELINE COMPLETE:")
+     print(f"Processed: {processed}")
+     print(f"Inserted: {inserted}")
+     print(f"Failed: {failed}")
++    rejected_count = (
++        stats.get("skipped_duplicate", 0)
++        + stats.get("skipped_recent", 0)
++        + stats.get("skipped_title_duplicate", 0)
++        + stats.get("skipped_similar_title", 0)
++        + stats.get("skipped_topic_mismatch", 0)
++        + stats.get("skipped_ai", 0)
++        + stats.get("skipped_image", 0)
++        + stats.get("skipped_upload", 0)
++        + stats.get("skipped_validation", 0)
++    )
++    print("📊 PIPELINE COMPLETE")
++    print("📊 TOTAL INSERTED:", inserted)
++    print("📊 TOTAL REJECTED:", rejected_count)
+*** End Patch

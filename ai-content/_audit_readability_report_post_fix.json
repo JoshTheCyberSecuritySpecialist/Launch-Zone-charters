@@ -1,0 +1,62 @@
+{
+  "summary": {
+    "total": 10,
+    "good": 9,
+    "acceptable": 1,
+    "poor": 0
+  },
+  "articles": [
+    {
+      "title": "SpaceX eyes weekend Falcon 9 launch from Cape Canaveral",
+      "leaks": [],
+      "readability": "good"
+    },
+    {
+      "title": "NWS: small craft advisory for Volusia nearshore into the weekend",
+      "leaks": [],
+      "readability": "good"
+    },
+    {
+      "title": "USCG: children under 6 need PFDs on open motorboats in Florida",
+      "leaks": [],
+      "readability": "good"
+    },
+    {
+      "title": "What to know before your first Pontoon rental in Daytona Beach",
+      "leaks": [],
+      "readability": "good"
+    },
+    {
+      "title": "FWC biologists note seasonal manatee counts rising in Mosquito Lagoon",
+      "leaks": [],
+      "readability": "good"
+    },
+    {
+      "title": "Coast Guard suspends search off Canaveral",
+      "leaks": [],
+      "readability": "good"
+    },
+    {
+      "title": "ULA sets Atlas V rollout for NET Tuesday",
+      "leaks": [],
+      "readability": "good"
+    },
+    {
+      "title": "Snook season reopens on Atlantic coast portions this week",
+      "leaks": [
+        "truncated_end:Practical Checklist Before You Leave the Dock"
+      ],
+      "readability": "acceptable"
+    },
+    {
+      "title": "Rare winter dinoflagellate bloom reported near Titusville",
+      "leaks": [],
+      "readability": "good"
+    },
+    {
+      "title": "Rip current statement for Volusia beaches Sunday",
+      "leaks": [],
+      "readability": "good"
+    }
+  ]
+}

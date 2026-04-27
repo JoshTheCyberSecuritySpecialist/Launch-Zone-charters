@@ -1,0 +1,186 @@
+{
+  "summary": {
+    "total": 10,
+    "good": 1,
+    "acceptable": 1,
+    "poor": 8
+  },
+  "articles": [
+    {
+      "title": "SpaceX eyes weekend Falcon 9 launch from Cape Canaveral",
+      "duplicated_headings": {},
+      "checklist_appears_more_than_once": false,
+      "local_context_appears_more_than_once": false,
+      "before_you_go_appears_more_than_once": false,
+      "source_fragments_or_broken_sentences": [
+        "mid_sentence_start:What This Means For Your Trip",
+        "mid_sentence_start:Best Ways to Experience the Space Coast Safely"
+      ],
+      "authority_links_only_in_allowed_sections": true,
+      "authority_links_duplicated": false,
+      "readability": "poor",
+      "cause_of_poor_readability": [
+        "rewrite output already contains structure"
+      ],
+      "fixture_id": "rocket_viewing"
+    },
+    {
+      "title": "NWS: small craft advisory for Volusia nearshore into the weekend",
+      "duplicated_headings": {},
+      "checklist_appears_more_than_once": false,
+      "local_context_appears_more_than_once": false,
+      "before_you_go_appears_more_than_once": false,
+      "source_fragments_or_broken_sentences": [
+        "mid_sentence_start:What This Means For Your Trip",
+        "mid_sentence_start:Best Ways to Experience the Space Coast Safely"
+      ],
+      "authority_links_only_in_allowed_sections": true,
+      "authority_links_duplicated": false,
+      "readability": "poor",
+      "cause_of_poor_readability": [
+        "rewrite output already contains structure"
+      ],
+      "fixture_id": "marine_weather"
+    },
+    {
+      "title": "USCG: children under 6 need PFDs on open motorboats in Florida",
+      "duplicated_headings": {},
+      "checklist_appears_more_than_once": false,
+      "local_context_appears_more_than_once": false,
+      "before_you_go_appears_more_than_once": false,
+      "source_fragments_or_broken_sentences": [
+        "mid_sentence_start:What This Means For Your Trip",
+        "truncated_end:What This Means For Your Trip",
+        "mid_sentence_start:Best Ways to Experience the Space Coast Safely"
+      ],
+      "authority_links_only_in_allowed_sections": true,
+      "authority_links_duplicated": false,
+      "readability": "poor",
+      "cause_of_poor_readability": [
+        "rewrite output already contains structure"
+      ],
+      "fixture_id": "safety_pfd"
+    },
+    {
+      "title": "What to know before your first Pontoon rental in Daytona Beach",
+      "duplicated_headings": {},
+      "checklist_appears_more_than_once": false,
+      "local_context_appears_more_than_once": false,
+      "before_you_go_appears_more_than_once": false,
+      "source_fragments_or_broken_sentences": [
+        "truncated_end:What This Means For Your Trip",
+        "mid_sentence_start:Best Ways to Experience the Space Coast Safely"
+      ],
+      "authority_links_only_in_allowed_sections": true,
+      "authority_links_duplicated": false,
+      "readability": "poor",
+      "cause_of_poor_readability": [
+        "rewrite output already contains structure"
+      ],
+      "fixture_id": "renter_education"
+    },
+    {
+      "title": "FWC biologists note seasonal manatee counts rising in Mosquito Lagoon",
+      "duplicated_headings": {},
+      "checklist_appears_more_than_once": false,
+      "local_context_appears_more_than_once": false,
+      "before_you_go_appears_more_than_once": false,
+      "source_fragments_or_broken_sentences": [
+        "mid_sentence_start:Best Ways to Experience the Space Coast Safely"
+      ],
+      "authority_links_only_in_allowed_sections": true,
+      "authority_links_duplicated": false,
+      "readability": "acceptable",
+      "cause_of_poor_readability": [
+        "rewrite output already contains structure"
+      ],
+      "fixture_id": "wildlife_lagoon"
+    },
+    {
+      "title": "Coast Guard suspends search off Canaveral",
+      "duplicated_headings": {},
+      "checklist_appears_more_than_once": false,
+      "local_context_appears_more_than_once": false,
+      "before_you_go_appears_more_than_once": false,
+      "source_fragments_or_broken_sentences": [],
+      "authority_links_only_in_allowed_sections": true,
+      "authority_links_duplicated": false,
+      "readability": "good",
+      "cause_of_poor_readability": [],
+      "fixture_id": "thin_source"
+    },
+    {
+      "title": "ULA sets Atlas V rollout for NET Tuesday",
+      "duplicated_headings": {},
+      "checklist_appears_more_than_once": false,
+      "local_context_appears_more_than_once": false,
+      "before_you_go_appears_more_than_once": false,
+      "source_fragments_or_broken_sentences": [
+        "mid_sentence_start:What This Means For Your Trip",
+        "mid_sentence_start:Best Ways to Experience the Space Coast Safely"
+      ],
+      "authority_links_only_in_allowed_sections": true,
+      "authority_links_duplicated": false,
+      "readability": "poor",
+      "cause_of_poor_readability": [
+        "rewrite output already contains structure"
+      ],
+      "fixture_id": "rocket_spacex_extra"
+    },
+    {
+      "title": "Snook season reopens on Atlantic coast portions this week",
+      "duplicated_headings": {},
+      "checklist_appears_more_than_once": false,
+      "local_context_appears_more_than_once": false,
+      "before_you_go_appears_more_than_once": false,
+      "source_fragments_or_broken_sentences": [
+        "mid_sentence_start:What This Means For Your Trip",
+        "mid_sentence_start:Best Ways to Experience the Space Coast Safely",
+        "truncated_end:Practical Checklist Before You Leave the Dock"
+      ],
+      "authority_links_only_in_allowed_sections": true,
+      "authority_links_duplicated": false,
+      "readability": "poor",
+      "cause_of_poor_readability": [
+        "rewrite output already contains structure"
+      ],
+      "fixture_id": "fishing_local"
+    },
+    {
+      "title": "Rare winter dinoflagellate bloom reported near Titusville",
+      "duplicated_headings": {},
+      "checklist_appears_more_than_once": false,
+      "local_context_appears_more_than_once": false,
+      "before_you_go_appears_more_than_once": false,
+      "source_fragments_or_broken_sentences": [
+        "mid_sentence_start:What This Means For Your Trip",
+        "mid_sentence_start:Best Ways to Experience the Space Coast Safely"
+      ],
+      "authority_links_only_in_allowed_sections": true,
+      "authority_links_duplicated": false,
+      "readability": "poor",
+      "cause_of_poor_readability": [
+        "rewrite output already contains structure"
+      ],
+      "fixture_id": "bio_glow_thin"
+    },
+    {
+      "title": "Rip current statement for Volusia beaches Sunday",
+      "duplicated_headings": {},
+      "checklist_appears_more_than_once": false,
+      "local_context_appears_more_than_once": false,
+      "before_you_go_appears_more_than_once": false,
+      "source_fragments_or_broken_sentences": [
+        "mid_sentence_start:What This Means For Your Trip",
+        "mid_sentence_start:Best Ways to Experience the Space Coast Safely"
+      ],
+      "authority_links_only_in_allowed_sections": true,
+      "authority_links_duplicated": false,
+      "readability": "poor",
+      "cause_of_poor_readability": [
+        "rewrite output already contains structure"
+      ],
+      "fixture_id": "weather_detailed"
+    }
+  ]
+}

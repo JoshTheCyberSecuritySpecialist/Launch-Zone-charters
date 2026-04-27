@@ -1,0 +1,125 @@
+{
+  "summary": {
+    "total": 10,
+    "live_count": 0,
+    "fallback_count": 10,
+    "timeout_count": 10,
+    "timeout_rate": 100.0,
+    "good": 9,
+    "acceptable": 1,
+    "poor": 0,
+    "regressions": 0
+  },
+  "articles": [
+    {
+      "fixture_id": "rocket_viewing",
+      "title": "SpaceX eyes weekend Falcon 9 launch from Cape Canaveral",
+      "path": "fallback",
+      "timeout": true,
+      "paragraph_flow": "clean",
+      "mid_sentence_starts": false,
+      "section_transition_clean": true,
+      "overall_readability": "good",
+      "regression_vs_fallback_expectation": false
+    },
+    {
+      "fixture_id": "marine_weather",
+      "title": "NWS: small craft advisory for Volusia nearshore into the weekend",
+      "path": "fallback",
+      "timeout": true,
+      "paragraph_flow": "clean",
+      "mid_sentence_starts": false,
+      "section_transition_clean": true,
+      "overall_readability": "good",
+      "regression_vs_fallback_expectation": false
+    },
+    {
+      "fixture_id": "safety_pfd",
+      "title": "USCG: children under 6 need PFDs on open motorboats in Florida",
+      "path": "fallback",
+      "timeout": true,
+      "paragraph_flow": "clean",
+      "mid_sentence_starts": false,
+      "section_transition_clean": true,
+      "overall_readability": "good",
+      "regression_vs_fallback_expectation": false
+    },
+    {
+      "fixture_id": "renter_education",
+      "title": "What to know before your first Pontoon rental in Daytona Beach",
+      "path": "fallback",
+      "timeout": true,
+      "paragraph_flow": "clean",
+      "mid_sentence_starts": false,
+      "section_transition_clean": true,
+      "overall_readability": "good",
+      "regression_vs_fallback_expectation": false
+    },
+    {
+      "fixture_id": "wildlife_lagoon",
+      "title": "FWC biologists note seasonal manatee counts rising in Mosquito Lagoon",
+      "path": "fallback",
+      "timeout": true,
+      "paragraph_flow": "clean",
+      "mid_sentence_starts": false,
+      "section_transition_clean": true,
+      "overall_readability": "good",
+      "regression_vs_fallback_expectation": false
+    },
+    {
+      "fixture_id": "thin_source",
+      "title": "Coast Guard suspends search off Canaveral",
+      "path": "fallback",
+      "timeout": true,
+      "paragraph_flow": "clean",
+      "mid_sentence_starts": false,
+      "section_transition_clean": true,
+      "overall_readability": "good",
+      "regression_vs_fallback_expectation": false
+    },
+    {
+      "fixture_id": "rocket_spacex_extra",
+      "title": "ULA sets Atlas V rollout for NET Tuesday",
+      "path": "fallback",
+      "timeout": true,
+      "paragraph_flow": "clean",
+      "mid_sentence_starts": false,
+      "section_transition_clean": true,
+      "overall_readability": "good",
+      "regression_vs_fallback_expectation": false
+    },
+    {
+      "fixture_id": "fishing_local",
+      "title": "Snook season reopens on Atlantic coast portions this week",
+      "path": "fallback",
+      "timeout": true,
+      "paragraph_flow": "minor issues",
+      "mid_sentence_starts": false,
+      "section_transition_clean": false,
+      "overall_readability": "acceptable",
+      "regression_vs_fallback_expectation": false
+    },
+    {
+      "fixture_id": "bio_glow_thin",
+      "title": "Rare winter dinoflagellate bloom reported near Titusville",
+      "path": "fallback",
+      "timeout": true,
+      "paragraph_flow": "clean",
+      "mid_sentence_starts": false,
+      "section_transition_clean": true,
+      "overall_readability": "good",
+      "regression_vs_fallback_expectation": false
+    },
+    {
+      "fixture_id": "weather_detailed",
+      "title": "Rip current statement for Volusia beaches Sunday",
+      "path": "fallback",
+      "timeout": true,
+      "paragraph_flow": "clean",
+      "mid_sentence_starts": false,
+      "section_transition_clean": true,
+      "overall_readability": "good",
+      "regression_vs_fallback_expectation": false
+    }
+  ]
+}

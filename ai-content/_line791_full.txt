@@ -1,0 +1,83 @@
+*** Begin Patch
+*** Update File: C:\Users\Josh\MyProjects\Launch_Zone_Charters_New_version\project\ai-content\scraper.py
+@@
+ def _source_host_allowed(url: str) -> bool:
+@@
+     if host.startswith("www."):
+         host = host[4:]
+     return any(host.endswith(suffix) for suffix in ALLOWED_SOURCE_HOST_SUFFIXES)
+ 
+ 
++def _is_google_news_transport_url(url: str | None) -> bool:
++    try:
++        host = (urlparse((url or "").strip()).hostname or "").lower()
++    except Exception:
++        return False
++    if host.startswith("www."):
++        host = host[4:]
++    return host == "news.google.com"
++
++
++def _source_allowed_with_transport_hint(resolved_url: str | None, source_hint_url: str | None) -> bool:
++    """
++    Google News feed links can remain as transport URLs.
++    Enforce strict allowlist on publisher host when available.
++    """
++    if resolved_url and _is_google_news_transport_url(resolved_url):
++        if not source_hint_url:
++            return False
++        return _source_host_allowed(source_hint_url)
++    return _source_host_allowed(resolved_url or "")
++
++
+ def _water_activity_hit(blob: str) -> bool:
+@@
+ def is_relevant_to_topic_with_summary(
+     title: str,
+     summary: str,
+     topic_id: str,
+     resolved_url: str | None = None,
++    source_hint_url: str | None = None,
+ ) -> bool:
+     print("🧠 RELEVANCE CHECK:", (title or "")[:220])
+-    if resolved_url and not _source_host_allowed(resolved_url):
+-        print("❌ REJECTED SOURCE (NOT ALLOWED):", resolved_url)
++    if resolved_url and not _source_allowed_with_transport_hint(resolved_url, source_hint_url):
++        rejected_source = source_hint_url or resolved_url
++        print("❌ REJECTED SOURCE (NOT ALLOWED):", rejected_source)
+         return False
+@@
+-                    if not is_relevant_to_topic_with_summary(raw_title, raw_summary, topic_id, resolved):
++                    if not is_relevant_to_topic_with_summary(
++                        raw_title,
++                        raw_summary,
++                        topic_id,
++                        resolved,
++                        it.get("source_url") or "",
++                    ):
+                         continue
+@@
+-            if not is_relevant_to_topic_with_summary(raw_title, raw_summary, topic_id, resolved_url):
++            if not is_relevant_to_topic_with_summary(
++                raw_title,
++                raw_summary,
++                topic_id,
++                resolved_url,
++                it.get("source_url") or "",
++            ):
+                 reject_stats["irrelevant"] += 1
+                 print(f"[SKIP] irrelevant to topic → {raw_title[:200]}")
+                 continue
+@@
+             if not is_relevant_to_topic_with_summary(
+-                raw_for_gate, it.get("summary") or "", topic_id, resolved_url
++                raw_for_gate,
++                it.get("summary") or "",
++                topic_id,
++                resolved_url,
++                it.get("source_url") or "",
+             ):
+                 reject_stats["irrelevant"] += 1
+                 print(f"[SKIP] irrelevant to topic → {raw_for_gate[:200]}")
+                 continue
+*** End Patch

@@ -1,0 +1,65 @@
+{
+  "fixture_id": "rocket_viewing",
+  "results": [
+    {
+      "variant": "baseline",
+      "input_summary_words": 51,
+      "input_content_words": 97,
+      "elapsed_ms": 122125.4,
+      "timeout_seen": true,
+      "used_fallback": true,
+      "rewrite_returned_none": false,
+      "request": {
+        "url": "http://localhost:11434/api/generate",
+        "stream": true,
+        "timeout": 120,
+        "prompt_chars": 12704,
+        "prompt_words": 2035,
+        "num_predict": 120,
+        "first_chunk_ms": null,
+        "err": "HTTPConnectionPool(host='localhost', port=11434): Read timed out. (read timeout=120)",
+        "request_return_ms": 122105.1
+      }
+    },
+    {
+      "variant": "half_source",
+      "input_summary_words": 51,
+      "input_content_words": 48,
+      "elapsed_ms": 122060.1,
+      "timeout_seen": true,
+      "used_fallback": true,
+      "rewrite_returned_none": false,
+      "request": {
+        "url": "http://localhost:11434/api/generate",
+        "stream": true,
+        "timeout": 120,
+        "prompt_chars": 12437,
+        "prompt_words": 1986,
+        "num_predict": 120,
+        "first_chunk_ms": null,
+        "err": "HTTPConnectionPool(host='localhost', port=11434): Read timed out. (read timeout=120)",
+        "request_return_ms": 122056.6
+      }
+    },
+    {
+      "variant": "summary_only",
+      "input_summary_words": 51,
+      "input_content_words": 0,
+      "elapsed_ms": 122066.2,
+      "timeout_seen": true,
+      "used_fallback": true,
+      "rewrite_returned_none": false,
+      "request": {
+        "url": "http://localhost:11434/api/generate",
+        "stream": true,
+        "timeout": 120,
+        "prompt_chars": 12136,
+        "prompt_words": 1933,
+        "num_predict": 120,
+        "first_chunk_ms": null,
+        "err": "HTTPConnectionPool(host='localhost', port=11434): Read timed out. (read timeout=120)",
+        "request_return_ms": 122063.6
+      }
+    }
+  ]
+}

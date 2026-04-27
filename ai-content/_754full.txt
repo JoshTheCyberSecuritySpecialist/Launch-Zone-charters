@@ -1,0 +1,58 @@
+*** Begin Patch
+*** Update File: c:/Users/Josh/MyProjects/Launch_Zone_Charters_New_version/project/ai-content/scraper.py
+@@
+ LOCAL_INTENT_TERMS: tuple[str, ...] = (
+@@
+     "ormond beach",
+ )
+ 
++# Mandatory niche keywords for Captain's Log acceptance.
++REQUIRED_NICHE_KEYWORDS: tuple[str, ...] = (
++    "boat",
++    "boating",
++    "charter",
++    "water",
++    "lagoon",
++    "fishing",
++    "marine",
++    "titusville",
++    "daytona",
++    "space coast",
++    "sandbar",
++)
++
++# Source host allowlist: local tourism/water + marine/weather + space-coast launch context.
++ALLOWED_SOURCE_HOST_SUFFIXES: tuple[str, ...] = (
++    "spacecoastdaily.com",
++    "floridatoday.com",
++    "news-journalonline.com",
++    "weather.gov",
++    "myfwc.com",
++    "visitflorida.com",
++    "visitspacecoast.com",
++    "daytonabeach.com",
++    "nasa.gov",
++    "spacex.com",
++)
++
+ 
+ def _local_geo_hit(blob: str) -> bool:
+@@
+     b = (blob or "").lower()
+     return any(t in b for t in LOCAL_INTENT_TERMS)
++
++
++def _required_niche_keyword_hit(blob: str) -> bool:
++    b = (blob or "").lower()
++    return any(k in b for k in REQUIRED_NICHE_KEYWORDS)
++
++
++def _source_host_allowed(url: str) -> bool:
++    try:
++        host = (urlparse(url or "").hostname or "").lower()
++    except Exception:
++        return False
++    if host.startswith("www."):
++        host = host[4:]
++    return any(host.endswith(suffix) for suffix in ALLOWED_SOURCE_HOST_SUFFIXES)
+*** End Patch

@@ -1,0 +1,54 @@
+*** Begin Patch
+*** Update File: C:\Users\Josh\MyProjects\Launch_Zone_Charters_New_version\project\ai-content\scraper.py
+@@
+ def _parse_rss_article_items(xml_text: str, limit: int) -> list[dict[str, str]]:
+@@
+     for item in root.findall(".//item"):
+@@
+         d_el = item.find("description")
+         p_el = item.find("pubDate")
++        source_url = ""
+         title = (t_el.text or "").strip() if t_el is not None and t_el.text else ""
+         link = (l_el.text or "").strip() if l_el is not None and l_el.text else ""
+@@
+         pub = (p_el.text or "").strip() if p_el is not None and p_el.text else ""
++        s_el = item.find("source")
++        if s_el is not None:
++            source_url = (s_el.attrib.get("url") or "").strip()
+         if not pub:
+             dc_ns = "{http://purl.org/dc/elements/1.1/}"
+@@
+         if link.startswith("http"):
+-            out.append({"title": title, "link": link, "summary": desc, "pub": pub})
++            out.append(
++                {
++                    "title": title,
++                    "link": link,
++                    "summary": desc,
++                    "pub": pub,
++                    "source_url": source_url,
++                }
++            )
+@@
+     for entry in root.findall(f".//{{{atom_ns}}}entry"):
+@@
+         p_el = entry.find(f"{{{atom_ns}}}published")
+         pub = (p_el.text or "").strip() if p_el is not None and p_el.text else ""
++        source_url = ""
++        src_el = entry.find(f"{{{atom_ns}}}source")
++        if src_el is not None:
++            link_el = src_el.find(f"{{{atom_ns}}}link")
++            if link_el is not None:
++                source_url = (link_el.get("href") or "").strip()
+         if link.startswith("http"):
+-            out.append({"title": title, "link": link, "summary": summ, "pub": pub})
++            out.append(
++                {
++                    "title": title,
++                    "link": link,
++                    "summary": summ,
++                    "pub": pub,
++                    "source_url": source_url,
++                }
++            )
+*** End Patch

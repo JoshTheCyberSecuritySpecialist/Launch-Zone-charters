@@ -1,0 +1,15 @@
+*** Begin Patch
+*** Update File: c:/Users/Josh/MyProjects/Launch_Zone_Charters_New_version/project/ai-content/scraper.py
+@@
+ def is_relevant_to_topic_with_summary(
+@@
+ ) -> bool:
++    if resolved_url and not _source_host_allowed(resolved_url):
++        return False
++
++    if not _required_niche_keyword_hit(f"{title} {summary}"):
++        return False
++
+     if _is_obvious_non_niche_story(title, summary):
+         return False
+*** End Patch

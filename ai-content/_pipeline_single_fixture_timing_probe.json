@@ -1,0 +1,23 @@
+{
+  "fixture_id": "rocket_viewing",
+  "elapsed_ms": 122103.1,
+  "used_fallback": true,
+  "timeout_seen": true,
+  "rewrite_returned_none": false,
+  "captures": [
+    {
+      "url": "http://localhost:11434/api/generate",
+      "stream": true,
+      "timeout": 120,
+      "prompt_chars": 12704,
+      "prompt_words": 2035,
+      "num_predict": 120,
+      "temperature": 0.18,
+      "top_p": 0.85,
+      "first_chunk_ms": null,
+      "err": "HTTPConnectionPool(host='localhost', port=11434): Read timed out. (read timeout=120)",
+      "request_return_ms": 122084.9
+    }
+  ],
+  "log_tail": "{\"stage\": \"pipeline_mode\", \"seo_hub\": false, \"source_words_cap\": 800, \"max_output_words\": 700, \"ollama_num_predict\": 120}\nERROR: Ollama stream attempt 1/1: HTTPConnectionPool(host='localhost', port=11434): Read timed out. (read timeout=120)\n[AI] weak output → fallback\n{\"stage\": \"grounding_qc\", \"ok\": true, \"reason\": \"ok\", \"token_overlap\": 0.9189, \"generic_phrases\": 0, \"suspicious_numbers\": [], \"seo_term_hits\": 10, \"seo_terms_matched\": [\"canaveral\", \"coast\", \"daytona\", \"indian river\", \"kennedy\", \"launch\", \"space coast\", \"titusville\", \"weather\", \"wind\"]}\n"
+}

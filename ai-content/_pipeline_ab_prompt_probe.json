@@ -1,0 +1,40 @@
+{
+  "results": [
+    {
+      "case": "pipeline_like_long_prompt",
+      "ok": false,
+      "elapsed_ms": 122056.1,
+      "out_len": 0,
+      "err": "",
+      "request": {
+        "url": "http://localhost:11434/api/generate",
+        "timeout": 120,
+        "stream": true,
+        "prompt_chars": 10490,
+        "prompt_words": 1670,
+        "num_predict": 120,
+        "first_chunk_ms": null,
+        "err": "HTTPConnectionPool(host='localhost', port=11434): Read timed out. (read timeout=120)",
+        "request_return_ms": 122055.8
+      }
+    },
+    {
+      "case": "ultra_short_prompt",
+      "ok": false,
+      "elapsed_ms": 122062.9,
+      "out_len": 0,
+      "err": "",
+      "request": {
+        "url": "http://localhost:11434/api/generate",
+        "timeout": 120,
+        "stream": true,
+        "prompt_chars": 115,
+        "prompt_words": 22,
+        "num_predict": 120,
+        "first_chunk_ms": null,
+        "err": "HTTPConnectionPool(host='localhost', port=11434): Read timed out. (read timeout=120)",
+        "request_return_ms": 122062.8
+      }
+    }
+  ]
+}

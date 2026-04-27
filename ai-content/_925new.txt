@@ -1,0 +1,50 @@
+def _is_rocket_pillar_space_content(title: str, summary: str) -> bool:
+    """
+    Rocket / 'Launch Updates' pillar: actual spaceflight or Space Coast launch-viewing news only.
+    Bare 'NASA' national PR (student contests, Alabama centers, etc.) is NOT enough — see rover challenge.
+    """
+    blob = f"{title} {summary}".lower()
+    if _rocket_launch_brand_false_positive(blob):
+        return False
+    if _rocket_pillar_reject_national_nasa_event(title, summary):
+        return False
+    # Spaceflight hardware / Florida launch sites — not generic NASA education PR
+    if re.search(
+        r"\b(spacex|falcon\s*9|falcon\s*heavy|starship|starlink|dragon\b|"
+        r"rocket\b|rockets\b|artemis|kennedy\s+space|cape\s+canaveral|space\s+coast|"
+        r"launch\s+complex|pad\s*39|crew\s+dragon|starliner|"
+        r"blue\s+origin|new\s+glenn|ula\b|globalstar|iss\b|space\s+station|"
+        r"orbital\s+launch|mission\s+to\s+(the\s+)?(moon|iss|station))\b",
+        blob,
+    ):
+        return True
+    if re.search(r"\b(launches?|liftoff|scrub)\b", blob) and _has_space_coast_launch_intent(blob):
+        return True
+    # NASA-only stories must tie to Florida / Space Coast (not Marshall, Huntsville, etc.)
+    if re.search(r"\bnasa\b", blob) and _has_space_coast_launch_intent(blob):
+        return True
+    if "florida" in blob and re.search(r"\bnasa\b", blob) and re.search(
+        r"\b(launch|rocket|pad|kennedy|canaveral|falcon|spacex|artemis)\b", blob
+    ):
+        return True
+    return False
+
+
+def _rocket_pillar_reject_national_nasa_event(title: str, summary: str) -> bool:
+    """
+    True = reject for rocket pillar: national NASA STEM contests, Marshall/Huntsville PR, etc.
+    Captain's Log is Space Coast / on-water — not every NASA.gov release.
+    """
+    b = f"{title} {summary}".lower()
+    if re.search(r"\b(human\s+)?exploration\s+rover\s+challenge\b", b):
+        return True
+    if re.search(r"\bstudent\s+(?:team\s+)?challenge\b", b) and "marshall" in b:
+        return True
+    if re.search(
+        r"\b(marshall\s+space\s+flight|u\.s\.\s+space\s*(?:&|and)\s*rocket\s+center|"
+        r"in\s+huntsville|huntsville,\s*alabama)\b",
+        b,
+    ):
+        if not _has_space_coast_launch_intent(b) and "florida" not in b and "cape canaveral" not in b:
+            return True
+    return False

@@ -1,0 +1,76 @@
+LOCAL_INTENT_TERMS: tuple[str, ...] = (
+    "daytona",
+    "port orange",
+    "titusville",
+    "space coast",
+    "cape canaveral",
+    "kennedy",
+    "indian river",
+    "lagoon",
+    "florida",
+    "ponce inlet",
+)
+
+
+def _has_space_coast_launch_intent(blob: str) -> bool:
+    """True if copy sounds like Florida / Space Coast launch viewing (not generic NASA HQ news)."""
+    b = (blob or "").lower()
+    if any(
+        t in b
+        for t in (
+            "kennedy space",
+            "kennedy space center",
+            " ksc",
+            "ksc ",
+            "cape canaveral",
+            "space coast",
+            "brevard",
+            "titusville",
+            "playalinda",
+            "max brewer",
+            "port canaveral",
+            "cocoa beach",
+            "satellite beach",
+            "melbourne",
+            "patrick space",
+            "launch complex",
+            "pad 39",
+            "pad a",
+            "pad b",
+        )
+    ):
+        return True
+    if "florida" in b and re.search(r"\b(launch|scrub|slip|falcon|spacex|rocket|starship)\b", b):
+        return True
+    if re.search(r"\b(spacex|falcon)\b", b) and (
+        "florida" in b or "space coast" in b or "canaveral" in b or "kennedy" in b
+    ):
+        return True
+    return False
+
+
+def _is_local_launch_news_host(host: str) -> bool:
+    h = (host or "").lower().removeprefix("www.")
+    return any(
+        h.endswith(s)
+        for s in (
+            "spacecoastdaily.com",
+            "floridatoday.com",
+            "news-journalonline.com",
+            "clickorlando.com",
+            "wesh.com",
+            "mynews13.com",
+            "spectrumnews13.com",
+            "fox35orlando.com",
+        )
+    )
+
+
+# NASA national PR patterns — skip for Captain's Log unless Florida launch angle is explicit.
+_LAUNCH_PR_TITLE_JUNK = re.compile(
+    r"invites\s+media|media\s+to\b|rollout\s+event|photo\s+op|news\s+conference",
+    re.I,
+)
+
+
+def _pillar_signal_score(topic_id: str, title: str, summary: str) -> int:

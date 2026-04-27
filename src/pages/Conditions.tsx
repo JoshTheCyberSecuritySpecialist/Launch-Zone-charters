@@ -88,7 +88,10 @@ interface MarineConditionsOk {
   timestamp: string;
   locationLabel: string;
   cached?: boolean;
-  meta?: { warnings?: string[] };
+  meta?: {
+    warnings?: string[];
+    supplementalMarineLimited?: boolean;
+  };
 }
 
 interface MarineConditionsFail {
@@ -980,11 +983,23 @@ export default function Conditions({ onNavigate }: ConditionsProps) {
                     </tbody>
                   </table>
                 </div>
-                {(ok.meta?.warnings?.length ?? 0) > 0 ? (
-                  <p className="mt-4 text-xs text-amber-200/95">
-                    {ok.meta?.warnings?.join(' · ')}
-                  </p>
-                ) : null}
+                {(() => {
+                  const marineWarnings = (ok.meta?.warnings ?? []).filter(
+                    (w) => !/HTTP\s*429|rate limit/i.test(String(w))
+                  );
+                  return (
+                    <>
+                      {marineWarnings.length > 0 ? (
+                        <p className="mt-4 text-xs text-amber-200/95">{marineWarnings.join(' · ')}</p>
+                      ) : null}
+                      {ok.meta?.supplementalMarineLimited ? (
+                        <p className="mt-3 text-xs text-white/45">
+                          Supplemental marine data temporarily unavailable
+                        </p>
+                      ) : null}
+                    </>
+                  );
+                })()}
               </div>
             </>
           )}

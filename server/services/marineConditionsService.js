@@ -37,8 +37,78 @@ const LOCATION_CONFIGS = {
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
+/** Last successful Open-Meteo marine/wind JSON per location — used after HTTP 429 (20 min). */
+const OPEN_METEO_PARTIAL_TTL_MS = 20 * 60 * 1000;
+/** @type {Map<string, { marineJson?: object | null; windJson?: object | null; expires: number }>} */
+const openMeteoPartialByLocation = new Map();
+
 /** HTTP timeout for NOAA + Open-Meteo (ms); avoids hung sockets */
 const FETCH_TIMEOUT_MS = 6500;
+
+const OPEN_METEO_RETRY_AFTER_MS = 2000;
+
+function getOpenMeteoStalePartial(locationKey, field) {
+  const row = openMeteoPartialByLocation.get(locationKey);
+  if (!row || row.expires < Date.now()) return null;
+  const j = field === 'marine' ? row.marineJson : row.windJson;
+  return j && typeof j === 'object' ? j : null;
+}
+
+function saveOpenMeteoPartial(locationKey, patch) {
+  const prev = openMeteoPartialByLocation.get(locationKey) || {};
+  const next = {
+    marineJson: patch.marineJson !== undefined ? patch.marineJson : prev.marineJson,
+    windJson: patch.windJson !== undefined ? patch.windJson : prev.windJson,
+    expires: Date.now() + OPEN_METEO_PARTIAL_TTL_MS,
+  };
+  openMeteoPartialByLocation.set(locationKey, next);
+}
+
+/**
+ * Fetch Open-Meteo URL with one 429 retry + optional stale JSON fallback (does not throw on 429).
+ * @returns {{ json: object | null; rateLimited429: boolean; usedStale: boolean }}
+ */
+async function fetchOpenMeteoJsonGraceful(url, label, locationKey, field) {
+  let res;
+  try {
+    res = await fetchWithTimeout(url);
+  } catch (e) {
+    throw new Error(`Open-Meteo ${label} fetch failed: ${e?.message || e}`);
+  }
+
+  if (res.status === 429) {
+    console.warn(`[marine-conditions] Open-Meteo ${label} HTTP 429 — retry once after ${OPEN_METEO_RETRY_AFTER_MS}ms`);
+    await new Promise((r) => setTimeout(r, OPEN_METEO_RETRY_AFTER_MS));
+    try {
+      res = await fetchWithTimeout(url);
+    } catch (e) {
+      throw new Error(`Open-Meteo ${label} retry fetch failed: ${e?.message || e}`);
+    }
+  }
+
+  if (res.status === 429) {
+    console.warn(
+      `[marine-conditions] Open-Meteo ${label} HTTP 429 after retry — rate limited (supplemental source only; NOAA unchanged)`
+    );
+    const stale = getOpenMeteoStalePartial(locationKey, field);
+    if (stale) {
+      console.warn(`[marine-conditions] Using stale Open-Meteo ${label} cache for ${locationKey}`);
+      return { json: stale, rateLimited429: false, usedStale: true };
+    }
+    return { json: null, rateLimited429: true, usedStale: false };
+  }
+
+  let json = {};
+  try {
+    json = await res.json();
+  } catch {
+    json = {};
+  }
+  if (!res.ok) {
+    throw new Error(`Open-Meteo ${label} HTTP ${res.status}`);
+  }
+  return { json, rateLimited429: false, usedStale: false };
+}
 
 const LIVE_DATA_UNAVAILABLE = 'Live data temporarily unavailable';
 
@@ -218,44 +288,22 @@ async function fetchNoaaAlerts(location) {
   return json;
 }
 
-async function fetchOpenMeteoMarine(location) {
+async function fetchOpenMeteoMarine(location, locationKey) {
   const url = `https://marine-api.open-meteo.com/v1/marine?latitude=${location.lat}&longitude=${location.lon}&hourly=wave_height,sea_surface_temperature&length=168`;
-  let res;
-  try {
-    res = await fetchWithTimeout(url);
-  } catch (e) {
-    throw new Error(`Open-Meteo marine fetch failed: ${e?.message || e}`);
+  const result = await fetchOpenMeteoJsonGraceful(url, 'marine', locationKey, 'marine');
+  if (result.json && !result.usedStale) {
+    saveOpenMeteoPartial(locationKey, { marineJson: result.json });
   }
-  let json = {};
-  try {
-    json = await res.json();
-  } catch {
-    json = {};
-  }
-  if (!res.ok) {
-    throw new Error(`Open-Meteo marine HTTP ${res.status}`);
-  }
-  return json;
+  return result;
 }
 
-async function fetchOpenMeteoWind(location) {
+async function fetchOpenMeteoWind(location, locationKey) {
   const url = `https://api.open-meteo.com/v1/forecast?latitude=${location.lat}&longitude=${location.lon}&hourly=wind_speed_10m,wind_direction_10m&wind_speed_unit=mph&timezone=America%2FNew_York`;
-  let res;
-  try {
-    res = await fetchWithTimeout(url);
-  } catch (e) {
-    throw new Error(`Open-Meteo wind fetch failed: ${e?.message || e}`);
+  const result = await fetchOpenMeteoJsonGraceful(url, 'wind', locationKey, 'wind');
+  if (result.json && !result.usedStale) {
+    saveOpenMeteoPartial(locationKey, { windJson: result.json });
   }
-  let json = {};
-  try {
-    json = await res.json();
-  } catch {
-    json = {};
-  }
-  if (!res.ok) {
-    throw new Error(`Open-Meteo forecast HTTP ${res.status}`);
-  }
-  return json;
+  return result;
 }
 
 function normalizeAlerts(alertsJson) {
@@ -433,19 +481,30 @@ async function getMarineConditions(options = {}) {
     console.warn('[marine-conditions] NOAA tides failed:', noaaTidesError);
   }
 
+  let openMeteoMarine429 = false;
+  let openMeteoWind429 = false;
+
   try {
-    marineJson = await fetchOpenMeteoMarine(location);
-    console.log('[marine-conditions] Open-Meteo marine OK');
-    console.log('[marine-conditions] Open-Meteo marine response:', JSON.stringify(marineJson).slice(0, 4000));
+    const omMarine = await fetchOpenMeteoMarine(location, location.key);
+    marineJson = omMarine.json;
+    if (omMarine.rateLimited429) openMeteoMarine429 = true;
+    if (marineJson) {
+      console.log('[marine-conditions] Open-Meteo marine OK');
+      console.log('[marine-conditions] Open-Meteo marine response:', JSON.stringify(marineJson).slice(0, 4000));
+    }
   } catch (e) {
     openMeteoMarineError = e?.message || String(e);
     console.warn('[marine-conditions] Open-Meteo marine failed:', openMeteoMarineError);
   }
 
   try {
-    windJson = await fetchOpenMeteoWind(location);
-    console.log('[marine-conditions] Open-Meteo wind OK');
-    console.log('[marine-conditions] Open-Meteo wind response:', JSON.stringify(windJson).slice(0, 4000));
+    const omWind = await fetchOpenMeteoWind(location, location.key);
+    windJson = omWind.json;
+    if (omWind.rateLimited429) openMeteoWind429 = true;
+    if (windJson) {
+      console.log('[marine-conditions] Open-Meteo wind OK');
+      console.log('[marine-conditions] Open-Meteo wind response:', JSON.stringify(windJson).slice(0, 4000));
+    }
   } catch (e) {
     openMeteoWindError = e?.message || String(e);
     console.warn('[marine-conditions] Open-Meteo wind failed:', openMeteoWindError);
@@ -548,15 +607,19 @@ async function getMarineConditions(options = {}) {
     meta: {
       noaaForecastOk: Boolean(forecastJson && periods.length),
       noaaAlertsOk: !noaaAlertsError,
-      openMeteoMarineOk: !openMeteoMarineError,
-      openMeteoWindOk: !openMeteoWindError,
+      openMeteoMarineOk: !openMeteoMarineError && Boolean(marineJson),
+      openMeteoWindOk: !openMeteoWindError && Boolean(windJson),
+      /** True when Open-Meteo returned HTTP 429 and no stale cache — hide scary API text in UI */
+      supplementalMarineLimited: openMeteoMarine429 || openMeteoWind429,
       warnings: [
         noaaForecastError && `NOAA forecast: ${noaaForecastError}`,
         noaaAlertsError && `NOAA alerts: ${noaaAlertsError}`,
         noaaTidesError && `NOAA tides: ${noaaTidesError}`,
         openMeteoMarineError && `Open-Meteo marine: ${openMeteoMarineError}`,
         openMeteoWindError && `Open-Meteo wind: ${openMeteoWindError}`,
-      ].filter(Boolean),
+      ]
+        .filter(Boolean)
+        .filter((w) => !/HTTP\s*429|rate limit/i.test(String(w))),
     },
   };
 

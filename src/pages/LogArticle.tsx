@@ -13,6 +13,7 @@ import {
   type CaptainsLogArticle,
 } from '../lib/captainsLog';
 import { SITE_LOGO_PATH } from '../constants/branding';
+import { env } from '../config/env.js';
 
 const DEFAULT_SITE_ORIGIN = 'https://launchzonecharters.com';
 
@@ -159,6 +160,38 @@ export default function LogArticle({ onNavigate }: LogArticleProps) {
       }
     }
 
+    const needsApiFallback =
+      env.apiUrlConfigured &&
+      Boolean(env.apiUrl) &&
+      Boolean(slug) &&
+      (!resolved || loadError !== null);
+
+    if (needsApiFallback) {
+      console.warn('[LogArticle] Supabase incomplete, trying API fallback for slug');
+      try {
+        const r = await fetch(
+          `${env.apiUrl}/api/captains-log/${encodeURIComponent(slug)}`
+        );
+        const j = (await r.json().catch(() => null)) as { article?: CaptainsLogArticle; error?: string } | null;
+        if (r.ok && j?.article) {
+          resolved = j.article as CaptainsLogArticle;
+          loadError = null;
+        } else if (r.status === 404) {
+          resolved = null;
+          loadError = null;
+        } else if (!loadError) {
+          loadError = {
+            message: j?.error || `Could not load article (${r.status}).`,
+          };
+        }
+      } catch (fetchErr) {
+        const msg = fetchErr instanceof Error ? fetchErr.message : 'Network error loading article.';
+        loadError = loadError
+          ? { message: `${loadError.message} · ${msg}` }
+          : { message: msg };
+      }
+    }
+
     if (!isLive()) return;
 
     if (import.meta.env.DEV) {
@@ -180,7 +213,7 @@ export default function LogArticle({ onNavigate }: LogArticleProps) {
       setArticle(resolved);
     }
     setLoading(false);
-  }, [slug]);
+  }, [slug, env.apiUrl, env.apiUrlConfigured]);
 
   useEffect(() => {
     let live = true;

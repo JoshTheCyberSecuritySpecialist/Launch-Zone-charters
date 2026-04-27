@@ -934,6 +934,40 @@ app.get('/api/captains-log', async (req, res) => {
 });
 
 /**
+ * Single Captain's Log article by slug (service role — fallback when browser Supabase fails).
+ * GET /api/captains-log/:slug
+ */
+app.get('/api/captains-log/:slug', async (req, res) => {
+  try {
+    if (!supabaseConfigured) {
+      return res.status(503).json({ error: 'Server not configured' });
+    }
+    const slug = String(req.params.slug || '').trim();
+    if (!slug) {
+      return res.status(400).json({ error: 'Slug is required' });
+    }
+
+    const { data, error } = await supabase
+      .from('captains_log')
+      .select('id, title, slug, content, image_url, image_alt, category, created_at')
+      .eq('slug', slug)
+      .maybeSingle();
+
+    if (error) {
+      console.error('[api/captains-log/:slug]', error.message);
+      return res.status(500).json({ error: error.message || 'Could not load article' });
+    }
+    if (!data) {
+      return res.status(404).json({ error: 'Article not found' });
+    }
+    return res.json({ article: data });
+  } catch (err) {
+    console.error('[api/captains-log/:slug]', err?.stack || err);
+    return res.status(500).json({ error: err?.message || 'Could not load article' });
+  }
+});
+
+/**
  * Calendar-style availability across the active fleet (blocking bookings + blocked_dates per boat).
  * GET /api/availability?from=&to=&durationHours=
  * boatId is optional (legacy clients); ignored for calendar day availability.

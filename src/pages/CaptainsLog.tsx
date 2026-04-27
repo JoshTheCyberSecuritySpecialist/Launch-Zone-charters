@@ -15,6 +15,7 @@ import {
   type CaptainsLogArticle,
   type CaptainsLogCategory,
 } from '../lib/captainsLog';
+import { env } from '../config/env.js';
 
 const CAPTAINS_LOG_HERO_ALT =
   'Titusville Florida boat charter near Max Brewer Bridge with rocket launch over Indian River Lagoon';
@@ -92,17 +93,61 @@ export default function CaptainsLog({ onNavigate }: CaptainsLogProps) {
 
     logSupabaseError('CaptainsLog.loadArticles', error);
 
+    const rows = Array.isArray(data) ? data : [];
+
     if (!isLive()) return;
-    if (!error && data) {
-      setArticles(data as CaptainsLogArticle[]);
+
+    if (!error && rows.length > 0) {
+      setArticles(rows as CaptainsLogArticle[]);
       setLoadError(null);
-    } else if (error) {
+      setLoading(false);
+      return;
+    }
+
+    const tryApi =
+      env.apiUrlConfigured &&
+      Boolean(env.apiUrl) &&
+      (Boolean(error) || rows.length === 0);
+
+    if (tryApi) {
+      console.warn('[CaptainsLog] Supabase failed, trying API fallback');
+      try {
+        const r = await fetch(`${env.apiUrl}/api/captains-log`);
+        const j = (await r.json().catch(() => null)) as { articles?: CaptainsLogArticle[]; error?: string } | null;
+        if (!isLive()) return;
+        if (r.ok && Array.isArray(j?.articles)) {
+          console.warn('[CaptainsLog] API fallback articles count', j.articles.length);
+          setArticles(j.articles as CaptainsLogArticle[]);
+          setLoadError(null);
+          setLoading(false);
+          return;
+        }
+        setArticles([]);
+        setLoadError(
+          j?.error ||
+            (!r.ok ? `Could not load Captain’s Log (${r.status}).` : 'Could not load Captain’s Log articles.')
+        );
+      } catch (fetchErr) {
+        if (!isLive()) return;
+        const msg = fetchErr instanceof Error ? fetchErr.message : 'Network error loading Captain’s Log.';
+        setArticles([]);
+        setLoadError(error ? `${error.message} · ${msg}` : msg);
+      }
+      if (!isLive()) return;
+      setLoading(false);
+      return;
+    }
+
+    if (error) {
       setArticles([]);
       setLoadError(error.message || 'Could not load Captain’s Log articles.');
+    } else {
+      setArticles([]);
+      setLoadError(null);
     }
     if (!isLive()) return;
     setLoading(false);
-  }, []);
+  }, [env.apiUrl, env.apiUrlConfigured]);
 
   useEffect(() => {
     let live = true;

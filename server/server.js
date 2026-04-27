@@ -909,6 +909,31 @@ app.get('/api/boats', async (req, res) => {
 });
 
 /**
+ * Captain's Log hub — service role when browser anon fetch fails (e.g. CORS/network to Supabase).
+ * GET /api/captains-log
+ */
+app.get('/api/captains-log', async (req, res) => {
+  try {
+    if (!supabaseConfigured) {
+      return res.status(503).json({ error: 'Server not configured' });
+    }
+    const { data, error } = await supabase
+      .from('captains_log')
+      .select('id, title, slug, content, image_url, image_alt, category, created_at')
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('[api/captains-log]', error.message);
+      return res.status(500).json({ error: error.message || 'Could not load Captain’s Log' });
+    }
+    return res.json({ articles: Array.isArray(data) ? data : [] });
+  } catch (err) {
+    console.error('[api/captains-log]', err?.stack || err);
+    return res.status(500).json({ error: err?.message || 'Could not load Captain’s Log' });
+  }
+});
+
+/**
  * Calendar-style availability across the active fleet (blocking bookings + blocked_dates per boat).
  * GET /api/availability?from=&to=&durationHours=
  * boatId is optional (legacy clients); ignored for calendar day availability.

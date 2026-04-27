@@ -61,6 +61,8 @@ function excerptFromContent(content: string, maxLen = 160): string {
 export default function CaptainsLog({ onNavigate }: CaptainsLogProps) {
   const [articles, setArticles] = useState<CaptainsLogArticle[]>([]);
   const [loading, setLoading] = useState(true);
+  /** When set, the hub query failed (same empty UI was shown before — now differentiated). */
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterKey>('All');
 
   const canonicalUrl = useMemo(() => `${siteOrigin()}/captains-log`, []);
@@ -93,6 +95,10 @@ export default function CaptainsLog({ onNavigate }: CaptainsLogProps) {
     if (!isLive()) return;
     if (!error && data) {
       setArticles(data as CaptainsLogArticle[]);
+      setLoadError(null);
+    } else if (error) {
+      setArticles([]);
+      setLoadError(error.message || 'Could not load Captain’s Log articles.');
     }
     if (!isLive()) return;
     setLoading(false);
@@ -210,7 +216,14 @@ export default function CaptainsLog({ onNavigate }: CaptainsLogProps) {
           </div>
         ) : articles.length === 0 ? (
           <div className="lz-glass-card border border-white/10 p-12 text-center text-slate-300">
-            <p className="text-lg">Fresh stories are sailing in soon. Check back shortly.</p>
+            {loadError ? (
+              <>
+                <p className="text-lg text-amber-100/95">Stories couldn&apos;t load from the database.</p>
+                <p className="mt-3 max-w-xl mx-auto text-sm text-slate-400">{loadError}</p>
+              </>
+            ) : (
+              <p className="text-lg">Fresh stories are sailing in soon. Check back shortly.</p>
+            )}
             <button
               type="button"
               onClick={() => onNavigate('contact')}

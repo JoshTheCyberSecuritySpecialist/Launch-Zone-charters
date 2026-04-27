@@ -883,6 +883,32 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
 app.use(express.json());
 
 /**
+ * Active fleet for booking UI — service role reads boats (fallback when browser anon fails / empty).
+ * GET /api/boats
+ */
+app.get('/api/boats', async (req, res) => {
+  try {
+    if (!supabaseConfigured) {
+      return res.status(503).json({ error: 'Server not configured' });
+    }
+    const { data, error } = await supabase
+      .from('boats')
+      .select('*')
+      .eq('is_active', true)
+      .order('type', { ascending: false });
+
+    if (error) {
+      console.error('[api/boats]', error.message);
+      return res.status(500).json({ error: error.message || 'Could not load boats' });
+    }
+    return res.json({ boats: Array.isArray(data) ? data : [] });
+  } catch (err) {
+    console.error('[api/boats]', err?.stack || err);
+    return res.status(500).json({ error: err?.message || 'Could not load boats' });
+  }
+});
+
+/**
  * Calendar-style availability across the active fleet (blocking bookings + blocked_dates per boat).
  * GET /api/availability?from=&to=&durationHours=
  * boatId is optional (legacy clients); ignored for calendar day availability.

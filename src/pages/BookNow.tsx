@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useLocation, useSearchParams } from 'react-router-dom';
 import {
   Calendar,
@@ -107,6 +107,9 @@ export default function BookNow({ onNavigate }: BookNowProps) {
   const [bookingMode, setBookingMode] = useState<BookingMode>('rental');
   const [step, setStep] = useState(0);
   const [boats, setBoats] = useState<Boat[]>([]);
+  /** False after first Supabase/API attempt finishes (success or failure). */
+  const [boatsLoading, setBoatsLoading] = useState(true);
+  const [boatsError, setBoatsError] = useState<string | null>(null);
   const [selectedBoat, setSelectedBoat] = useState<Boat | null>(null);
   const [bookingData, setBookingData] = useState({
     rentalType: 'half_day' as 'hourly' | 'half_day' | 'full_day',
@@ -242,10 +245,6 @@ export default function BookNow({ onNavigate }: BookNowProps) {
   };
 
   useEffect(() => {
-    loadBoats();
-  }, []);
-
-  useEffect(() => {
     setCheckoutError(null);
   }, [step]);
 
@@ -360,18 +359,65 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     if (bookingMode !== 'rental') setRentalDurationPreset(null);
   }, [bookingMode]);
 
-  const loadBoats = async () => {
-    const { data, error } = await supabase
-      .from('boats')
-      .select('*')
-      .eq('is_active', true)
-      .order('type', { ascending: false });
+  const loadBoats = useCallback(async () => {
+    setBoatsLoading(true);
+    setBoatsError(null);
+    try {
+      const { data, error } = await supabase
+        .from('boats')
+        .select('*')
+        .eq('is_active', true)
+        .order('type', { ascending: false });
 
-    logSupabaseError('BookNow.loadBoats', error);
-    if (!error && data) {
-      setBoats(data as Boat[]);
+      const rows = Array.isArray(data) ? data : [];
+      logSupabaseError('BookNow.loadBoats', error);
+
+      if (!error && rows.length > 0) {
+        setBoats(rows as Boat[]);
+        return;
+      }
+
+      const tryApi =
+        env.apiUrlConfigured && Boolean(env.apiUrl) && (Boolean(error) || rows.length === 0);
+
+      if (tryApi) {
+        try {
+          const r = await fetch(`${env.apiUrl}/api/boats`);
+          const j = (await r.json().catch(() => null)) as { boats?: Boat[]; error?: string } | null;
+          if (r.ok && Array.isArray(j?.boats) && j.boats.length > 0) {
+            setBoats(j.boats as Boat[]);
+            return;
+          }
+          if (!r.ok) {
+            setBoatsError(j?.error || `Could not load boats (${r.status}).`);
+            setBoats([]);
+            return;
+          }
+          setBoats([]);
+          return;
+        } catch (fetchErr) {
+          const msg = fetchErr instanceof Error ? fetchErr.message : 'Network error loading boats.';
+          setBoatsError(error ? `${userFacingSupabaseMessage(error)} · API fallback: ${msg}` : msg);
+          setBoats([]);
+          return;
+        }
+      }
+
+      if (error) {
+        setBoatsError(userFacingSupabaseMessage(error));
+        setBoats([]);
+        return;
+      }
+
+      setBoats([]);
+    } finally {
+      setBoatsLoading(false);
     }
-  };
+  }, [env.apiUrl, env.apiUrlConfigured]);
+
+  useEffect(() => {
+    void loadBoats();
+  }, [loadBoats]);
 
   const BIO_SHARED_PER_PERSON = 75;
   const ROCKET_SHARED_PER_PERSON = 85;
@@ -1532,84 +1578,121 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                   </p>
                 ) : null}
                 <div className="mt-4 grid gap-4 md:grid-cols-2">
-                  {boats.map((boat) => {
-                    const isSelected = selectedBoat?.id === boat.id;
-                    const showDateUnavailable =
-                      bookingMode === 'charter' &&
-                      Boolean(bookingData.date) &&
-                      isSelected &&
-                      dateMarkedUnavailable;
-                    return (
-                      <article
-                        key={boat.id}
-                        role="button"
-                        tabIndex={0}
-                        onClick={() => setSelectedBoat(boat)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' || e.key === ' ') {
-                            e.preventDefault();
-                            setSelectedBoat(boat);
-                          }
-                        }}
-                        className={`group cursor-pointer overflow-hidden rounded-2xl border bg-slate-950/45 outline-none transition-[transform,box-shadow,border-color] duration-200 ease-out will-change-transform focus-visible:ring-2 focus-visible:ring-lz-accent/45 focus-visible:ring-offset-2 focus-visible:ring-offset-[#050a14] ${
-                          isSelected
-                            ? 'scale-[1.01] border-lz-accent/60 shadow-[0_0_45px_rgba(34,211,238,0.16)]'
-                            : 'border-cyan-500/15 hover:-translate-y-0.5 hover:border-cyan-400/30 hover:shadow-[0_0_36px_rgba(34,211,238,0.1)]'
-                        }`}
+                  {boatsLoading && boats.length === 0 ? (
+                    <div className="col-span-full flex min-h-[12rem] flex-col items-center justify-center gap-3 rounded-2xl border border-cyan-500/20 bg-slate-950/40 px-6 py-12">
+                      <Spinner size="md" tone="onDark" />
+                      <p className="text-sm text-slate-400">Loading vessels…</p>
+                    </div>
+                  ) : boatsError ? (
+                    <div className="col-span-full rounded-2xl border border-red-400/35 bg-red-950/30 px-5 py-5">
+                      <p className="font-semibold text-red-100">Could not load vessels</p>
+                      <p className="mt-2 text-sm text-red-100/85">{boatsError}</p>
+                      <button
+                        type="button"
+                        onClick={() => void loadBoats()}
+                        className="mt-4 rounded-lg border border-red-400/40 bg-red-950/50 px-4 py-2 text-sm font-semibold text-red-50 hover:bg-red-950/70"
                       >
-                        <div className="relative aspect-[16/10] w-full overflow-hidden bg-slate-900">
-                          <SafeImage
-                            src={boat.image_url || getBoatPlaceholderImage(boat.type)}
-                            fallbackSrc={getBoatPlaceholderImage(boat.type)}
-                            alt={`${boat.name}, booking card image`}
-                            className="h-full w-full object-cover object-center transition-transform duration-500 group-hover:scale-[1.02]"
-                          />
-                          <span
-                            className={`absolute right-3 top-3 rounded-full px-3 py-1 text-xs font-bold ${
-                              boat.type === 'premium' ? 'bg-amber-600 text-white' : 'bg-slate-800 text-white'
-                            }`}
+                        Try again
+                      </button>
+                    </div>
+                  ) : boats.length === 0 ? (
+                    <div className="col-span-full rounded-2xl border border-amber-400/30 bg-amber-950/20 px-5 py-8 text-center">
+                      <p className="text-base font-semibold text-amber-50">No vessels available to book online</p>
+                      <p className="mt-2 text-sm text-slate-300">
+                        Our fleet list may be updating, or bookings are paused. Call{' '}
+                        {env.contactPhone ? (
+                          <a
+                            href={`tel:${env.contactPhone.replace(/\D/g, '')}`}
+                            className="font-semibold text-cyan-300 underline decoration-cyan-500/40"
                           >
-                            {boat.type === 'premium' ? 'Premium' : 'Standard'}
-                          </span>
-                          {isSelected && (
-                            <span className="absolute left-3 top-3 rounded-full border border-lz-accent/50 bg-black/50 px-3 py-1 text-xs font-semibold text-cyan-200 backdrop-blur-sm">
-                              Selected
+                            {env.contactPhone}
+                          </a>
+                        ) : (
+                          <span className="font-semibold text-slate-200">803-542-1761</span>
+                        )}{' '}
+                        and we&apos;ll help you book.
+                      </p>
+                    </div>
+                  ) : (
+                    boats.map((boat) => {
+                      const isSelected = selectedBoat?.id === boat.id;
+                      const showDateUnavailable =
+                        bookingMode === 'charter' &&
+                        Boolean(bookingData.date) &&
+                        isSelected &&
+                        dateMarkedUnavailable;
+                      return (
+                        <article
+                          key={boat.id}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => setSelectedBoat(boat)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              setSelectedBoat(boat);
+                            }
+                          }}
+                          className={`group cursor-pointer overflow-hidden rounded-2xl border bg-slate-950/45 outline-none transition-[transform,box-shadow,border-color] duration-200 ease-out will-change-transform focus-visible:ring-2 focus-visible:ring-lz-accent/45 focus-visible:ring-offset-2 focus-visible:ring-offset-[#050a14] ${
+                            isSelected
+                              ? 'scale-[1.01] border-lz-accent/60 shadow-[0_0_45px_rgba(34,211,238,0.16)]'
+                              : 'border-cyan-500/15 hover:-translate-y-0.5 hover:border-cyan-400/30 hover:shadow-[0_0_36px_rgba(34,211,238,0.1)]'
+                          }`}
+                        >
+                          <div className="relative aspect-[16/10] w-full overflow-hidden bg-slate-900">
+                            <SafeImage
+                              src={boat.image_url || getBoatPlaceholderImage(boat.type)}
+                              fallbackSrc={getBoatPlaceholderImage(boat.type)}
+                              alt={`${boat.name}, booking card image`}
+                              className="h-full w-full object-cover object-center transition-transform duration-500 group-hover:scale-[1.02]"
+                            />
+                            <span
+                              className={`absolute right-3 top-3 rounded-full px-3 py-1 text-xs font-bold ${
+                                boat.type === 'premium' ? 'bg-amber-600 text-white' : 'bg-slate-800 text-white'
+                              }`}
+                            >
+                              {boat.type === 'premium' ? 'Premium' : 'Standard'}
                             </span>
-                          )}
-                          {showDateUnavailable && (
-                            <span className="absolute bottom-3 left-3 right-3 rounded-lg border border-amber-400/40 bg-black/70 px-3 py-2 text-center text-xs font-semibold text-amber-100 backdrop-blur-sm">
-                              Unavailable for selected date
-                            </span>
-                          )}
-                        </div>
-                        <div className="border-t border-white/[0.06] p-5 md:p-6">
-                          <h3 className="text-2xl font-bold text-white">{boat.name}</h3>
-                          <p className="mt-3 leading-relaxed text-slate-400">
-                            {boat.description ??
-                              `${boat.type === 'premium' ? 'Premium' : 'Standard'} vessel, ideal for groups cruising the Space Coast waterways.`}
-                          </p>
-                          <div className="mt-4 flex items-center gap-2 text-sm text-slate-300">
-                            <Users className="h-4 w-4 shrink-0" aria-hidden />
-                            <span>Up to {boat.capacity} passengers</span>
+                            {isSelected && (
+                              <span className="absolute left-3 top-3 rounded-full border border-lz-accent/50 bg-black/50 px-3 py-1 text-xs font-semibold text-cyan-200 backdrop-blur-sm">
+                                Selected
+                              </span>
+                            )}
+                            {showDateUnavailable && (
+                              <span className="absolute bottom-3 left-3 right-3 rounded-lg border border-amber-400/40 bg-black/70 px-3 py-2 text-center text-xs font-semibold text-amber-100 backdrop-blur-sm">
+                                Unavailable for selected date
+                              </span>
+                            )}
                           </div>
-                          <div className="mt-4 space-y-1.5 text-sm">
-                            <div className="flex justify-between text-slate-400">
-                              <span>Hourly</span>
-                              <span className="font-semibold text-slate-200">${boat.hourly_rate}/hr</span>
+                          <div className="border-t border-white/[0.06] p-5 md:p-6">
+                            <h3 className="text-2xl font-bold text-white">{boat.name}</h3>
+                            <p className="mt-3 leading-relaxed text-slate-400">
+                              {boat.description ??
+                                `${boat.type === 'premium' ? 'Premium' : 'Standard'} vessel, ideal for groups cruising the Space Coast waterways.`}
+                            </p>
+                            <div className="mt-4 flex items-center gap-2 text-sm text-slate-300">
+                              <Users className="h-4 w-4 shrink-0" aria-hidden />
+                              <span>Up to {boat.capacity} passengers</span>
                             </div>
-                            <div className="flex justify-between text-slate-400">
-                              <span>Half day</span>
-                              <span className="font-semibold text-slate-200">${boat.half_day_rate}</span>
-                            </div>
-                            <div className="flex justify-between text-slate-400">
-                              <span>Full day</span>
-                              <span className="font-semibold text-slate-200">${boat.full_day_rate}</span>
+                            <div className="mt-4 space-y-1.5 text-sm">
+                              <div className="flex justify-between text-slate-400">
+                                <span>Hourly</span>
+                                <span className="font-semibold text-slate-200">${boat.hourly_rate}/hr</span>
+                              </div>
+                              <div className="flex justify-between text-slate-400">
+                                <span>Half day</span>
+                                <span className="font-semibold text-slate-200">${boat.half_day_rate}</span>
+                              </div>
+                              <div className="flex justify-between text-slate-400">
+                                <span>Full day</span>
+                                <span className="font-semibold text-slate-200">${boat.full_day_rate}</span>
+                              </div>
                             </div>
                           </div>
-                        </div>
-                      </article>
-                    );
-                  })}
+                        </article>
+                      );
+                    })
+                  )}
                 </div>
 
                 {bookingMode === 'charter' ? (

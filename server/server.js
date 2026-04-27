@@ -505,11 +505,40 @@ function runPythonScript() {
   });
 }
 
-const corsOrigins = [
+/**
+ * Browsers send an exact Origin (e.g. https://www.example.com). Many sites set
+ * FRONTEND_URL to the apex but users land on www (or vice versa). Mirror www ↔ apex
+ * so production API calls are not silently blocked by CORS.
+ */
+function expandCorsOriginVariants(origins) {
+  const out = new Set();
+  for (const raw of origins) {
+    const o = String(raw || '').trim();
+    if (!o) continue;
+    out.add(o.replace(/\/$/, ''));
+    try {
+      const u = new URL(o);
+      const host = u.hostname.toLowerCase();
+      if (host === 'localhost' || host.startsWith('127.')) continue;
+      const protocol = u.protocol;
+      if (host.startsWith('www.')) {
+        out.add(`${protocol}//${host.slice(4)}`);
+      } else {
+        out.add(`${protocol}//www.${host}`);
+      }
+    } catch {
+      /* ignore malformed */
+    }
+  }
+  return [...out];
+}
+
+const corsOrigins = expandCorsOriginVariants([
   'http://localhost:5173',
   process.env.FRONTEND_URL,
+  process.env.APP_PUBLIC_URL,
   ...(process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : []),
-]
+])
   .map((x) => String(x || '').trim())
   .filter(Boolean);
 

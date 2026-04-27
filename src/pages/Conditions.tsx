@@ -532,7 +532,8 @@ export default function Conditions({ onNavigate }: ConditionsProps) {
   const titusvilleOk = titusvilleData && titusvilleData.success === true ? titusvilleData : null;
   const ok = daytonaOk || titusvilleOk;
   const data = daytonaData || titusvilleData;
-  const loading = loadingByLocation.daytona && loadingByLocation.titusville;
+  /** Wait for both locations so we never render "all unavailable" while the other request is still in flight. */
+  const loading = loadingByLocation.daytona || loadingByLocation.titusville;
   const fetchError = fetchErrorByLocation.daytona && fetchErrorByLocation.titusville;
   const failed = Boolean(
     !loading &&

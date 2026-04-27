@@ -968,6 +968,60 @@ app.get('/api/captains-log/:slug', async (req, res) => {
 });
 
 /**
+ * Browser admin check fallback — uses service role + JWT (never trust email query param alone).
+ * GET /api/admin/verify — Authorization: Bearer &lt;access_token&gt;
+ * Response: { isAdmin: boolean }
+ */
+app.get('/api/admin/verify', async (req, res) => {
+  try {
+    if (!supabaseConfigured) {
+      return res.status(503).json({ error: 'Server not configured' });
+    }
+    const authHeader = req.headers.authorization || '';
+    const m = authHeader.match(/^Bearer\s+(.+)$/i);
+    if (!m) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    const jwt = m[1].trim();
+    const { data: udat, error: authErr } = await authGetUserWithRetry(jwt);
+    if (authErr || !udat?.user) {
+      if (isSupabaseNetworkError(authErr)) {
+        return res.status(503).json({
+          error:
+            authErr?.message ||
+            'Cannot reach Supabase Auth. Check server connectivity and SUPABASE_* env on the API host.',
+        });
+      }
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    const uid = udat.user.id;
+    const { data: admById, error: errById } = await supabase
+      .from('admins')
+      .select('id')
+      .eq('id', uid)
+      .maybeSingle();
+    if (!errById && admById) {
+      return res.json({ isAdmin: true });
+    }
+    const email = (udat.user.email || '').trim();
+    if (email) {
+      const { data: admByEmail, error: errByEmail } = await supabase
+        .from('admins')
+        .select('id')
+        .ilike('email', email)
+        .maybeSingle();
+      if (!errByEmail && admByEmail) {
+        return res.json({ isAdmin: true });
+      }
+    }
+    return res.json({ isAdmin: false });
+  } catch (err) {
+    console.error('[api/admin/verify]', err?.stack || err);
+    return res.status(500).json({ error: err?.message || 'Verification failed' });
+  }
+});
+
+/**
  * Calendar-style availability across the active fleet (blocking bookings + blocked_dates per boat).
  * GET /api/availability?from=&to=&durationHours=
  * boatId is optional (legacy clients); ignored for calendar day availability.

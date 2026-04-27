@@ -3,6 +3,34 @@ import { Lock, Mail } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import Logo from '../components/ui/Logo';
 import { beginAsyncInteraction, wrapNavigateClick } from '../lib/clickPerf';
+import type { AuthError } from '@supabase/supabase-js';
+
+function supabaseHostForLog(): string {
+  const u = import.meta.env.VITE_SUPABASE_URL;
+  if (typeof u !== 'string' || !u.trim()) return '(VITE_SUPABASE_URL unset)';
+  try {
+    return new URL(u.trim()).host;
+  } catch {
+    return '(invalid VITE_SUPABASE_URL)';
+  }
+}
+
+function formatAdminAuthError(err: AuthError | Error, cause?: unknown): string {
+  const message = err?.message || 'Failed to sign in';
+  const lower = message.toLowerCase();
+  const isNetworkish =
+    lower.includes('failed to fetch') ||
+    lower.includes('network') ||
+    lower.includes('load failed') ||
+    (err as AuthError & { name?: string })?.name === 'AuthRetryableFetchError';
+  const causeStr = cause instanceof Error ? cause.message : '';
+  let out = causeStr && !message.includes(causeStr) ? `${message} (${causeStr})` : message;
+  if (isNetworkish) {
+    out +=
+      ' The browser could not reach Supabase Auth. On Vercel, set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to your project, then redeploy. Check the network tab for calls to your Supabase host.';
+  }
+  return out;
+}
 
 interface AdminLoginProps {
   onNavigate: (page: string) => void;
@@ -30,7 +58,13 @@ export default function AdminLogin({ onNavigate }: AdminLoginProps) {
       });
 
       if (signError) {
-        setError(signError.message);
+        console.error('[AdminLogin] signInWithPassword', {
+          message: signError.message,
+          name: (signError as AuthError).name,
+          status: (signError as AuthError).status,
+          supabaseHost: supabaseHostForLog(),
+        });
+        setError(formatAdminAuthError(signError as AuthError));
         outcome = 'auth_error';
         return;
       }
@@ -38,7 +72,13 @@ export default function AdminLogin({ onNavigate }: AdminLoginProps) {
       outcome = 'success';
       window.location.assign('/admin');
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Failed to sign in');
+      const e = err instanceof Error ? err : new Error(String(err));
+      const cause = e && 'cause' in e && e.cause != null ? e.cause : undefined;
+      console.error('[AdminLogin] signInWithPassword threw', e, {
+        supabaseHost: supabaseHostForLog(),
+        cause,
+      });
+      setError(formatAdminAuthError(e, cause));
       outcome = 'error';
     } finally {
       setLoading(false);

@@ -2,6 +2,7 @@ import { createContext, useCallback, useEffect, useState, type ReactNode } from 
 import type { Session, User } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 import { logSupabaseError } from '../lib/supabaseErrors';
+import { env } from '../config/env.js';
 
 export interface AuthContextType {
   user: User | null;
@@ -27,47 +28,85 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const loading = initializing || verifying;
 
-  const checkAdminStatus = useCallback(async (u: User | null): Promise<boolean> => {
-    if (!u) {
-      setIsAdmin(false);
-      authDebug({ phase: 'admin', result: 'no_user' });
-      return false;
-    }
+  const checkAdminStatus = useCallback(
+    async (u: User | null, accessToken: string | null): Promise<boolean> => {
+      if (!u) {
+        setIsAdmin(false);
+        authDebug({ phase: 'admin', result: 'no_user' });
+        return false;
+      }
 
-    const { data: byId, error: errId } = await supabase
-      .from('admins')
-      .select('id')
-      .eq('id', u.id)
-      .maybeSingle();
-
-    logSupabaseError('AuthContext.checkAdminStatus.byId', errId);
-
-    if (byId && !errId) {
-      setIsAdmin(true);
-      authDebug({ phase: 'admin', match: 'id', userId: u.id, email: u.email });
-      return true;
-    }
-
-    const email = u.email?.trim();
-    if (email) {
-      const { data: byEmail, error: errEmail } = await supabase
+      const { data: byId, error: errId } = await supabase
         .from('admins')
         .select('id')
-        .ilike('email', email)
+        .eq('id', u.id)
         .maybeSingle();
 
-      logSupabaseError('AuthContext.checkAdminStatus.byEmail', errEmail);
+      logSupabaseError('AuthContext.checkAdminStatus.byId', errId);
 
-      const ok = !!byEmail && !errEmail;
-      setIsAdmin(ok);
-      authDebug({ phase: 'admin', match: ok ? 'email' : 'none', userId: u.id, email: u.email, ok });
-      return ok;
-    }
+      if (byId && !errId) {
+        setIsAdmin(true);
+        authDebug({ phase: 'admin', match: 'id', userId: u.id, email: u.email });
+        return true;
+      }
 
-    setIsAdmin(false);
-    authDebug({ phase: 'admin', match: 'none', userId: u.id, email: u.email });
-    return false;
-  }, []);
+      const email = u.email?.trim();
+      let errEmail: typeof errId = null;
+      let byEmail: { id: string } | null = null;
+      if (email) {
+        const byEmailRes = await supabase
+          .from('admins')
+          .select('id')
+          .ilike('email', email)
+          .maybeSingle();
+        byEmail = byEmailRes.data as { id: string } | null;
+        errEmail = byEmailRes.error;
+        logSupabaseError('AuthContext.checkAdminStatus.byEmail', errEmail);
+
+        if (byEmail && !errEmail) {
+          setIsAdmin(true);
+          authDebug({ phase: 'admin', match: 'email', userId: u.id, email: u.email });
+          return true;
+        }
+      }
+
+      const queryErrored = Boolean(errId || errEmail);
+      const tryApi =
+        queryErrored &&
+        Boolean(accessToken) &&
+        env.apiUrlConfigured &&
+        Boolean(env.apiUrl);
+
+      if (tryApi) {
+        console.warn('[Auth] admins Supabase queries failed; trying GET /api/admin/verify');
+        try {
+          const r = await fetch(`${env.apiUrl}/api/admin/verify`, {
+            headers: { Authorization: `Bearer ${accessToken}` },
+          });
+          const j = (await r.json().catch(() => null)) as { isAdmin?: boolean; error?: string } | null;
+          if (r.ok && typeof j?.isAdmin === 'boolean') {
+            setIsAdmin(j.isAdmin);
+            authDebug({
+              phase: 'admin',
+              match: j.isAdmin ? 'api-verify' : 'api-verify-none',
+              userId: u.id,
+              email: u.email,
+              ok: j.isAdmin,
+            });
+            return j.isAdmin;
+          }
+          console.error('[Auth] /api/admin/verify failed', r.status, j?.error);
+        } catch (e) {
+          console.error('[Auth] /api/admin/verify fetch error', e);
+        }
+      }
+
+      setIsAdmin(false);
+      authDebug({ phase: 'admin', match: 'none', userId: u.id, email: u.email });
+      return false;
+    },
+    [env.apiUrl, env.apiUrlConfigured]
+  );
 
   const applySession = useCallback(
     async (session: Session | null) => {
@@ -75,7 +114,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         const u = session?.user ?? null;
         setUser(u);
-        await checkAdminStatus(u);
+        await checkAdminStatus(u, session?.access_token ?? null);
       } finally {
         setVerifying(false);
       }

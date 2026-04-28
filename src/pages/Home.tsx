@@ -296,7 +296,7 @@ export default function Home({ onNavigate }: HomeProps) {
               <div className="text-sm font-medium text-slate-300 md:text-base">Days a Week</div>
             </div>
             <div className="lz-card-glass p-6">
-              <div className="mb-2 text-4xl font-bold text-lz-cta">10+</div>
+              <div className="mb-2 text-4xl font-bold text-lz-cta">Limited</div>
               <div className="text-sm font-medium text-slate-300 md:text-base">Boats Available</div>
             </div>
             <div className="lz-card-glass p-6">

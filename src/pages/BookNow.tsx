@@ -62,6 +62,8 @@ interface ApiTimeSlot {
 const FORECAST_LAT = 28.6122;
 const FORECAST_LON = -80.8076;
 const CALENDAR_INTEL_CACHE_MS = 15 * 60 * 1000;
+const BUSINESS_TIMEZONE = 'America/New_York';
+const SAME_DAY_MIN_NOTICE_HOURS = 2;
 
 /** Rental step-1 preset: Morning/Afternoon = half_day 4hr; Full day = full_day 8hr. */
 type RentalDurationPreset = 'morning' | 'afternoon' | 'fullday';
@@ -83,6 +85,15 @@ function pickRentalSlotByPreset(slots: ApiTimeSlot[], preset: RentalDurationPres
   }
   const afternoon = slots.find((s) => hourFromSlotIso(s.start) >= 12);
   return afternoon ?? slots[slots.length - 1];
+}
+
+function ymdInTimezone(timeZone: string): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
 }
 
 interface Boat {
@@ -160,6 +171,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
   const [timeSlots, setTimeSlots] = useState<ApiTimeSlot[]>([]);
   const [availTimesLoading, setAvailTimesLoading] = useState(false);
   const [timesManualFallback, setTimesManualFallback] = useState(false);
+  const [sameDayMinLeadHours, setSameDayMinLeadHours] = useState(SAME_DAY_MIN_NOTICE_HOURS);
   const [calendarMonth, setCalendarMonth] = useState(() => {
     const n = new Date();
     return new Date(n.getFullYear(), n.getMonth(), 1);
@@ -589,8 +601,12 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     });
     fetch(`${env.apiUrl}/api/availability/times?${q.toString()}`, { signal: ac.signal })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error('times'))))
-      .then((data: { slots?: ApiTimeSlot[] }) => {
+      .then((data: { slots?: ApiTimeSlot[]; minLeadHours?: number }) => {
         const slots = data.slots || [];
+        const minLeadHours = Number(data.minLeadHours);
+        if (Number.isFinite(minLeadHours) && minLeadHours >= 0) {
+          setSameDayMinLeadHours(minLeadHours);
+        }
         setTimeSlots(slots);
         if (slots.length > 0) {
           setBookingData((prev) => {
@@ -646,6 +662,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     rentalDurationPreset,
   ]);
 
+  const todayYmdLocal = ymdInTimezone(BUSINESS_TIMEZONE);
   const apiAvailEnabled = env.apiUrlConfigured && Boolean(env.apiUrl);
   const dateMarkedUnavailable =
     availabilityByDate.size > 0 &&
@@ -658,6 +675,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     timeSlots.length === 0 &&
     Boolean(bookingData.date) &&
     Boolean(selectedBoat);
+  const isBookingToday = Boolean(bookingData.date) && bookingData.date === todayYmdLocal;
   const rentalContinueNeedsPreset = bookingMode === 'rental' && rentalDurationPreset === null;
   const rentalContinueWaitingTimes =
     bookingMode === 'rental' &&
@@ -1161,11 +1179,6 @@ export default function BookNow({ onNavigate }: BookNowProps) {
       checkoutPerf.end(checkoutOutcome);
     }
   };
-
-  const todayYmdLocal = (() => {
-    const t = new Date();
-    return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`;
-  })();
 
   const bestLaunchDayToBook = useMemo(
     () => pickBestLaunchDayIso(conditionsByDate, availabilityByDate, todayYmdLocal),
@@ -1829,6 +1842,11 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                             })}
                           </div>
                         )}
+                        {isBookingToday && (
+                          <p className="mt-2 text-xs text-slate-400">
+                            Same-day bookings require at least {sameDayMinLeadHours} hours notice.
+                          </p>
+                        )}
                         {apiAvailEnabled && !availTimesLoading && timesManualFallback && (
                           <>
                             <p className="mb-2 text-xs text-amber-200/90">
@@ -1851,7 +1869,9 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                           timeSlots.length === 0 &&
                           bookingData.date && (
                             <p className="text-sm text-amber-200">
-                              No open start times that day for this duration. Try another date.
+                              {isBookingToday
+                                ? 'No more booking times are available today. Please choose another date.'
+                                : 'No open start times that day for this duration. Try another date.'}
                             </p>
                           )}
                       </div>
@@ -2063,6 +2083,11 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                             })}
                           </div>
                         )}
+                        {isBookingToday && (
+                          <p className="mt-2 text-xs text-slate-400">
+                            Same-day bookings require at least {sameDayMinLeadHours} hours notice.
+                          </p>
+                        )}
                         {apiAvailEnabled && !availTimesLoading && timesManualFallback && (
                           <>
                             <p className="mb-2 text-xs text-amber-200/90">
@@ -2085,7 +2110,9 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                           timeSlots.length === 0 &&
                           bookingData.date && (
                             <p className="text-sm text-amber-200">
-                              No open start times that day for this duration. Try another date.
+                              {isBookingToday
+                                ? 'No more booking times are available today. Please choose another date.'
+                                : 'No open start times that day for this duration. Try another date.'}
                             </p>
                           )}
                       </div>

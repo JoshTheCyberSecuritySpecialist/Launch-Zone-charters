@@ -173,6 +173,8 @@ function computeExpectedBookingTotals({
 const BOOKING_HOLD_TTL_MS = 10 * 60 * 1000;
 const SLOT_TAKEN_USER_MESSAGE =
   'This time slot was just booked. Please select another time.';
+const SLOT_TOO_SOON_USER_MESSAGE =
+  'This time is no longer available. Please choose a later time.';
 
 const BLOCKING_BOOKING_STATUSES = new Set([
   'pending',
@@ -197,6 +199,15 @@ function isOverlapConstraintError(err) {
   if (String(err.code || '') === '23P01') return true;
   const msg = String(err.message || '');
   return /exclusion|overlap|bookings_boat_no_time_overlap/i.test(msg);
+}
+
+function assertBookingLeadTime(startIso) {
+  if (!availabilityService.isStartTimeAllowed(startIso)) {
+    const err = new Error(SLOT_TOO_SOON_USER_MESSAGE);
+    err.statusCode = 409;
+    err.code = 'slot_too_soon';
+    throw err;
+  }
 }
 
 async function cleanupExpiredBookingHolds() {
@@ -797,10 +808,13 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
   };
 
   try {
+    assertBookingLeadTime(booking.start_time);
     await assertSlotAvailable(booking.boat_id, booking.start_time, booking.end_time, holdRow?.id || null);
   } catch (slotErr) {
     await refundStripeCheckoutSession(session);
-    const err = new Error(slotErr.message || SLOT_TAKEN_USER_MESSAGE);
+    const fallbackMessage =
+      slotErr?.code === 'slot_too_soon' ? SLOT_TOO_SOON_USER_MESSAGE : SLOT_TAKEN_USER_MESSAGE;
+    const err = new Error(slotErr.message || fallbackMessage);
     err.statusCode = slotErr.statusCode || 409;
     throw err;
   }
@@ -1093,6 +1107,7 @@ app.get('/api/availability', async (req, res) => {
       fleetCalendar: true,
       totalBoats,
       timezone: availabilityService.BUSINESS_TZ,
+      minLeadHours: availabilityService.MIN_LEAD_HOURS,
       durationHours,
       openHour,
       closeHour,
@@ -1145,6 +1160,7 @@ app.get('/api/availability/times', async (req, res) => {
       boatId,
       date,
       timezone: availabilityService.BUSINESS_TZ,
+      minLeadHours: availabilityService.MIN_LEAD_HOURS,
       durationHours,
       slots,
     });
@@ -1211,6 +1227,11 @@ app.post('/api/create-checkout-session', async (req, res) => {
 
     if (!Number.isFinite(startTime.getTime()) || !Number.isFinite(endTime.getTime())) {
       return res.status(400).json({ error: 'Invalid start or end time.' });
+    }
+    try {
+      assertBookingLeadTime(startTime.toISOString());
+    } catch (leadErr) {
+      return res.status(leadErr.statusCode || 409).json({ error: leadErr.message || SLOT_TOO_SOON_USER_MESSAGE });
     }
     if (endTime.getTime() <= startTime.getTime()) {
       return res.status(400).json({ error: 'End time must be after start time.' });

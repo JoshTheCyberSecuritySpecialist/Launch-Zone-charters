@@ -10,6 +10,7 @@ const DEFAULT_OPEN_HOUR = Number(process.env.AVAILABILITY_OPEN_HOUR || 7);
 const DEFAULT_CLOSE_HOUR = Number(process.env.AVAILABILITY_CLOSE_HOUR || 20);
 const DEFAULT_STEP_MINUTES = Number(process.env.AVAILABILITY_SLOT_MINUTES || 30);
 const DEFAULT_RANGE_DAYS = Number(process.env.AVAILABILITY_CALENDAR_DAYS || 60);
+const MIN_LEAD_HOURS = Math.max(0, Number(process.env.BOOKING_MIN_LEAD_HOURS || 2));
 
 const BLOCKING_BOOKING_STATUSES = new Set([
   'pending',
@@ -140,13 +141,25 @@ function enumerateStartsForDay(dayStart, openHour, closeHour, durationHours, ste
   return slots;
 }
 
+function minBookableStartMs(nowDt = DateTime.now().setZone(BUSINESS_TZ)) {
+  return nowDt.startOf('minute').plus({ hours: MIN_LEAD_HOURS }).toUTC().toMillis();
+}
+
+function isStartTimeAllowed(startIso, nowDt = DateTime.now().setZone(BUSINESS_TZ)) {
+  const start = DateTime.fromISO(String(startIso || ''), { zone: 'utc' });
+  if (!start.isValid) return false;
+  return start.toMillis() >= minBookableStartMs(nowDt);
+}
+
 function dayHasAnyFreeSlot(day, intervals, durationHours, openHour, closeHour, stepMinutes) {
   const duration = Number(durationHours) || 4;
   const durMs = duration * 60 * 60 * 1000;
   const dayStart = day.startOf('day');
   const starts = enumerateStartsForDay(dayStart, openHour, closeHour, duration, stepMinutes);
+  const minStartMs = minBookableStartMs();
   for (const startDt of starts) {
     const startMs = startDt.toUTC().toMillis();
+    if (startMs < minStartMs) continue;
     const endMs = startMs + durMs;
     if (!slotConflicts(startMs, endMs, intervals)) {
       return true;
@@ -168,10 +181,12 @@ async function listSlotsForDay(boatId, dateStr, durationHours, openHour, closeHo
 
   const intervals = await loadBlockingIntervals(boatId, rangeStartIso, rangeEndIso);
   const starts = enumerateStartsForDay(dayStart, openHour, closeHour, duration, stepMinutes);
+  const minStartMs = minBookableStartMs();
   const out = [];
 
   for (const startDt of starts) {
     const startMs = startDt.toUTC().toMillis();
+    if (startMs < minStartMs) continue;
     const endMs = startMs + durMs;
     if (!slotConflicts(startMs, endMs, intervals)) {
       const endDt = DateTime.fromMillis(endMs, { zone: 'utc' });
@@ -256,7 +271,9 @@ module.exports = {
   DEFAULT_CLOSE_HOUR,
   DEFAULT_STEP_MINUTES,
   DEFAULT_RANGE_DAYS,
+  MIN_LEAD_HOURS,
   defaultFromTo,
+  isStartTimeAllowed,
   listDatesAvailability,
   listSlotsForDay,
   parseDateOnlyInZone,

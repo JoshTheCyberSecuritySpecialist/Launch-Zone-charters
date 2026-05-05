@@ -2,10 +2,9 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { CheckCircle, ExternalLink, Hash } from 'lucide-react';
 import BookingFlowStepIndicator from '../components/BookingFlowStepIndicator';
+import { BUOY_INSURANCE_CHECKOUT_URL } from '../config/buoyInsurance';
 import { env } from '../config/env.js';
 import { wrapNavigateClick, wrapRouterNavigate, wrapSyncClick } from '../lib/clickPerf';
-
-const BUOY_URL = 'https://www.buoy.rent/';
 
 interface BookingSuccessProps {
   onNavigate: (page: string) => void;
@@ -15,11 +14,14 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const sessionId = (searchParams.get('session_id') || '').trim();
+  const bookingIdParam = (searchParams.get('bookingId') || '').trim();
   const [bookingId, setBookingId] = useState('');
+  const [insuranceStatus, setInsuranceStatus] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const finalizedRef = useRef(false);
   const emailSentRef = useRef(false);
+  const redirectingRef = useRef(false);
 
   useEffect(() => {
     if (!env.apiUrlConfigured || !env.apiUrl) {
@@ -28,52 +30,84 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
       return;
     }
     const api = env.apiUrl;
-    if (!sessionId) {
-      setError('Missing checkout session reference.');
+
+    if (sessionId) {
+      if (redirectingRef.current) return;
+      if (finalizedRef.current) return;
+      finalizedRef.current = true;
+
+      void (async () => {
+        try {
+          const res = await fetch(`${api}/api/finalize-checkout-session`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sessionId }),
+          });
+          const payload = (await res.json().catch(() => ({}))) as {
+            bookingId?: string;
+            email?: string;
+            error?: string;
+          };
+          if (!res.ok || !payload.bookingId) {
+            setError(payload.error || 'Could not finalize booking after payment.');
+            setLoading(false);
+            return;
+          }
+
+          if (!emailSentRef.current) {
+            emailSentRef.current = true;
+            void fetch(`${api}/api/send-booking-confirmation`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ bookingId: payload.bookingId, email: payload.email || '' }),
+            }).catch((err) => {
+              if (import.meta.env.DEV) {
+                console.warn('[send-booking-confirmation]', err);
+              }
+            });
+          }
+
+          redirectingRef.current = true;
+          navigate(`/insurance-required?bookingId=${encodeURIComponent(payload.bookingId)}`, {
+            replace: true,
+          });
+        } catch (err) {
+          setError(err instanceof Error ? err.message : 'Could not finalize booking.');
+          setLoading(false);
+        }
+      })();
+      return;
+    }
+
+    if (!bookingIdParam) {
+      setError('Missing booking reference.');
       setLoading(false);
       return;
     }
-    if (finalizedRef.current) return;
-    finalizedRef.current = true;
+
+    setBookingId(bookingIdParam);
 
     void (async () => {
       try {
-        const res = await fetch(`${api}/api/finalize-checkout-session`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sessionId }),
-        });
+        const res = await fetch(
+          `${api}/api/public/booking-insurance-status?bookingId=${encodeURIComponent(bookingIdParam)}`
+        );
         const payload = (await res.json().catch(() => ({}))) as {
-          bookingId?: string;
-          email?: string;
+          insurance_status?: string;
           error?: string;
         };
-        if (!res.ok || !payload.bookingId) {
-          setError(payload.error || 'Could not finalize booking after payment.');
-          setLoading(false);
-          return;
+        if (!res.ok) {
+          setInsuranceStatus(null);
+        } else if (payload.insurance_status) {
+          setInsuranceStatus(payload.insurance_status);
         }
-        setBookingId(payload.bookingId);
-        setLoading(false);
-
-        if (!emailSentRef.current) {
-          emailSentRef.current = true;
-          void fetch(`${api}/api/send-booking-confirmation`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ bookingId: payload.bookingId, email: payload.email || '' }),
-          }).catch((err) => {
-            if (import.meta.env.DEV) {
-              console.warn('[send-booking-confirmation]', err);
-            }
-          });
-        }
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Could not finalize booking.');
+      } catch {
+        setInsuranceStatus(null);
+      } finally {
         setLoading(false);
       }
     })();
-  }, [sessionId]);
+  }, [sessionId, bookingIdParam, navigate]);
 
   const goVerifyUpload = useMemo(
     () =>
@@ -85,6 +119,8 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
       ),
     [navigate, bookingId]
   );
+
+  const showInsuranceNudge = insuranceStatus !== null && insuranceStatus !== 'verified';
 
   const shell = (inner: ReactNode) => (
     <div className="relative min-h-screen px-4 py-16">
@@ -99,10 +135,12 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
     return shell(
       <div className="lz-card-glass rounded-[var(--lz-radius-card)] p-8 text-center text-slate-200">
         <h1 className="font-display text-xl font-bold uppercase tracking-[0.12em] text-white md:text-2xl">
-          Finalizing your booking…
+          {sessionId ? 'Redirecting you to the next step…' : 'Loading your confirmation…'}
         </h1>
         <p className="mt-3 text-sm text-slate-400">
-          We are confirming your payment and saving your reservation.
+          {sessionId
+            ? 'Payment confirmed — next up: rental insurance.'
+            : 'Almost there.'}
         </p>
       </div>
     );
@@ -112,7 +150,7 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
     return shell(
       <div className="lz-card-glass rounded-[var(--lz-radius-card)] p-8 text-center">
         <h1 className="font-display text-xl font-bold uppercase tracking-[0.12em] text-white md:text-2xl">
-          Could not finalize booking
+          Could not load confirmation
         </h1>
         <p className="mt-3 text-sm text-slate-400">
           {error || 'Please contact support with your payment receipt so we can complete this manually.'}
@@ -130,6 +168,17 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
 
   return shell(
     <div className="lz-card-glass rounded-[var(--lz-radius-card)] p-8 text-slate-200 md:p-10">
+      {showInsuranceNudge ? (
+        <div className="mb-6 rounded-xl border border-amber-400/40 bg-amber-500/10 px-4 py-3 text-center text-amber-50">
+          <p className="text-sm font-semibold md:text-base">
+            <span aria-hidden>⚠️</span> Insurance Required Before Departure
+          </p>
+          <p className="mt-1 text-xs text-amber-100/90 md:text-sm">
+            You&apos;re booked — finish Buoy coverage before your trip. Scan the QR or open the link below.
+          </p>
+        </div>
+      ) : null}
+
       <div className="text-center">
         <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full border border-emerald-400/40 bg-emerald-500/15 shadow-[0_0_24px_rgba(52,211,153,0.2)]">
           <CheckCircle className="h-8 w-8 text-emerald-300" aria-hidden />
@@ -152,6 +201,38 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
         </div>
       </div>
 
+      {showInsuranceNudge ? (
+        <div className="mt-8 rounded-[var(--lz-radius)] border border-white/15 bg-white p-4 md:p-5">
+          <div className="flex justify-center">
+            <img
+              src="/images/insurance/buoy-insurance-qr.png"
+              alt="Scan to complete Buoy rental insurance"
+              width={1500}
+              height={1500}
+              className="h-auto w-full max-w-[min(100%,240px)] min-w-[250px] object-contain"
+              decoding="async"
+            />
+          </div>
+          <p className="mt-3 text-center text-xs font-medium text-slate-700">
+            <span aria-hidden>📱</span> Scan with your phone camera
+          </p>
+          <div className="mt-4 flex justify-center">
+            <a
+              href={BUOY_INSURANCE_CHECKOUT_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={wrapSyncClick('booking_success_external_buoy_banner', () => {
+                /* href */
+              })}
+              className="lz-btn-primary inline-flex items-center justify-center gap-2 text-sm !normal-case !tracking-wide"
+            >
+              Complete Insurance
+              <ExternalLink className="h-4 w-4 shrink-0" aria-hidden />
+            </a>
+          </div>
+        </div>
+      ) : null}
+
       <div className="mt-8 border-t border-white/10 pt-8 text-left">
         <h2 className="text-sm font-bold uppercase tracking-widest text-cyan-200/90">
           Step 4 — Complete your booking
@@ -161,7 +242,7 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
         </p>
         <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
           <a
-            href={BUOY_URL}
+            href={BUOY_INSURANCE_CHECKOUT_URL}
             target="_blank"
             rel="noopener noreferrer"
             onClick={wrapSyncClick('booking_success_external_buoy', () => {

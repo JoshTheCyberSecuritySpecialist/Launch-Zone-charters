@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { useLocation, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import {
   Calendar,
   Users,
@@ -115,6 +115,11 @@ type CharterVariant = 'private' | 'shared';
 export default function BookNow({ onNavigate }: BookNowProps) {
   const location = useLocation();
   const [searchParams] = useSearchParams();
+  const bookingIdFromUrl = (searchParams.get('bookingId') || '').trim();
+  const buoyInsurancePagePath =
+    bookingIdFromUrl.length > 0
+      ? `/insurance-required?bookingId=${encodeURIComponent(bookingIdFromUrl)}`
+      : '/insurance-required';
   const [bookingMode, setBookingMode] = useState<BookingMode>('rental');
   const [step, setStep] = useState(0);
   const [boats, setBoats] = useState<Boat[]>([]);
@@ -2546,18 +2551,16 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                         You must provide valid damage protection before your rental. We recommend using Buoy, a trusted
                         boat rental insurance provider.
                       </p>
-                      <a
-                        href="https://www.buoy.rent/"
-                        target="_blank"
-                        rel="noopener noreferrer"
+                      <Link
+                        to={buoyInsurancePagePath}
                         className="inline-flex items-center text-sm font-semibold text-[var(--lz-cta)] underline decoration-[var(--lz-cta)]/50 underline-offset-2 hover:text-orange-300"
                       >
                         👉 Get Boat Rental Insurance with Buoy
-                      </a>
+                      </Link>
                       <p className="text-xs text-slate-400">
                         After purchasing, upload a screenshot or paste your Buoy confirmation link below.
                       </p>
-                      <p className="text-xs font-semibold text-amber-200">Required before booking is confirmed.</p>
+                      <p className="text-xs font-semibold text-amber-200">Required before departure.</p>
                       {docUploadError && (
                         <p className="text-sm text-red-400" role="alert">
                           {docUploadError}
@@ -2565,7 +2568,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                       )}
                       {rentalInsuranceMissing && (
                         <p className="text-sm text-amber-300" role="status" aria-live="polite">
-                          ⚠️ Buoy insurance is required before your booking can be confirmed.
+                          ⚠️ Buoy insurance is required before your boat can be released.
                         </p>
                       )}
                       <label className="flex items-start gap-3 rounded-[var(--lz-radius)] border border-white/10 bg-slate-900/40 px-3 py-2 text-sm text-slate-200">

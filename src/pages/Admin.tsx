@@ -108,7 +108,10 @@ function previewMessageBody(text: string, maxLen = 120): string {
 }
 
 /** Joined list row from `select('*, customers(*), boats(*)')`, asserted until DB types are codegen'd */
-type DocStatus = 'pending' | 'verified' | 'rejected';
+type DocStatus = 'pending' | 'submitted' | 'verified' | 'rejected';
+
+/** Buoy proof workflow — does not use `submitted`. */
+type BuoyDocStatus = 'pending' | 'verified' | 'rejected';
 
 type AdminBookingRow = {
   id: string;
@@ -142,13 +145,22 @@ function buoyVerificationRow(
   return Array.isArray(raw) ? raw[0] ?? null : raw;
 }
 
-/** Maps DB values `pending` | `verified` | `rejected` to operator-facing copy; “submitted” is implied by pending + proof URL. */
+/** Operator-facing line under insurance controls */
 function insuranceStatusCaption(status: string | null | undefined, hasProof: boolean): string {
   const s = String(status || 'pending');
   if (s === 'verified') return 'Booking confirmed';
   if (s === 'rejected') return 'Please re-upload valid insurance';
+  if (s === 'submitted') return 'Proof received — review to verify';
   if (hasProof) return 'Under review';
   return 'Insurance required';
+}
+
+function insuranceComplianceEmojiLabel(status: string | null | undefined): { emoji: string; text: string } {
+  const s = String(status || 'pending');
+  if (s === 'verified') return { emoji: '🟢', text: 'Verified' };
+  if (s === 'rejected') return { emoji: '🔴', text: 'Rejected' };
+  if (s === 'submitted') return { emoji: '🟠', text: 'Submitted' };
+  return { emoji: '🟡', text: 'Pending' };
 }
 
 export default function Admin({ onNavigate }: AdminProps) {
@@ -1050,7 +1062,11 @@ export default function Admin({ onNavigate }: AdminProps) {
     if (!error) void loadBookings();
   };
 
-  const handleBuoyStatusUpdate = async (bookingId: string, value: DocStatus) => {
+  const handleVerifyInsurance = async (id: string) => {
+    await handleDocStatusUpdate(id, 'insurance_status', 'verified');
+  };
+
+  const handleBuoyStatusUpdate = async (bookingId: string, value: BuoyDocStatus) => {
     const stamp = new Date().toISOString();
     const { error } = await supabase
       .from('user_verifications')
@@ -1251,6 +1267,8 @@ export default function Admin({ onNavigate }: AdminProps) {
         return 'border border-green-200 bg-green-50 text-green-800';
       case 'rejected':
         return 'border border-red-200 bg-red-50 text-red-800';
+      case 'submitted':
+        return 'border border-amber-200 bg-amber-50 text-amber-900';
       default:
         return 'border border-slate-200 bg-slate-50 text-slate-700';
     }
@@ -1931,7 +1949,7 @@ export default function Admin({ onNavigate }: AdminProps) {
                     License
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-semibold uppercase text-slate-600">
-                    Insurance
+                    Insurance status
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-semibold uppercase text-slate-600">
                     Buoy
@@ -1968,6 +1986,7 @@ export default function Admin({ onNavigate }: AdminProps) {
                     booking.insurance_url?.trim() || booking.customers?.insurance_proof_url || '';
                   const insuranceProofHref =
                     insuranceDocHref || buoy?.buoy_proof_url?.trim() || '';
+                  const insuranceEmojiStatus = insuranceComplianceEmojiLabel(booking.insurance_status);
                   return (
                   <tr
                     key={booking.id}
@@ -2027,6 +2046,9 @@ export default function Admin({ onNavigate }: AdminProps) {
                     </td>
                     <td className="px-6 py-4">
                       <div className="flex flex-col gap-1">
+                        <span className="text-xs font-semibold text-slate-800">
+                          <span aria-hidden>{insuranceEmojiStatus.emoji}</span> {insuranceEmojiStatus.text}
+                        </span>
                         <span
                           className={`inline-flex w-fit rounded-full px-2 py-0.5 text-xs font-semibold ${docStatusBadgeClass(
                             String(booking.insurance_status || 'pending')
@@ -2047,9 +2069,17 @@ export default function Admin({ onNavigate }: AdminProps) {
                           aria-label="Insurance verification status"
                         >
                           <option value="pending">Pending</option>
+                          <option value="submitted">Submitted</option>
                           <option value="verified">Verified</option>
                           <option value="rejected">Rejected</option>
                         </select>
+                        <button
+                          type="button"
+                          onClick={() => void handleVerifyInsurance(booking.id)}
+                          className="w-fit rounded bg-emerald-600 px-2 py-1 text-xs font-semibold text-white hover:bg-emerald-700"
+                        >
+                          Verify Insurance
+                        </button>
                         <p className="max-w-[14rem] text-[10px] leading-snug text-slate-600">
                           {insuranceStatusCaption(booking.insurance_status, Boolean(insuranceProofHref))}
                         </p>

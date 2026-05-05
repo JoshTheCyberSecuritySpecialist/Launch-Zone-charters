@@ -12,6 +12,7 @@ const supabase = require('./supabaseClient');
 const contactSubmission = require('./services/contactSubmission');
 const verificationReminder = require('./services/verificationReminder');
 const verificationSms = require('./services/verificationSms');
+const insuranceTripReminders = require('./services/insuranceTripReminders');
 const { getBioConditions } = require('./services/bioluminescenceService');
 const { getRocketConditions } = require('./services/rocketService');
 const { getLaunchSchedulePreview } = require('./services/rocketScheduleService');
@@ -1407,7 +1408,7 @@ app.post('/api/create-checkout-session', async (req, res) => {
           quantity: 1,
         },
       ],
-      success_url: `${domain}/success?session_id={CHECKOUT_SESSION_ID}`,
+      success_url: `${domain}/insurance-required?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${domain}/booking`,
     });
 
@@ -1625,6 +1626,98 @@ app.post('/api/send-booking-confirmation', async (req, res) => {
   } catch (err) {
     console.error('[send-booking-confirmation]', err);
     return res.status(500).json({ error: 'Failed to send email' });
+  }
+});
+
+function isBookingUuidParam(id) {
+  const s = String(id || '').trim();
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
+}
+
+/** Public read: insurance compliance flag for post-checkout confirmation UI (UUID is the capability token). */
+app.get('/api/public/booking-insurance-status', async (req, res) => {
+  try {
+    if (!supabaseConfigured) return res.status(503).json({ error: 'Server not configured' });
+    const bookingId = String(req.query.bookingId || '').trim();
+    if (!isBookingUuidParam(bookingId)) return res.status(400).json({ error: 'Invalid booking id' });
+    const { data, error } = await supabase
+      .from('bookings')
+      .select('insurance_status')
+      .eq('id', bookingId)
+      .maybeSingle();
+    if (error) {
+      console.error('[booking-insurance-status]', error.message);
+      return res.status(500).json({ error: 'Could not load booking' });
+    }
+    if (!data) return res.status(404).json({ error: 'Not found' });
+    return res.json({ insurance_status: data.insurance_status });
+  } catch (err) {
+    console.error('[booking-insurance-status]', err);
+    return res.status(500).json({ error: 'Failed' });
+  }
+});
+
+/**
+ * After Buoy proof upload on /verify — marks rental insurance as submitted for admin review (email must match customer).
+ */
+app.post('/api/booking-mark-insurance-submitted', async (req, res) => {
+  try {
+    if (!supabaseConfigured) return res.status(503).json({ error: 'Server not configured' });
+    const bookingId = String(req.body?.bookingId || '').trim();
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    if (!isBookingUuidParam(bookingId) || !email) {
+      return res.status(400).json({ error: 'bookingId and email are required' });
+    }
+    const { data: booking, error: bErr } = await supabase
+      .from('bookings')
+      .select('id, customer_id, insurance_status')
+      .eq('id', bookingId)
+      .maybeSingle();
+    if (bErr || !booking) return res.status(404).json({ error: 'Booking not found' });
+    const { data: customer, error: cErr } = await supabase
+      .from('customers')
+      .select('email')
+      .eq('id', booking.customer_id)
+      .maybeSingle();
+    if (cErr || !customer?.email) return res.status(400).json({ error: 'Could not verify customer' });
+    if (customer.email.trim().toLowerCase() !== email) {
+      return res.status(403).json({ error: 'Email does not match this booking' });
+    }
+    if (booking.insurance_status === 'verified') {
+      return res.json({ ok: true, insurance_status: 'verified' });
+    }
+    const { error: uErr } = await supabase
+      .from('bookings')
+      .update({ insurance_status: 'submitted' })
+      .eq('id', bookingId);
+    if (uErr) {
+      console.error('[booking-mark-insurance-submitted]', uErr.message);
+      return res.status(500).json({ error: 'Could not update booking' });
+    }
+    return res.json({ ok: true, insurance_status: 'submitted' });
+  } catch (err) {
+    console.error('[booking-mark-insurance-submitted]', err);
+    return res.status(500).json({ error: 'Failed' });
+  }
+});
+
+/** Secured cron hook + optional internal scheduler; same secret pattern as other automation. */
+app.get('/api/cron/trip-insurance-reminders', async (req, res) => {
+  try {
+    const secret = String(process.env.CRON_SECRET || '').trim();
+    const auth = String(req.headers.authorization || '');
+    const bearer = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
+    const tok = bearer || String(req.query.secret || '').trim();
+    if (!secret || tok !== secret) return res.status(401).json({ error: 'Unauthorized' });
+    const result = await insuranceTripReminders.runTripInsuranceReminders({
+      supabase,
+      resend,
+      resendFrom,
+    });
+    return res.json(result);
+  } catch (err) {
+    console.error('[cron/trip-insurance-reminders]', err);
+    return res.status(500).json({ error: err.message || 'Failed' });
   }
 });
 
@@ -2296,3 +2389,14 @@ if (process.env.DISABLE_CONDITION_MONITOR === '1' || process.env.DISABLE_CONDITI
   );
   console.log('⏰ Condition monitor cron: hourly (America/New_York)');
 }
+
+cron.schedule(
+  '*/15 * * * *',
+  () => {
+    insuranceTripReminders.runTripInsuranceReminders({ supabase, resend, resendFrom }).catch((e) => {
+      console.error('[cron] trip-insurance-reminders:', e?.message || e);
+    });
+  },
+  { timezone: 'America/New_York' }
+);
+console.log('⏰ Trip insurance reminders: every 15 minutes (America/New_York)');

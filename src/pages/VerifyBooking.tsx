@@ -5,13 +5,13 @@ import { ExternalLink, Shield, Upload, Loader2 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { logSupabaseError } from '../lib/supabaseErrors';
 import { beginAsyncInteraction, wrapNavigateClick, wrapSyncClick } from '../lib/clickPerf';
+import { env } from '../config/env.js';
+import { BUOY_INSURANCE_CHECKOUT_URL } from '../config/buoyInsurance';
 import type { UserVerificationsRow } from '../lib/supabase';
 
 interface VerifyBookingProps {
   onNavigate: (page: string) => void;
 }
-
-const BUOY_URL = 'https://www.buoy.rent/';
 const FILE_ACCEPT = 'image/jpeg,image/png,image/webp,image/gif,application/pdf';
 const ALLOWED_MIME = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'application/pdf'];
 
@@ -195,6 +195,14 @@ export default function VerifyBooking({ onNavigate }: VerifyBookingProps) {
       await refreshVerification(bookingId);
       setUploadMessage('Proof uploaded. Our team will review it shortly.');
       outcome = 'success';
+
+      if (env.apiUrlConfigured && env.apiUrl && customerEmailNorm) {
+        void fetch(`${env.apiUrl}/api/booking-mark-insurance-submitted`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ bookingId, email: customerEmailNorm }),
+        }).catch(() => {});
+      }
     } catch (err) {
       console.error('[VerifyBooking.upload]', err);
       setUploadMessage('Something went wrong. Try again.');
@@ -285,7 +293,7 @@ export default function VerifyBooking({ onNavigate }: VerifyBookingProps) {
                       to obtain coverage for short-term boat rentals.
                     </p>
                     <a
-                      href={BUOY_URL}
+                      href={BUOY_INSURANCE_CHECKOUT_URL}
                       target="_blank"
                       rel="noopener noreferrer"
                       onClick={wrapSyncClick('verify_booking_external_buoy', () => {
@@ -297,7 +305,7 @@ export default function VerifyBooking({ onNavigate }: VerifyBookingProps) {
                       <ExternalLink className="h-4 w-4" aria-hidden />
                     </a>
                     <p className="mt-3 text-xs text-slate-500">
-                      Opens buoy.rent in a new tab. We do not collect Buoy credentials here, only your
+                      Opens Buoy insurance checkout in a new tab. We do not collect Buoy credentials here, only your
                       proof of coverage.
                     </p>
                   </section>

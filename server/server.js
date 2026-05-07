@@ -4,7 +4,7 @@
  */
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
-const { spawn } = require('child_process');
+const { spawn, execFile } = require('child_process');
 const express = require('express');
 const cors = require('cors');
 const { Resend } = require('resend');
@@ -415,6 +415,66 @@ function buildPythonSpawn(projectRoot) {
 }
 
 /**
+ * Execute a command without a shell and capture output.
+ * @param {string} command
+ * @param {string[]} args
+ * @param {{cwd?: string, env?: NodeJS.ProcessEnv}} [opts]
+ * @returns {Promise<{ stdout: string, stderr: string }>}
+ */
+function runFile(command, args, opts = {}) {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, { cwd: opts.cwd, env: opts.env }, (error, stdout, stderr) => {
+      if (error) {
+        reject(
+          Object.assign(error, {
+            stdout: String(stdout || ''),
+            stderr: String(stderr || ''),
+          })
+        );
+        return;
+      }
+      resolve({
+        stdout: String(stdout || ''),
+        stderr: String(stderr || ''),
+      });
+    });
+  });
+}
+
+/**
+ * Ensure Python deps for Captain's Log exist (auto-install from requirements.txt when missing).
+ * Prevents runtime failures like ModuleNotFoundError: requests on cloud hosts.
+ * @param {string} command
+ * @param {string} projectRoot
+ */
+async function ensurePythonPipelineDeps(command, projectRoot) {
+  const skipCheck = ['1', 'true', 'yes', 'on'].includes(
+    String(process.env.SKIP_PYTHON_DEP_CHECK || '')
+      .trim()
+      .toLowerCase()
+  );
+  if (skipCheck) return;
+
+  const importCheck = 'import requests, bs4, supabase, dotenv';
+  try {
+    await runFile(command, ['-c', importCheck], { cwd: projectRoot, env: process.env });
+    return;
+  } catch (checkErr) {
+    console.warn(
+      '[generate-content] Python dependency precheck failed, attempting pip install:',
+      checkErr?.stderr || checkErr?.message || checkErr
+    );
+  }
+
+  const requirementsPath = path.join(projectRoot, 'ai-content', 'requirements.txt');
+  await runFile(command, ['-m', 'pip', 'install', '-r', requirementsPath], {
+    cwd: projectRoot,
+    env: process.env,
+  });
+  await runFile(command, ['-c', importCheck], { cwd: projectRoot, env: process.env });
+}
+
+/**
  * Captain's Log pipeline (upload.py). Same spawn + stdout parse as before; returns parsed JSON line.
  * @returns {Promise<object>}
  */
@@ -428,92 +488,108 @@ function runPythonScript() {
     console.log('[generate-content] child cwd:', cwd);
     console.log('[generate-content] server process.cwd():', process.cwd());
 
-    const py = spawn(command, args, {
-      cwd,
-      env: {
-        ...process.env,
-        // Quieter RSS logs for API runs unless .env sets PIPELINE_VERBOSE=1
-        PIPELINE_VERBOSE: process.env.PIPELINE_VERBOSE || '0',
-        // Default off: full SEO hub prompts + HTML article fetch (see config.py PIPELINE_FAST).
-        // Set PIPELINE_FAST=1 for quicker RSS-only runs when iterating locally.
-        PIPELINE_FAST:
-          process.env.PIPELINE_FAST !== undefined && process.env.PIPELINE_FAST !== ''
-            ? process.env.PIPELINE_FAST
-            : '0',
-      },
-    });
+    const childEnv = {
+      ...process.env,
+      // Quieter RSS logs for API runs unless .env sets PIPELINE_VERBOSE=1
+      PIPELINE_VERBOSE: process.env.PIPELINE_VERBOSE || '0',
+      // Default off: full SEO hub prompts + HTML article fetch (see config.py PIPELINE_FAST).
+      // Set PIPELINE_FAST=1 for quicker RSS-only runs when iterating locally.
+      PIPELINE_FAST:
+        process.env.PIPELINE_FAST !== undefined && process.env.PIPELINE_FAST !== ''
+          ? process.env.PIPELINE_FAST
+          : '0',
+    };
 
-    let stdout = '';
-    let stderr = '';
-
-    py.stdout.on('data', (data) => {
-      const text = data.toString();
-      stdout += text;
-      console.log('[PYTHON STDOUT]', text);
-    });
-
-    py.stderr.on('data', (data) => {
-      const text = data.toString();
-      stderr += text;
-      console.error('[PYTHON STDERR]', text);
-    });
-
-    py.on('error', (err) => {
-      isGenerating = false;
-      console.error('[PYTHON SPAWN ERROR]', err);
-      reject(err);
-    });
-
-    py.on('close', (code, signal) => {
-      isGenerating = false;
-      console.log('[PYTHON EXIT CODE]', code, signal || '');
-
-      const trimmed = (stdout || '').trim();
-      if (!trimmed) {
-        console.error('No output from Python');
+    void (async () => {
+      try {
+        await ensurePythonPipelineDeps(command, projectRoot);
+      } catch (depErr) {
+        isGenerating = false;
         reject(
-          Object.assign(new Error('No output from Python'), {
-            details: stderr || undefined,
+          Object.assign(new Error('Python dependencies missing for Captain\'s Log pipeline'), {
+            details: depErr?.stderr || depErr?.message || String(depErr),
           })
         );
         return;
       }
 
-      let jsonStr = trimmed;
-      const lines = trimmed.split(/\n/).filter((line) => line.trim().length > 0);
-      for (let i = lines.length - 1; i >= 0; i--) {
-        const line = lines[i].trim();
-        if (line.startsWith('{') && line.endsWith('}')) {
-          jsonStr = line;
-          break;
-        }
-      }
+      const py = spawn(command, args, {
+        cwd,
+        env: childEnv,
+      });
 
-      try {
-        const parsed = JSON.parse(jsonStr);
-        console.log('[PYTHON PARSED]', parsed);
+      let stdout = '';
+      let stderr = '';
 
-        if (parsed.status === 'error') {
+      py.stdout.on('data', (data) => {
+        const text = data.toString();
+        stdout += text;
+        console.log('[PYTHON STDOUT]', text);
+      });
+
+      py.stderr.on('data', (data) => {
+        const text = data.toString();
+        stderr += text;
+        console.error('[PYTHON STDERR]', text);
+      });
+
+      py.on('error', (err) => {
+        isGenerating = false;
+        console.error('[PYTHON SPAWN ERROR]', err);
+        reject(err);
+      });
+
+      py.on('close', (code, signal) => {
+        isGenerating = false;
+        console.log('[PYTHON EXIT CODE]', code, signal || '');
+
+        const trimmed = (stdout || '').trim();
+        if (!trimmed) {
+          console.error('No output from Python');
           reject(
-            Object.assign(new Error(parsed.error || 'Python reported error'), {
+            Object.assign(new Error('No output from Python'), {
               details: stderr || undefined,
-              output: parsed,
             })
           );
           return;
         }
 
-        resolve(parsed);
-      } catch (e) {
-        console.error('Invalid JSON from Python:', trimmed);
-        reject(
-          Object.assign(
-            new Error(e instanceof Error ? e.message : String(e)),
-            { details: trimmed.slice(0, 2000) }
-          )
-        );
-      }
-    });
+        let jsonStr = trimmed;
+        const lines = trimmed.split(/\n/).filter((line) => line.trim().length > 0);
+        for (let i = lines.length - 1; i >= 0; i--) {
+          const line = lines[i].trim();
+          if (line.startsWith('{') && line.endsWith('}')) {
+            jsonStr = line;
+            break;
+          }
+        }
+
+        try {
+          const parsed = JSON.parse(jsonStr);
+          console.log('[PYTHON PARSED]', parsed);
+
+          if (parsed.status === 'error') {
+            reject(
+              Object.assign(new Error(parsed.error || 'Python reported error'), {
+                details: stderr || undefined,
+                output: parsed,
+              })
+            );
+            return;
+          }
+
+          resolve(parsed);
+        } catch (e) {
+          console.error('Invalid JSON from Python:', trimmed);
+          reject(
+            Object.assign(
+              new Error(e instanceof Error ? e.message : String(e)),
+              { details: trimmed.slice(0, 2000) }
+            )
+          );
+        }
+      });
+    })();
   });
 }
 

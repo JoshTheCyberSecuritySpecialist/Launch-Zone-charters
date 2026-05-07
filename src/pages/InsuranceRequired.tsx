@@ -4,7 +4,12 @@ import { ExternalLink, Lock, Sparkles, Zap } from 'lucide-react';
 import BookingFlowStepIndicator from '../components/BookingFlowStepIndicator';
 import { env } from '../config/env.js';
 import { wrapRouterNavigate, wrapSyncClick } from '../lib/clickPerf';
-import { BUOY_INSURANCE_CHECKOUT_URL } from '../config/buoyInsurance';
+import {
+  PONTOON_INSURANCE,
+  getInsuranceConfigForBooking,
+  type BuoyInsuranceConfig,
+} from '../config/buoyInsurance';
+import { supabase } from '../lib/supabase';
 
 interface InsuranceRequiredProps {
   onNavigate: (page: string) => void;
@@ -15,10 +20,13 @@ export default function InsuranceRequired({ onNavigate }: InsuranceRequiredProps
   const [searchParams] = useSearchParams();
   const sessionId = (searchParams.get('session_id') || '').trim();
   const bookingIdParam = (searchParams.get('bookingId') || '').trim();
+  const boatIdParam = (searchParams.get('boatId') || '').trim();
+  const needsBoatSelection = searchParams.get('needBoatSelection') === '1';
 
   const [bookingId, setBookingId] = useState(bookingIdParam);
   const [customerEmail, setCustomerEmail] = useState('');
   const [error, setError] = useState('');
+  const [insuranceConfig, setInsuranceConfig] = useState<BuoyInsuranceConfig>(PONTOON_INSURANCE);
   /** True only while finalizing a paid Stripe session (session_id in URL). */
   const [loading, setLoading] = useState(() => Boolean(sessionId));
   const finalizedRef = useRef(false);
@@ -83,6 +91,53 @@ export default function InsuranceRequired({ onNavigate }: InsuranceRequiredProps
       }
     })();
   }, [sessionId, bookingIdParam]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function resolveInsuranceConfig() {
+      if (bookingId) {
+        const { data } = await supabase
+          .from('bookings')
+          .select('boat_id, boats(id, name, type)')
+          .eq('id', bookingId)
+          .maybeSingle();
+        if (cancelled) return;
+        if (data) {
+          setInsuranceConfig(
+            getInsuranceConfigForBooking({
+              boat_id: data.boat_id,
+              boats: data.boats,
+            })
+          );
+          return;
+        }
+      }
+
+      if (boatIdParam) {
+        const { data } = await supabase
+          .from('boats')
+          .select('id, name, type')
+          .eq('id', boatIdParam)
+          .maybeSingle();
+        if (cancelled) return;
+        setInsuranceConfig(
+          getInsuranceConfigForBooking({
+            boat_id: boatIdParam,
+            boats: data ?? null,
+          })
+        );
+        return;
+      }
+
+      setInsuranceConfig(PONTOON_INSURANCE);
+    }
+
+    void resolveInsuranceConfig();
+    return () => {
+      cancelled = true;
+    };
+  }, [bookingId, boatIdParam]);
 
   const goConfirmation = wrapRouterNavigate(
     'insurance_required',
@@ -182,16 +237,22 @@ export default function InsuranceRequired({ onNavigate }: InsuranceRequiredProps
             </>
           )}
         </p>
+        <p className="mt-2 text-sm font-semibold text-cyan-100/95">{insuranceConfig.label}</p>
         <p className="mt-2 text-sm font-medium text-amber-200/95">
           Most renters complete this in under 2 minutes.
         </p>
+        {!bookingId && !boatIdParam && needsBoatSelection ? (
+          <p className="mt-3 text-sm font-medium text-amber-200/95">
+            Select your boat first so we can show the matching insurance registration.
+          </p>
+        ) : null}
       </div>
 
       <div className="mx-auto mt-8 max-w-sm rounded-2xl border border-slate-200/90 bg-white p-5 shadow-[0_12px_40px_rgba(0,0,0,0.25)] md:p-7">
         <div className="flex justify-center">
           <img
-            src="/images/insurance/buoy-insurance-qr.png"
-            alt="Scan to complete Buoy rental insurance"
+            src={insuranceConfig.qrImage}
+            alt={`Scan to complete Buoy rental insurance for ${insuranceConfig.label}`}
             width={1500}
             height={1500}
             className="h-auto w-full max-w-[min(100%,280px)] min-w-[250px] object-contain"
@@ -205,7 +266,7 @@ export default function InsuranceRequired({ onNavigate }: InsuranceRequiredProps
 
       <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:justify-center">
         <a
-          href={BUOY_INSURANCE_CHECKOUT_URL}
+          href={insuranceConfig.checkoutUrl}
           target="_blank"
           rel="noopener noreferrer"
           onClick={wrapSyncClick('insurance_required_external_buoy', () => {

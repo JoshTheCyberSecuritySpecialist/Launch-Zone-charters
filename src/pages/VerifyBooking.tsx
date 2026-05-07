@@ -6,7 +6,11 @@ import { supabase } from '../lib/supabase';
 import { logSupabaseError } from '../lib/supabaseErrors';
 import { beginAsyncInteraction, wrapNavigateClick, wrapSyncClick } from '../lib/clickPerf';
 import { env } from '../config/env.js';
-import { BUOY_INSURANCE_CHECKOUT_URL } from '../config/buoyInsurance';
+import {
+  PONTOON_INSURANCE,
+  getInsuranceConfigForBooking,
+  type BuoyInsuranceConfig,
+} from '../config/buoyInsurance';
 import type { UserVerificationsRow } from '../lib/supabase';
 
 interface VerifyBookingProps {
@@ -32,6 +36,7 @@ export default function VerifyBooking({ onNavigate }: VerifyBookingProps) {
   const [uploading, setUploading] = useState(false);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
   const [uv, setUv] = useState<UserVerificationsRow | null>(null);
+  const [insuranceConfig, setInsuranceConfig] = useState<BuoyInsuranceConfig>(PONTOON_INSURANCE);
 
   const refreshVerification = useCallback(async (bid: string) => {
     const { data, error } = await supabase
@@ -63,7 +68,7 @@ export default function VerifyBooking({ onNavigate }: VerifyBookingProps) {
 
       const { data: booking, error: bErr } = await supabase
         .from('bookings')
-        .select('id, status, customer_id')
+        .select('id, status, customer_id, boat_id, boats(id, name, type)')
         .eq('id', bookingId)
         .maybeSingle();
 
@@ -84,6 +89,12 @@ export default function VerifyBooking({ onNavigate }: VerifyBookingProps) {
       }
 
       setBookingStatus(booking.status);
+      setInsuranceConfig(
+        getInsuranceConfigForBooking({
+          boat_id: booking.boat_id,
+          boats: booking.boats,
+        })
+      );
 
       const { data: customer, error: cErr } = await supabase
         .from('customers')
@@ -292,8 +303,9 @@ export default function VerifyBooking({ onNavigate }: VerifyBookingProps) {
                       Launch Zone Charters requires rental liability coverage. Buoy is a common way
                       to obtain coverage for short-term boat rentals.
                     </p>
+                    <p className="mt-2 text-xs font-semibold text-cyan-100/95">{insuranceConfig.label}</p>
                     <a
-                      href={BUOY_INSURANCE_CHECKOUT_URL}
+                      href={insuranceConfig.checkoutUrl}
                       target="_blank"
                       rel="noopener noreferrer"
                       onClick={wrapSyncClick('verify_booking_external_buoy', () => {

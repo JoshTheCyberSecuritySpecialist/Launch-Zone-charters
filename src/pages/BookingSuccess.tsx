@@ -2,9 +2,14 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { CheckCircle, ExternalLink, Hash } from 'lucide-react';
 import BookingFlowStepIndicator from '../components/BookingFlowStepIndicator';
-import { BUOY_INSURANCE_CHECKOUT_URL } from '../config/buoyInsurance';
+import {
+  PONTOON_INSURANCE,
+  getInsuranceConfigForBooking,
+  type BuoyInsuranceConfig,
+} from '../config/buoyInsurance';
 import { env } from '../config/env.js';
 import { wrapNavigateClick, wrapRouterNavigate, wrapSyncClick } from '../lib/clickPerf';
+import { supabase } from '../lib/supabase';
 
 interface BookingSuccessProps {
   onNavigate: (page: string) => void;
@@ -17,6 +22,7 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
   const bookingIdParam = (searchParams.get('bookingId') || '').trim();
   const [bookingId, setBookingId] = useState('');
   const [insuranceStatus, setInsuranceStatus] = useState<string | null>(null);
+  const [insuranceConfig, setInsuranceConfig] = useState<BuoyInsuranceConfig>(PONTOON_INSURANCE);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const finalizedRef = useRef(false);
@@ -109,6 +115,37 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
     })();
   }, [sessionId, bookingIdParam, navigate]);
 
+  useEffect(() => {
+    let cancelled = false;
+    if (!bookingIdParam) return;
+
+    async function resolveInsuranceConfig() {
+      const { data } = await supabase
+        .from('bookings')
+        .select('boat_id, boats(id, name, type)')
+        .eq('id', bookingIdParam)
+        .maybeSingle();
+
+      if (cancelled) return;
+      if (!data) {
+        setInsuranceConfig(PONTOON_INSURANCE);
+        return;
+      }
+
+      setInsuranceConfig(
+        getInsuranceConfigForBooking({
+          boat_id: data.boat_id,
+          boats: data.boats,
+        })
+      );
+    }
+
+    void resolveInsuranceConfig();
+    return () => {
+      cancelled = true;
+    };
+  }, [bookingIdParam]);
+
   const goVerifyUpload = useMemo(
     () =>
       wrapRouterNavigate(
@@ -176,6 +213,9 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
           <p className="mt-1 text-xs text-amber-100/90 md:text-sm">
             You&apos;re booked — finish Buoy coverage before your trip. Scan the QR or open the link below.
           </p>
+          <p className="mt-1 text-xs font-semibold text-amber-50/95 md:text-sm">
+            {insuranceConfig.label}
+          </p>
         </div>
       ) : null}
 
@@ -205,8 +245,8 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
         <div className="mt-8 rounded-[var(--lz-radius)] border border-white/15 bg-white p-4 md:p-5">
           <div className="flex justify-center">
             <img
-              src="/images/insurance/buoy-insurance-qr.png"
-              alt="Scan to complete Buoy rental insurance"
+              src={insuranceConfig.qrImage}
+              alt={`Scan to complete Buoy rental insurance for ${insuranceConfig.label}`}
               width={1500}
               height={1500}
               className="h-auto w-full max-w-[min(100%,240px)] min-w-[250px] object-contain"
@@ -218,7 +258,7 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
           </p>
           <div className="mt-4 flex justify-center">
             <a
-              href={BUOY_INSURANCE_CHECKOUT_URL}
+              href={insuranceConfig.checkoutUrl}
               target="_blank"
               rel="noopener noreferrer"
               onClick={wrapSyncClick('booking_success_external_buoy_banner', () => {
@@ -240,9 +280,10 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
         <p className="mt-2 text-sm text-slate-400">
           You must obtain short-term rental insurance before your trip. This is required for approval.
         </p>
+        <p className="mt-2 text-xs font-semibold text-cyan-100/90">{insuranceConfig.label}</p>
         <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
           <a
-            href={BUOY_INSURANCE_CHECKOUT_URL}
+            href={insuranceConfig.checkoutUrl}
             target="_blank"
             rel="noopener noreferrer"
             onClick={wrapSyncClick('booking_success_external_buoy', () => {

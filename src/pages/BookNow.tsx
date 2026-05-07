@@ -116,10 +116,6 @@ export default function BookNow({ onNavigate }: BookNowProps) {
   const location = useLocation();
   const [searchParams] = useSearchParams();
   const bookingIdFromUrl = (searchParams.get('bookingId') || '').trim();
-  const buoyInsurancePagePath =
-    bookingIdFromUrl.length > 0
-      ? `/insurance-required?bookingId=${encodeURIComponent(bookingIdFromUrl)}`
-      : '/insurance-required';
   const [bookingMode, setBookingMode] = useState<BookingMode>('rental');
   const [step, setStep] = useState(0);
   const [boats, setBoats] = useState<Boat[]>([]);
@@ -186,6 +182,18 @@ export default function BookNow({ onNavigate }: BookNowProps) {
   const availabilityCalendarRef = useRef<HTMLDivElement | null>(null);
   const [rentalDurationPreset, setRentalDurationPreset] = useState<RentalDurationPreset | null>(null);
   const calendarIntelCacheRef = useRef<{ expiresAt: number; data: Map<string, DayInsight> } | null>(null);
+
+  const buoyInsurancePagePath = useMemo(() => {
+    const params = new URLSearchParams();
+    if (selectedBoat?.id) {
+      params.set('boatId', selectedBoat.id);
+      if (bookingIdFromUrl.length > 0) params.set('bookingId', bookingIdFromUrl);
+    } else {
+      params.set('needBoatSelection', '1');
+      if (bookingIdFromUrl.length > 0) params.set('bookingId', bookingIdFromUrl);
+    }
+    return `/insurance-required?${params.toString()}`;
+  }, [selectedBoat?.id, bookingIdFromUrl]);
 
   const normalizeToken = (value: string): string =>
     String(value || '')
@@ -2558,7 +2566,9 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                         👉 Get Boat Rental Insurance with Buoy
                       </Link>
                       <p className="text-xs text-slate-400">
-                        After purchasing, upload a screenshot or paste your Buoy confirmation link below.
+                        {selectedBoat
+                          ? 'After purchasing, upload a screenshot or paste your Buoy confirmation link below.'
+                          : 'Select a boat first so we can open the correct Buoy insurance for your booking.'}
                       </p>
                       <p className="text-xs font-semibold text-amber-200">Required before departure.</p>
                       {docUploadError && (

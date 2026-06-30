@@ -52,6 +52,7 @@ type BookingsRow = {
     | 'pending'
     | 'pending_verification'
     | 'confirmed'
+    | 'ready_for_departure'
     | 'cancelled'
     | 'completed';
   is_night_tour: boolean;
@@ -62,7 +63,7 @@ type BookingsRow = {
   terms_accepted: boolean;
   damage_fee_acknowledged: boolean;
   license_status: 'pending' | 'verified' | 'rejected';
-  insurance_status: 'pending' | 'verified' | 'rejected';
+  insurance_status: 'pending' | 'submitted' | 'verified' | 'rejected';
   /** Per-booking doc URLs (e.g. Storage); may mirror customers.id_document_url / insurance_proof_url */
   license_url: string | null;
   insurance_url: string | null;
@@ -72,6 +73,11 @@ type BookingsRow = {
   /** Checkout hold expiry (pending + unpaid); null after payment */
   expires_at: string | null;
   admin_notes: string | null;
+  /** Groupon / direct-booking promo code when applied at checkout */
+  promo_code: string | null;
+  discount_amount: number | null;
+  original_total: number | null;
+  final_total: number | null;
   /** Set by server after one incomplete-verification reminder email */
   verification_reminder_sent_at: string | null;
   /** Set by server after one incomplete-verification SMS */

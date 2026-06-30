@@ -36,6 +36,10 @@ const MENU_SECTIONS: MenuSection[] = [
     ],
   },
   {
+    title: 'Before your trip',
+    items: [{ kind: 'link', name: 'Waivers & Insurance', path: 'waivers-insurance' }],
+  },
+  {
     title: 'Information',
     items: [
       { kind: 'link', name: 'Marine Conditions', path: 'conditions' },
@@ -248,6 +252,13 @@ export default function Header({ onNavigate, currentPage }: HeaderProps) {
             </div>
 
             <div className="lz-header-right lz-header-right--compact m-0">
+              <button
+                type="button"
+                onClick={() => handleNavigation('waivers-insurance')}
+                className="hidden shrink-0 whitespace-nowrap rounded-lz border border-white/15 bg-white/[0.06] px-3 py-2 text-xs font-semibold text-white/90 backdrop-blur-md transition hover:border-cyan-400/40 hover:text-white md:inline-flex"
+              >
+                Waivers &amp; Insurance
+              </button>
               <button
                 type="button"
                 onClick={() => handleNavigation('book')}

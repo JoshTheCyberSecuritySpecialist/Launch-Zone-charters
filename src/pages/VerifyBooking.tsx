@@ -12,6 +12,7 @@ import {
   type BuoyInsuranceConfig,
 } from '../config/buoyInsurance';
 import type { UserVerificationsRow } from '../lib/supabase';
+import { uploadDocumentToDocumentsBucket } from '../lib/storageUpload';
 
 interface VerifyBookingProps {
   onNavigate: (page: string) => void;
@@ -34,7 +35,10 @@ export default function VerifyBooking({ onNavigate }: VerifyBookingProps) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [licenseUploading, setLicenseUploading] = useState(false);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
+  const [licenseMessage, setLicenseMessage] = useState<string | null>(null);
+  const [licenseUrl, setLicenseUrl] = useState<string | null>(null);
   const [uv, setUv] = useState<UserVerificationsRow | null>(null);
   const [insuranceConfig, setInsuranceConfig] = useState<BuoyInsuranceConfig>(PONTOON_INSURANCE);
 
@@ -68,7 +72,7 @@ export default function VerifyBooking({ onNavigate }: VerifyBookingProps) {
 
       const { data: booking, error: bErr } = await supabase
         .from('bookings')
-        .select('id, status, customer_id, boat_id, boats(id, name, type)')
+        .select('id, status, customer_id, boat_id, license_url, license_status, boats(id, name, type)')
         .eq('id', bookingId)
         .maybeSingle();
 
@@ -89,6 +93,7 @@ export default function VerifyBooking({ onNavigate }: VerifyBookingProps) {
       }
 
       setBookingStatus(booking.status);
+      setLicenseUrl(booking.license_url?.trim() || null);
       setInsuranceConfig(
         getInsuranceConfigForBooking({
           boat_id: booking.boat_id,
@@ -133,6 +138,44 @@ export default function VerifyBooking({ onNavigate }: VerifyBookingProps) {
       }
       setEmailGatePassed(true);
     })();
+  };
+
+  const handleLicenseFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file || !bookingId || !emailGatePassed) return;
+
+    setLicenseUploading(true);
+    setLicenseMessage(null);
+
+    const { url, error } = await uploadDocumentToDocumentsBucket(file, 'licenses', bookingId);
+    if (error || !url) {
+      setLicenseMessage(error?.message || 'Could not upload license file.');
+      setLicenseUploading(false);
+      return;
+    }
+
+    if (env.apiUrlConfigured && env.apiUrl && customerEmailNorm) {
+      const res = await fetch(`${env.apiUrl}/api/booking-mark-license-submitted`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bookingId, email: customerEmailNorm, licenseUrl: url }),
+      });
+      if (!res.ok) {
+        const payload = (await res.json().catch(() => ({}))) as { error?: string };
+        setLicenseMessage(payload.error || 'Upload saved but booking could not be updated.');
+        setLicenseUploading(false);
+        return;
+      }
+    } else {
+      setLicenseMessage('API not configured — contact support with your license file.');
+      setLicenseUploading(false);
+      return;
+    }
+
+    setLicenseUrl(url);
+    setLicenseMessage('License uploaded. Our team will review it shortly.');
+    setLicenseUploading(false);
   };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -297,6 +340,37 @@ export default function VerifyBooking({ onNavigate }: VerifyBookingProps) {
                 </form>
               ) : (
                 <div className="space-y-8">
+                  <section>
+                    <h2 className="text-lg font-bold text-white">License / ID</h2>
+                    <p className="mt-1 text-sm text-slate-400">
+                      Upload a photo of your boating license or government ID. Images or PDF, max 10 MB.
+                    </p>
+                    {licenseUrl ? (
+                      <p className="mt-4 rounded-lg border border-emerald-400/30 bg-emerald-950/40 px-4 py-3 font-medium text-emerald-100">
+                        License on file — upload again to replace.
+                      </p>
+                    ) : null}
+                    <label className="mt-4 flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-white/20 bg-slate-950/30 px-4 py-8 transition hover:border-cyan-400/40 hover:bg-cyan-500/5">
+                      <Upload className="mb-2 h-8 w-8 text-slate-500" aria-hidden />
+                      <span className="text-sm font-semibold text-slate-200">
+                        {licenseUploading ? 'Uploading…' : 'Choose license file'}
+                      </span>
+                      <span className="mt-1 text-xs text-slate-500">JPEG, PNG, WebP, GIF, or PDF</span>
+                      <input
+                        type="file"
+                        accept={FILE_ACCEPT}
+                        className="sr-only"
+                        disabled={licenseUploading}
+                        onChange={handleLicenseFileChange}
+                      />
+                    </label>
+                    {licenseMessage ? (
+                      <p className="mt-3 text-sm text-slate-300" role="status">
+                        {licenseMessage}
+                      </p>
+                    ) : null}
+                  </section>
+
                   <section className="rounded-xl border border-white/10 bg-slate-950/40 p-5">
                     <h2 className="text-lg font-bold text-white">Insurance Requirement</h2>
                     <p className="mt-2 text-sm text-slate-400">

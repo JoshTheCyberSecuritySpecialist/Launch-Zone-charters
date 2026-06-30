@@ -18,6 +18,7 @@ import {
 import { supabase } from '../lib/supabase';
 import type { UserVerificationsRow } from '../lib/supabase';
 import { logSupabaseError } from '../lib/supabaseErrors';
+import { adminUpdatePreTripSubmission } from '../lib/publicBooking';
 import { useAuth } from '../contexts/useAuth';
 import FullPageLoader from '../components/FullPageLoader';
 import Logo from '../components/ui/Logo';
@@ -48,7 +49,7 @@ const LS_CAP_RUN_TIME = 'lz_admin_captains_log_last_at';
 let adminAlertsInitialFetchDoneDev = false;
 let adminSubscribersInitialFetchDoneDev = false;
 
-type StatusFilter = 'all' | 'pending' | 'pending_verification' | 'confirmed' | 'cancelled';
+type StatusFilter = 'all' | 'pending' | 'pending_verification' | 'confirmed' | 'ready_for_departure' | 'cancelled';
 
 type CaptainsLogRow = {
   id: string;
@@ -128,6 +129,10 @@ type AdminBookingRow = {
   waivers?: { id: string }[] | null;
   license_status?: DocStatus | string | null;
   insurance_status?: DocStatus | string | null;
+  promo_code?: string | null;
+  discount_amount?: number | string | null;
+  original_total?: number | string | null;
+  final_total?: number | string | null;
   customers?: {
     full_name?: string;
     email?: string;
@@ -137,6 +142,39 @@ type AdminBookingRow = {
   boats?: { name?: string } | null;
   user_verifications?: UserVerificationsRow | UserVerificationsRow[] | null;
 };
+
+type PreTripSubmissionRow = {
+  id: string;
+  matched_booking_id: string | null;
+  customer_name: string | null;
+  email: string;
+  phone: string | null;
+  trip_type: string;
+  selected_boat_reg_no: string | null;
+  groupon_code: string | null;
+  requested_trip_date: string | null;
+  waiver_signed: boolean;
+  license_url: string | null;
+  insurance_url: string | null;
+  license_status: string;
+  insurance_status: string;
+  admin_status: string;
+  admin_notes: string | null;
+  created_at: string;
+};
+
+function tripTypeLabel(tripType: string): string {
+  switch (tripType) {
+    case 'pontoon_rental':
+      return 'Pontoon Rental';
+    case 'center_console_rental':
+      return 'Center Console Rental';
+    case 'captain_charter':
+      return 'Captain-Led Charter';
+    default:
+      return tripType;
+  }
+}
 
 function buoyVerificationRow(
   raw: UserVerificationsRow | UserVerificationsRow[] | null | undefined
@@ -223,6 +261,11 @@ export default function Admin({ onNavigate }: AdminProps) {
   const [runningAlerts, setRunningAlerts] = useState(false);
   const [incidentCounts, setIncidentCounts] = useState<Record<string, number>>({});
   const [selectedIncidentBookingId, setSelectedIncidentBookingId] = useState<string>('');
+  const [preTripSubmissions, setPreTripSubmissions] = useState<PreTripSubmissionRow[]>([]);
+  const [preTripLoading, setPreTripLoading] = useState(false);
+  const [preTripMatchIds, setPreTripMatchIds] = useState<Record<string, string>>({});
+  const [preTripNotes, setPreTripNotes] = useState<Record<string, string>>({});
+  const [preTripActionBusy, setPreTripActionBusy] = useState<string | null>(null);
   const [bookingIncidents, setBookingIncidents] = useState<IncidentRow[]>([]);
   const [incidentsLoading, setIncidentsLoading] = useState(false);
   const [incidentDescription, setIncidentDescription] = useState('');
@@ -869,6 +912,57 @@ export default function Admin({ onNavigate }: AdminProps) {
     setPage(0);
   }, [statusFilter, debouncedEmailSearch]);
 
+  const loadPreTripSubmissions = useCallback(async () => {
+    if (!isAdmin) return;
+    setPreTripLoading(true);
+    const { data, error } = await supabase
+      .from('pre_trip_submissions')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(100);
+    logSupabaseError('Admin.loadPreTripSubmissions', error);
+    setPreTripSubmissions((data as PreTripSubmissionRow[]) || []);
+    setPreTripLoading(false);
+  }, [isAdmin]);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    void loadPreTripSubmissions();
+  }, [isAdmin, loadPreTripSubmissions]);
+
+  const runPreTripAdminAction = async (
+    submissionId: string,
+    action: 'match' | 'approve' | 'reject'
+  ) => {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    const token = session?.access_token;
+    if (!token) {
+      window.alert('Sign in again to continue.');
+      return;
+    }
+    const matched_booking_id = (preTripMatchIds[submissionId] || '').trim();
+    if ((action === 'match' || action === 'approve') && !matched_booking_id) {
+      window.alert('Enter a booking ID to match this submission.');
+      return;
+    }
+    setPreTripActionBusy(submissionId);
+    const out = await adminUpdatePreTripSubmission(token, submissionId, {
+      action,
+      matched_booking_id: matched_booking_id || undefined,
+      admin_notes: preTripNotes[submissionId]?.trim() || undefined,
+    });
+    setPreTripActionBusy(null);
+    if (!out.ok) {
+      window.alert(out.error || 'Action failed.');
+      return;
+    }
+    setNotice({ variant: 'success', text: `Submission ${action}ed successfully.` });
+    void loadPreTripSubmissions();
+    void loadBookings();
+  };
+
   const loadStats = useCallback(async () => {
     const [{ count: totalAll }, { count: pendingCt }, { data: priceRows }] = await Promise.all([
       supabase.from('bookings').select('*', { count: 'exact', head: true }),
@@ -1013,7 +1107,7 @@ export default function Admin({ onNavigate }: AdminProps) {
 
   const handleStatusUpdate = async (
     bookingId: string,
-    status: 'pending' | 'pending_verification' | 'confirmed' | 'cancelled' | 'completed'
+    status: 'pending' | 'pending_verification' | 'confirmed' | 'ready_for_departure' | 'cancelled' | 'completed'
   ) => {
     const { error } = await supabase.from('bookings').update({ status }).eq('id', bookingId);
 
@@ -1033,6 +1127,13 @@ export default function Admin({ onNavigate }: AdminProps) {
     const { error } = await handleStatusUpdate(id, 'confirmed');
     if (import.meta.env.DEV) {
       console.log('✅ Approved:', id, error);
+    }
+  };
+
+  const handleReadyForDeparture = async (id: string) => {
+    const { error } = await handleStatusUpdate(id, 'ready_for_departure');
+    if (error) {
+      window.alert(error.message || 'Could not mark ready for departure.');
     }
   };
 
@@ -1248,6 +1349,8 @@ export default function Admin({ onNavigate }: AdminProps) {
     switch (status) {
       case 'confirmed':
         return 'border border-green-200 bg-green-100 text-green-800';
+      case 'ready_for_departure':
+        return 'border border-cyan-300 bg-cyan-100 text-cyan-950';
       case 'pending':
         return 'border border-yellow-300 bg-yellow-100 text-yellow-900';
       case 'pending_verification':
@@ -1884,6 +1987,153 @@ export default function Admin({ onNavigate }: AdminProps) {
           </div>
         </div>
 
+        <div className="relative mb-8 rounded-xl bg-white shadow">
+          {preTripLoading && (
+            <div className="absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-white/60">
+              <div className="text-sm font-semibold text-slate-600">Loading submissions…</div>
+            </div>
+          )}
+          <div className="border-b border-slate-200 p-6">
+            <h2 className="text-2xl font-bold text-slate-900">Pre-Trip Submissions</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Off-platform waiver and insurance uploads. Match to an existing booking, then approve or reject.
+            </p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50">
+                <tr>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-600">Customer</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-600">Trip</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-600">Docs</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-600">Status</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-600">Match booking</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-600">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200">
+                {preTripSubmissions.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-4 py-8 text-center text-slate-500">
+                      No pre-trip submissions yet.
+                    </td>
+                  </tr>
+                ) : (
+                  preTripSubmissions.map((row) => (
+                    <tr key={row.id} className="align-top hover:bg-slate-50">
+                      <td className="px-4 py-3">
+                        <div className="font-semibold text-slate-900">{row.customer_name || '—'}</div>
+                        <div className="text-slate-600">{row.email}</div>
+                        <div className="text-xs text-slate-500">{row.phone || '—'}</div>
+                        {row.groupon_code ? (
+                          <div className="mt-1 text-xs font-medium text-emerald-700">Groupon: {row.groupon_code}</div>
+                        ) : null}
+                        <div className="mt-1 font-mono text-[10px] text-slate-400">{row.id}</div>
+                      </td>
+                      <td className="px-4 py-3 text-slate-800">
+                        <div>{tripTypeLabel(row.trip_type)}</div>
+                        {row.requested_trip_date ? (
+                          <div className="text-xs text-slate-500">
+                            {new Date(row.requested_trip_date).toLocaleString()}
+                          </div>
+                        ) : null}
+                        {row.selected_boat_reg_no ? (
+                          <div className="text-xs text-slate-500">Buoy {row.selected_boat_reg_no}</div>
+                        ) : null}
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex flex-col gap-1 text-xs">
+                          <span>Waiver: {row.waiver_signed ? '✅' : '❌'}</span>
+                          <span>License: {row.license_status}</span>
+                          <span>Insurance: {row.insurance_status}</span>
+                          {row.license_url ? (
+                            <a
+                              href={row.license_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="font-semibold text-blue-700 hover:underline"
+                            >
+                              View license
+                            </a>
+                          ) : null}
+                          {row.insurance_url ? (
+                            <a
+                              href={row.insurance_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="font-semibold text-blue-700 hover:underline"
+                            >
+                              View insurance
+                            </a>
+                          ) : null}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold capitalize text-slate-800">
+                          {row.admin_status.replace(/_/g, ' ')}
+                        </span>
+                        {row.matched_booking_id ? (
+                          <div className="mt-1 font-mono text-[10px] text-slate-500">
+                            → {row.matched_booking_id}
+                          </div>
+                        ) : null}
+                      </td>
+                      <td className="px-4 py-3">
+                        <input
+                          type="text"
+                          placeholder="Booking UUID"
+                          value={preTripMatchIds[row.id] ?? row.matched_booking_id ?? ''}
+                          onChange={(e) =>
+                            setPreTripMatchIds((prev) => ({ ...prev, [row.id]: e.target.value }))
+                          }
+                          className="mb-2 w-full min-w-[180px] rounded border border-slate-300 px-2 py-1 text-xs"
+                        />
+                        <textarea
+                          placeholder="Admin notes"
+                          rows={2}
+                          value={preTripNotes[row.id] ?? row.admin_notes ?? ''}
+                          onChange={(e) =>
+                            setPreTripNotes((prev) => ({ ...prev, [row.id]: e.target.value }))
+                          }
+                          className="w-full min-w-[180px] rounded border border-slate-300 px-2 py-1 text-xs"
+                        />
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex flex-col gap-1">
+                          <button
+                            type="button"
+                            disabled={preTripActionBusy === row.id}
+                            onClick={() => void runPreTripAdminAction(row.id, 'match')}
+                            className="rounded bg-cyan-700 px-2 py-1 text-xs font-semibold text-white hover:bg-cyan-800 disabled:opacity-40"
+                          >
+                            Match
+                          </button>
+                          <button
+                            type="button"
+                            disabled={preTripActionBusy === row.id}
+                            onClick={() => void runPreTripAdminAction(row.id, 'approve')}
+                            className="rounded bg-green-600 px-2 py-1 text-xs font-semibold text-white hover:bg-green-700 disabled:opacity-40"
+                          >
+                            Approve
+                          </button>
+                          <button
+                            type="button"
+                            disabled={preTripActionBusy === row.id}
+                            onClick={() => void runPreTripAdminAction(row.id, 'reject')}
+                            className="rounded bg-red-600 px-2 py-1 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-40"
+                          >
+                            Reject
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
         <div className="relative rounded-xl bg-white shadow">
           {tableLoading && (
             <div className="absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-white/60">
@@ -1905,6 +2155,7 @@ export default function Admin({ onNavigate }: AdminProps) {
                     <option value="pending">Pending</option>
                     <option value="pending_verification">Pending verification</option>
                     <option value="confirmed">Confirmed</option>
+                    <option value="ready_for_departure">Ready for departure</option>
                     <option value="cancelled">Cancelled</option>
                   </select>
                 </label>
@@ -2204,7 +2455,15 @@ export default function Admin({ onNavigate }: AdminProps) {
                       </button>
                     </td>
                     <td className="px-6 py-4 font-semibold text-slate-900">
-                      ${parseFloat(String(booking.total_price)).toFixed(2)}
+                      <div>${parseFloat(String(booking.total_price)).toFixed(2)}</div>
+                      {booking.promo_code ? (
+                        <div className="mt-1 text-xs font-medium text-emerald-700">
+                          {booking.promo_code}
+                          {booking.discount_amount != null
+                            ? ` · −$${parseFloat(String(booking.discount_amount)).toFixed(2)}`
+                            : ''}
+                        </div>
+                      ) : null}
                     </td>
                     <td className="px-6 py-4">
                       <div className="flex flex-wrap items-center gap-2">
@@ -2215,6 +2474,14 @@ export default function Admin({ onNavigate }: AdminProps) {
                           className="rounded bg-green-600 px-3 py-1 text-sm font-semibold text-white transition-colors hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-40"
                         >
                           Approve
+                        </button>
+                        <button
+                          type="button"
+                          disabled={booking.status !== 'confirmed' || tableLoading}
+                          onClick={() => void handleReadyForDeparture(booking.id)}
+                          className="rounded bg-cyan-700 px-3 py-1 text-sm font-semibold text-white transition-colors hover:bg-cyan-800 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          Ready for departure
                         </button>
                         <button
                           type="button"

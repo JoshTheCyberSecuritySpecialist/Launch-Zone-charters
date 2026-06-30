@@ -19,6 +19,7 @@ const { getLaunchSchedulePreview } = require('./services/rocketScheduleService')
 const { getWeeklyForecast } = require('./services/weeklyForecastService');
 const { getMarineConditions } = require('./services/marineConditionsService');
 const availabilityService = require('./services/availabilityService');
+const { applyPromoToExpectedTotals } = require('./services/promoService');
 const cron = require('node-cron');
 const { runMonitor } = require('./jobs/conditionMonitor');
 
@@ -788,7 +789,7 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
 
   const { data: boatRow, error: boatErr } = await supabase
     .from('boats')
-    .select('id, hourly_rate, half_day_rate, full_day_rate')
+    .select('id, hourly_rate, half_day_rate, full_day_rate, type')
     .eq('id', String(booking.boat_id))
     .maybeSingle();
   if (boatErr) {
@@ -808,7 +809,7 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
   const passengerCountRaw = Number(booking.passengerCount);
   const passengerCount = Number.isFinite(passengerCountRaw) ? Math.max(1, Math.round(passengerCountRaw)) : 1;
 
-  const expected = computeExpectedBookingTotals({
+  let expected = computeExpectedBookingTotals({
     bookingMode: bookingMode === 'charter' ? 'charter' : 'rental',
     rentalType: String(booking.rental_type || ''),
     durationHours: Number(booking.duration_hours || 0),
@@ -819,6 +820,20 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
     date: booking.start_time,
     boat: boatRow,
   });
+
+  const promoApplied = applyPromoToExpectedTotals(expected, {
+    booking,
+    boatRow,
+    bookingMode,
+  });
+  if (promoApplied.error) {
+    await refundStripeCheckoutSession(session);
+    const err = new Error(promoApplied.error);
+    err.statusCode = 400;
+    throw err;
+  }
+  expected = promoApplied.expected;
+  const promoFields = promoApplied.promo;
 
   const paidDeposit =
     typeof session.amount_total === 'number'
@@ -882,6 +897,10 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
     admin_notes: adminNotesParts.length > 0 ? adminNotesParts.join('\n') : null,
     license_url: booking.license_url || null,
     insurance_url: booking.insurance_url || null,
+    promo_code: promoFields?.promo_code || null,
+    discount_amount: promoFields?.discount_amount ?? null,
+    original_total: promoFields?.original_total ?? null,
+    final_total: promoFields?.final_total ?? null,
   };
 
   try {
@@ -1358,7 +1377,7 @@ app.post('/api/create-checkout-session', async (req, res) => {
     // Server-authoritative pricing: compute expected totals server-side.
     const { data: boatRow, error: boatErr } = await supabase
       .from('boats')
-      .select('id, hourly_rate, half_day_rate, full_day_rate')
+      .select('id, hourly_rate, half_day_rate, full_day_rate, type')
       .eq('id', String(booking.boat_id))
       .maybeSingle();
     if (boatErr) {
@@ -1368,7 +1387,7 @@ app.post('/api/create-checkout-session', async (req, res) => {
       return res.status(400).json({ error: 'Boat not found for pricing validation' });
     }
 
-    const expected = computeExpectedBookingTotals({
+    let expected = computeExpectedBookingTotals({
       bookingMode: bookingMode === 'charter' ? 'charter' : 'rental',
       rentalType: String(booking.rental_type || ''),
       durationHours: Number(booking.duration_hours || 0),
@@ -1379,11 +1398,38 @@ app.post('/api/create-checkout-session', async (req, res) => {
       date: booking.start_time,
       boat: boatRow,
     });
+
+    const promoApplied = applyPromoToExpectedTotals(expected, {
+      booking,
+      boatRow,
+      bookingMode,
+    });
+    if (promoApplied.error) {
+      return res.status(400).json({ error: promoApplied.error });
+    }
+    expected = promoApplied.expected;
+    const promoFields = promoApplied.promo;
+
     const clientTotal = roundMoney(Number(booking.total_price || 0));
     const clientDueToday = roundMoney(Number(booking.deposit_amount || 0));
+    const clientFinalTotal = roundMoney(Number(booking.finalTotal || booking.final_total || 0));
+    const clientOriginalTotal = roundMoney(Number(booking.originalTotal || booking.original_total || 0));
     const totalDiff = roundMoney(Math.abs(expected.totalPrice - clientTotal));
     const dueTodayDiff = roundMoney(Math.abs(expected.amountDueToday - clientDueToday));
-    if (totalDiff > 0.01 || dueTodayDiff > 0.01) {
+    const finalTotalDiff =
+      promoFields && clientFinalTotal > 0
+        ? roundMoney(Math.abs(expected.totalPrice - clientFinalTotal))
+        : 0;
+    const originalTotalDiff =
+      promoFields && clientOriginalTotal > 0
+        ? roundMoney(Math.abs(promoFields.original_total - clientOriginalTotal))
+        : 0;
+    if (
+      totalDiff > 0.01 ||
+      dueTodayDiff > 0.01 ||
+      finalTotalDiff > 0.01 ||
+      originalTotalDiff > 0.01
+    ) {
       console.warn(
         '[pricing-shadow-mismatch]',
         JSON.stringify({
@@ -1484,7 +1530,7 @@ app.post('/api/create-checkout-session', async (req, res) => {
           quantity: 1,
         },
       ],
-      success_url: `${domain}/insurance-required?session_id={CHECKOUT_SESSION_ID}`,
+      success_url: `${domain}/booking-success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${domain}/booking`,
     });
 
@@ -1497,6 +1543,10 @@ app.post('/api/create-checkout-session', async (req, res) => {
       total_price: expected.totalPrice,
       deposit_amount: expected.amountDueToday,
       balance_due: roundMoney(expected.totalPrice - expected.amountDueToday),
+      promoCode: promoFields?.promo_code || null,
+      discountAmount: promoFields?.discount_amount ?? null,
+      originalTotal: promoFields?.original_total ?? null,
+      finalTotal: promoFields?.final_total ?? expected.totalPrice,
     };
 
     const isCharterBooking = bookingMode === 'charter';
@@ -1536,6 +1586,10 @@ app.post('/api/create-checkout-session', async (req, res) => {
       admin_notes: `Checkout hold · expires ${expiresAt}`,
       license_url: authoritativeBooking.license_url || null,
       insurance_url: authoritativeBooking.insurance_url || null,
+      promo_code: promoFields?.promo_code || null,
+      discount_amount: promoFields?.discount_amount ?? null,
+      original_total: promoFields?.original_total ?? null,
+      final_total: promoFields?.final_total ?? null,
     };
 
     const { error: holdErr } = await supabase.from('bookings').insert(holdInsert);
@@ -1710,6 +1764,522 @@ function isBookingUuidParam(id) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
 }
 
+function normalizeEmailParam(raw) {
+  return String(raw || '')
+    .trim()
+    .toLowerCase();
+}
+
+function normalizePhoneDigits(raw) {
+  return String(raw || '').replace(/\D/g, '');
+}
+
+function phoneDigitsMatch(customerPhone, inputPhone) {
+  const a = normalizePhoneDigits(customerPhone);
+  const b = normalizePhoneDigits(inputPhone);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  if (a.length >= 10 && b.length >= 10 && a.slice(-10) === b.slice(-10)) return true;
+  return false;
+}
+
+function phoneLast4(raw) {
+  const d = normalizePhoneDigits(raw);
+  return d.length >= 4 ? d.slice(-4) : '';
+}
+
+const FIND_BOOKING_RATE_WINDOW_MS = 60 * 1000;
+const FIND_BOOKING_RATE_MAX = 30;
+const findBookingRateByIp = new Map();
+
+function checkFindBookingRate(ip) {
+  const key = String(ip || 'unknown').trim() || 'unknown';
+  const now = Date.now();
+  const prev = findBookingRateByIp.get(key);
+  if (!prev || now - prev.windowStart > FIND_BOOKING_RATE_WINDOW_MS) {
+    findBookingRateByIp.set(key, { windowStart: now, count: 1 });
+    return true;
+  }
+  if (prev.count >= FIND_BOOKING_RATE_MAX) return false;
+  prev.count += 1;
+  return true;
+}
+
+function toPublicBookingRow(booking, customer, boat) {
+  return {
+    id: booking.id,
+    customer_name: String(customer?.full_name || '').trim(),
+    email: normalizeEmailParam(customer?.email),
+    phone_last4: phoneLast4(customer?.phone),
+    start_time: booking.start_time,
+    end_time: booking.end_time,
+    rental_type: String(booking.rental_type || ''),
+    boat_id: String(booking.boat_id || ''),
+    boat_name: boat?.name ? String(boat.name) : null,
+    boat_type: boat?.type ? String(boat.type) : null,
+    captain_included: Boolean(booking.captain_included),
+    status: String(booking.status || ''),
+    payment_status: String(booking.payment_status || ''),
+    waiver_signed: Boolean(booking.waiver_signed),
+    license_status: String(booking.license_status || 'pending'),
+    insurance_status: String(booking.insurance_status || 'pending'),
+    has_license_url: Boolean(String(booking.license_url || customer?.id_document_url || '').trim()),
+    has_insurance_url: Boolean(
+      String(booking.insurance_url || customer?.insurance_proof_url || '').trim()
+    ),
+  };
+}
+
+function pickBestBookingRow(rows) {
+  if (!rows?.length) return null;
+  const active = rows.filter((r) => !['cancelled', 'completed'].includes(String(r.status || '')));
+  const pool = active.length > 0 ? active : rows;
+  const now = Date.now();
+  const future = pool
+    .filter((r) => new Date(String(r.start_time || '')).getTime() >= now - 24 * 60 * 60 * 1000)
+    .sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());
+  if (future.length > 0) return future[0];
+  return pool.sort((a, b) => new Date(b.start_time).getTime() - new Date(a.start_time).getTime())[0];
+}
+
+/**
+ * Public lookup for /waivers-insurance — email + phone must match; optional booking id or promo code.
+ */
+app.post('/api/public/find-booking', async (req, res) => {
+  const noMatchMessage =
+    'We could not find a booking with that information. Double-check your email and phone, or call 803-542-1761.';
+
+  try {
+    if (!supabaseConfigured) return res.status(503).json({ message: noMatchMessage });
+
+    const ip = requestIpBestEffort(req);
+    if (!checkFindBookingRate(ip)) {
+      return res.status(429).json({ message: 'Too many attempts. Please wait a minute and try again.' });
+    }
+
+    const email = normalizeEmailParam(req.body?.email);
+    const phone = String(req.body?.phone || '').trim();
+    const codeRaw = String(req.body?.code || '').trim();
+    const code = codeRaw ? codeRaw.toUpperCase() : '';
+
+    if (!email || !phone) {
+      return res.status(400).json({ message: 'Email and phone are required.' });
+    }
+
+    const { data: customers, error: cErr } = await supabase
+      .from('customers')
+      .select('id, full_name, email, phone, id_document_url, insurance_proof_url')
+      .ilike('email', email);
+
+    if (cErr) {
+      console.error('[find-booking] customers:', cErr.message);
+      return res.status(500).json({ message: noMatchMessage });
+    }
+
+    const matchedCustomers = (customers || []).filter((c) => phoneDigitsMatch(c.phone, phone));
+    if (matchedCustomers.length === 0) {
+      return res.status(404).json({ message: noMatchMessage });
+    }
+
+    const customerIds = matchedCustomers.map((c) => c.id);
+    const { data: bookings, error: bErr } = await supabase
+      .from('bookings')
+      .select(
+        'id, customer_id, boat_id, start_time, end_time, rental_type, captain_included, status, payment_status, waiver_signed, license_status, insurance_status, license_url, insurance_url, promo_code, boats(id, name, type)'
+      )
+      .in('customer_id', customerIds)
+      .not('status', 'eq', 'cancelled');
+
+    if (bErr) {
+      console.error('[find-booking] bookings:', bErr.message);
+      return res.status(500).json({ message: noMatchMessage });
+    }
+
+    let candidates = bookings || [];
+
+    if (code) {
+      if (isBookingUuidParam(code)) {
+        candidates = candidates.filter((b) => String(b.id).toLowerCase() === code.toLowerCase());
+      } else {
+        candidates = candidates.filter(
+          (b) => String(b.promo_code || '').trim().toUpperCase() === code
+        );
+      }
+    }
+
+    const picked = pickBestBookingRow(candidates);
+    if (!picked) {
+      return res.status(404).json({ message: noMatchMessage });
+    }
+
+    const customer = matchedCustomers.find((c) => c.id === picked.customer_id) || matchedCustomers[0];
+    const boat = Array.isArray(picked.boats) ? picked.boats[0] : picked.boats;
+
+    return res.json({ booking: toPublicBookingRow(picked, customer, boat) });
+  } catch (err) {
+    console.error('[find-booking]', err);
+    return res.status(500).json({ message: noMatchMessage });
+  }
+});
+
+/**
+ * Post-booking waiver signing for /waivers-insurance (email + phone must match customer).
+ */
+app.post('/api/booking-sign-waiver', async (req, res) => {
+  try {
+    if (!supabaseConfigured) return res.status(503).json({ error: 'Server not configured' });
+
+    const bookingId = String(req.body?.bookingId || '').trim();
+    const email = normalizeEmailParam(req.body?.email);
+    const phone = String(req.body?.phone || '').trim();
+    const signature = String(req.body?.signature || '').trim();
+    const termsAccepted = Boolean(req.body?.termsAccepted);
+    const damageFeeAcknowledged = Boolean(req.body?.damageFeeAcknowledged);
+    const waiverAgreed = Boolean(req.body?.waiverAgreed);
+
+    if (!isBookingUuidParam(bookingId) || !email || !phone) {
+      return res.status(400).json({ error: 'bookingId, email, and phone are required' });
+    }
+    if (!termsAccepted || !damageFeeAcknowledged || !waiverAgreed || !signature) {
+      return res.status(400).json({ error: 'Complete all agreement checkboxes and your signature.' });
+    }
+
+    const { data: booking, error: bErr } = await supabase
+      .from('bookings')
+      .select('id, customer_id, waiver_signed, status')
+      .eq('id', bookingId)
+      .maybeSingle();
+    if (bErr || !booking) return res.status(404).json({ error: 'Booking not found' });
+    if (['cancelled', 'completed'].includes(String(booking.status || ''))) {
+      return res.status(400).json({ error: 'This booking is no longer open for document updates.' });
+    }
+
+    const { data: customer, error: cErr } = await supabase
+      .from('customers')
+      .select('id, email, phone')
+      .eq('id', booking.customer_id)
+      .maybeSingle();
+    if (cErr || !customer?.email) return res.status(400).json({ error: 'Could not verify customer' });
+    if (normalizeEmailParam(customer.email) !== email || !phoneDigitsMatch(customer.phone, phone)) {
+      return res.status(403).json({ error: 'Email or phone does not match this booking' });
+    }
+
+    const signedAt = new Date().toISOString();
+    const requestIp = requestIpBestEffort(req);
+
+    if (!booking.waiver_signed) {
+      const { error: uErr } = await supabase
+        .from('bookings')
+        .update({
+          waiver_signed: true,
+          waiver_signed_at: signedAt,
+          terms_accepted: true,
+          damage_fee_acknowledged: true,
+        })
+        .eq('id', bookingId);
+      if (uErr) {
+        console.error('[booking-sign-waiver] update:', uErr.message);
+        return res.status(500).json({ error: 'Could not save waiver on booking' });
+      }
+
+      const { error: wErr } = await supabase.from('waivers').insert({
+        booking_id: bookingId,
+        customer_id: customer.id,
+        electronic_signature: signature,
+        signature_date: signedAt,
+        ip_address: requestIp,
+        waiver_content: 'Florida Boating Liability Waiver - signed via Waivers & Insurance page',
+        accepted: true,
+      });
+      if (wErr) {
+        console.warn('[booking-sign-waiver] waiver insert:', wErr.message);
+      }
+    }
+
+    return res.json({ ok: true, waiver_signed: true });
+  } catch (err) {
+    console.error('[booking-sign-waiver]', err);
+    return res.status(500).json({ error: 'Failed' });
+  }
+});
+
+const PRE_TRIP_SUBMIT_RATE_WINDOW_MS = 60 * 1000;
+const PRE_TRIP_SUBMIT_RATE_MAX = 15;
+const preTripSubmitRateByIp = new Map();
+
+const PRE_TRIP_TYPES = new Set(['pontoon_rental', 'center_console_rental', 'captain_charter']);
+const PRE_TRIP_REG_BY_TYPE = {
+  pontoon_rental: 'FL0278PU',
+  center_console_rental: 'FL3827TT',
+  captain_charter: null,
+};
+
+function checkPreTripSubmitRate(ip) {
+  const key = String(ip || 'unknown').trim() || 'unknown';
+  const now = Date.now();
+  const prev = preTripSubmitRateByIp.get(key);
+  if (!prev || now - prev.windowStart > PRE_TRIP_SUBMIT_RATE_WINDOW_MS) {
+    preTripSubmitRateByIp.set(key, { windowStart: now, count: 1 });
+    return true;
+  }
+  if (prev.count >= PRE_TRIP_SUBMIT_RATE_MAX) return false;
+  prev.count += 1;
+  return true;
+}
+
+/**
+ * Off-platform pre-trip submission (no booking record yet).
+ * POST /api/public/pre-trip-submission
+ */
+app.post('/api/public/pre-trip-submission', async (req, res) => {
+  try {
+    if (!supabaseConfigured) return res.status(503).json({ error: 'Server not configured' });
+
+    const ip = requestIpBestEffort(req);
+    if (!checkPreTripSubmitRate(ip)) {
+      return res.status(429).json({ error: 'Too many submissions. Please wait a minute and try again.' });
+    }
+
+    const body = req.body || {};
+    const email = normalizeEmailParam(body.email);
+    const phone = String(body.phone || '').trim();
+    const customerName = String(body.customerName || body.customer_name || '').trim();
+    const tripType = String(body.tripType || body.trip_type || '').trim();
+    const grouponCode = String(body.grouponCode || body.groupon_code || '').trim().toUpperCase() || null;
+    const requestedTripDateRaw = String(body.requestedTripDate || body.requested_trip_date || '').trim();
+    const waiverSignature = String(body.waiverSignature || body.waiver_signature || body.signature || '').trim();
+    const waiverAgreed = Boolean(body.waiverAgreed ?? body.waiver_agreed);
+    const termsAccepted = Boolean(body.termsAccepted ?? body.terms_accepted);
+    const damageFeeAcknowledged = Boolean(body.damageFeeAcknowledged ?? body.damage_fee_acknowledged);
+    const licenseUrl = String(body.licenseUrl || body.license_url || '').trim() || null;
+    const insuranceUrl = String(body.insuranceUrl || body.insurance_url || '').trim() || null;
+
+    if (!email) return res.status(400).json({ error: 'Email is required.' });
+    if (!PRE_TRIP_TYPES.has(tripType)) {
+      return res.status(400).json({ error: 'Invalid trip type.' });
+    }
+    if (!termsAccepted || !damageFeeAcknowledged || !waiverAgreed || !waiverSignature) {
+      return res.status(400).json({ error: 'Complete waiver, terms, and signature before submitting.' });
+    }
+
+    let requestedTripDate = null;
+    if (requestedTripDateRaw) {
+      const d = new Date(requestedTripDateRaw);
+      if (!Number.isFinite(d.getTime())) {
+        return res.status(400).json({ error: 'Invalid requested trip date.' });
+      }
+      requestedTripDate = d.toISOString();
+    }
+
+    const isRental = tripType !== 'captain_charter';
+    if (isRental && !licenseUrl) {
+      return res.status(400).json({ error: 'License / ID upload is required for rentals.' });
+    }
+
+    const signedAt = new Date().toISOString();
+    const insuranceStatus = insuranceUrl ? 'submitted' : 'pending';
+
+    const row = {
+      customer_name: customerName || null,
+      email,
+      phone: phone || null,
+      trip_type: tripType,
+      selected_boat_reg_no: PRE_TRIP_REG_BY_TYPE[tripType] || null,
+      groupon_code: grouponCode,
+      requested_trip_date: requestedTripDate,
+      waiver_signed: true,
+      waiver_signed_at: signedAt,
+      waiver_signature: waiverSignature,
+      license_url: licenseUrl,
+      insurance_url: insuranceUrl,
+      license_status: licenseUrl ? 'pending' : 'pending',
+      insurance_status: insuranceStatus,
+      admin_status: 'pending',
+      updated_at: signedAt,
+    };
+
+    const { data: inserted, error: insErr } = await supabase
+      .from('pre_trip_submissions')
+      .insert(row)
+      .select('id')
+      .single();
+
+    if (insErr || !inserted?.id) {
+      console.error('[pre-trip-submission] insert:', insErr?.message);
+      return res.status(500).json({ error: 'Could not save submission. Try again or call us.' });
+    }
+
+    return res.json({ ok: true, submissionId: inserted.id });
+  } catch (err) {
+    console.error('[pre-trip-submission]', err);
+    return res.status(500).json({ error: 'Failed' });
+  }
+});
+
+async function copyPreTripSubmissionToBooking(submission, bookingId, requestIp) {
+  const { data: booking, error: bErr } = await supabase
+    .from('bookings')
+    .select('id, customer_id, waiver_signed, license_url, insurance_url, license_status, insurance_status')
+    .eq('id', bookingId)
+    .maybeSingle();
+  if (bErr || !booking) {
+    const err = new Error('Booking not found');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const bookingUpdates = { updated_at: new Date().toISOString() };
+  if (submission.license_url && !booking.license_url) {
+    bookingUpdates.license_url = submission.license_url;
+    bookingUpdates.license_status = 'pending';
+  }
+  if (submission.insurance_url) {
+    bookingUpdates.insurance_url = submission.insurance_url;
+    bookingUpdates.insurance_status =
+      submission.insurance_status === 'submitted' ? 'submitted' : 'pending';
+  }
+  if (submission.waiver_signed && !booking.waiver_signed) {
+    bookingUpdates.waiver_signed = true;
+    bookingUpdates.waiver_signed_at = submission.waiver_signed_at || new Date().toISOString();
+    bookingUpdates.terms_accepted = true;
+    bookingUpdates.damage_fee_acknowledged = true;
+  }
+
+  if (Object.keys(bookingUpdates).length > 1) {
+    const { error: uErr } = await supabase.from('bookings').update(bookingUpdates).eq('id', bookingId);
+    if (uErr) {
+      const err = new Error(uErr.message || 'Could not update booking');
+      err.statusCode = 500;
+      throw err;
+    }
+  }
+
+  if (submission.license_url) {
+    await supabase
+      .from('customers')
+      .update({ id_document_url: submission.license_url })
+      .eq('id', booking.customer_id);
+  }
+  if (submission.insurance_url) {
+    await supabase
+      .from('customers')
+      .update({ insurance_proof_url: submission.insurance_url })
+      .eq('id', booking.customer_id);
+  }
+
+  if (submission.waiver_signed && submission.waiver_signature) {
+    const { data: existingWaiver } = await supabase
+      .from('waivers')
+      .select('id')
+      .eq('booking_id', bookingId)
+      .limit(1)
+      .maybeSingle();
+    if (!existingWaiver) {
+      await supabase.from('waivers').insert({
+        booking_id: bookingId,
+        customer_id: booking.customer_id,
+        electronic_signature: submission.waiver_signature,
+        signature_date: submission.waiver_signed_at || new Date().toISOString(),
+        ip_address: requestIp,
+        waiver_content: 'Florida Boating Liability Waiver - from pre-trip submission',
+        accepted: true,
+      });
+    }
+  }
+
+  if (submission.insurance_url) {
+    await supabase.from('user_verifications').upsert(
+      {
+        booking_id: bookingId,
+        buoy_status: 'pending',
+        buoy_proof_url: submission.insurance_url,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'booking_id' }
+    );
+  }
+}
+
+/**
+ * Admin: match / approve / reject pre-trip submissions.
+ * PATCH /api/admin/pre-trip-submissions/:id
+ * Body: { action: 'match'|'approve'|'reject', matched_booking_id?, admin_notes? }
+ */
+app.patch('/api/admin/pre-trip-submissions/:id', async (req, res) => {
+  try {
+    const adminUser = await verifyAdminRequest(req, res);
+    if (!adminUser) return;
+
+    const submissionId = String(req.params.id || '').trim();
+    if (!isBookingUuidParam(submissionId)) {
+      return res.status(400).json({ error: 'Invalid submission id' });
+    }
+
+    const action = String(req.body?.action || '').trim().toLowerCase();
+    const matchedBookingId = String(req.body?.matched_booking_id || req.body?.matchedBookingId || '').trim();
+    const adminNotes =
+      req.body?.admin_notes != null
+        ? String(req.body.admin_notes)
+        : req.body?.adminNotes != null
+          ? String(req.body.adminNotes)
+          : null;
+
+    if (!['match', 'approve', 'reject'].includes(action)) {
+      return res.status(400).json({ error: 'action must be match, approve, or reject' });
+    }
+
+    const { data: submission, error: sErr } = await supabase
+      .from('pre_trip_submissions')
+      .select('*')
+      .eq('id', submissionId)
+      .maybeSingle();
+    if (sErr || !submission) {
+      return res.status(404).json({ error: 'Submission not found' });
+    }
+
+    const stamp = new Date().toISOString();
+    const updates = { updated_at: stamp };
+    if (adminNotes !== null) updates.admin_notes = adminNotes;
+
+    if (action === 'reject') {
+      updates.admin_status = 'rejected';
+      const { error: uErr } = await supabase
+        .from('pre_trip_submissions')
+        .update(updates)
+        .eq('id', submissionId);
+      if (uErr) return res.status(500).json({ error: uErr.message });
+      return res.json({ ok: true, admin_status: 'rejected' });
+    }
+
+    const bookingIdToMatch =
+      matchedBookingId || (submission.matched_booking_id ? String(submission.matched_booking_id) : '');
+    if ((action === 'match' || action === 'approve') && !isBookingUuidParam(bookingIdToMatch)) {
+      return res.status(400).json({ error: 'matched_booking_id is required to match or approve' });
+    }
+
+    if (action === 'match' || action === 'approve') {
+      await copyPreTripSubmissionToBooking(
+        submission,
+        bookingIdToMatch,
+        requestIpBestEffort(req)
+      );
+      updates.matched_booking_id = bookingIdToMatch;
+      updates.admin_status = action === 'approve' ? 'approved' : 'matched';
+    }
+
+    const { error: uErr } = await supabase
+      .from('pre_trip_submissions')
+      .update(updates)
+      .eq('id', submissionId);
+    if (uErr) return res.status(500).json({ error: uErr.message });
+
+    return res.json({ ok: true, admin_status: updates.admin_status, matched_booking_id: bookingIdToMatch });
+  } catch (err) {
+    console.error('[admin/pre-trip-submissions]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Failed' });
+  }
+});
+
 /** Public read: insurance compliance flag for post-checkout confirmation UI (UUID is the capability token). */
 app.get('/api/public/booking-insurance-status', async (req, res) => {
   try {
@@ -1718,7 +2288,7 @@ app.get('/api/public/booking-insurance-status', async (req, res) => {
     if (!isBookingUuidParam(bookingId)) return res.status(400).json({ error: 'Invalid booking id' });
     const { data, error } = await supabase
       .from('bookings')
-      .select('insurance_status')
+      .select('insurance_status, status')
       .eq('id', bookingId)
       .maybeSingle();
     if (error) {
@@ -1726,7 +2296,7 @@ app.get('/api/public/booking-insurance-status', async (req, res) => {
       return res.status(500).json({ error: 'Could not load booking' });
     }
     if (!data) return res.status(404).json({ error: 'Not found' });
-    return res.json({ insurance_status: data.insurance_status });
+    return res.json({ insurance_status: data.insurance_status, status: data.status });
   } catch (err) {
     console.error('[booking-insurance-status]', err);
     return res.status(500).json({ error: 'Failed' });
@@ -1773,6 +2343,55 @@ app.post('/api/booking-mark-insurance-submitted', async (req, res) => {
     return res.json({ ok: true, insurance_status: 'submitted' });
   } catch (err) {
     console.error('[booking-mark-insurance-submitted]', err);
+    return res.status(500).json({ error: 'Failed' });
+  }
+});
+
+/**
+ * After license upload on /verify — saves license URL on the booking (email must match customer).
+ */
+app.post('/api/booking-mark-license-submitted', async (req, res) => {
+  try {
+    if (!supabaseConfigured) return res.status(503).json({ error: 'Server not configured' });
+    const bookingId = String(req.body?.bookingId || '').trim();
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const licenseUrl = String(req.body?.licenseUrl || '').trim();
+    if (!isBookingUuidParam(bookingId) || !email || !licenseUrl) {
+      return res.status(400).json({ error: 'bookingId, email, and licenseUrl are required' });
+    }
+    const { data: booking, error: bErr } = await supabase
+      .from('bookings')
+      .select('id, customer_id, license_status')
+      .eq('id', bookingId)
+      .maybeSingle();
+    if (bErr || !booking) return res.status(404).json({ error: 'Booking not found' });
+    const { data: customer, error: cErr } = await supabase
+      .from('customers')
+      .select('email')
+      .eq('id', booking.customer_id)
+      .maybeSingle();
+    if (cErr || !customer?.email) return res.status(400).json({ error: 'Could not verify customer' });
+    if (customer.email.trim().toLowerCase() !== email) {
+      return res.status(403).json({ error: 'Email does not match this booking' });
+    }
+    if (booking.license_status === 'verified') {
+      return res.json({ ok: true, license_status: 'verified', license_url: licenseUrl });
+    }
+    const { error: uErr } = await supabase
+      .from('bookings')
+      .update({ license_url: licenseUrl, license_status: 'pending' })
+      .eq('id', bookingId);
+    if (uErr) {
+      console.error('[booking-mark-license-submitted]', uErr.message);
+      return res.status(500).json({ error: 'Could not update booking' });
+    }
+    await supabase
+      .from('customers')
+      .update({ id_document_url: licenseUrl })
+      .eq('id', booking.customer_id);
+    return res.json({ ok: true, license_status: 'pending', license_url: licenseUrl });
+  } catch (err) {
+    console.error('[booking-mark-license-submitted]', err);
     return res.status(500).json({ error: 'Failed' });
   }
 });

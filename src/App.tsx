@@ -16,6 +16,7 @@ import BookNow from './pages/BookNow';
 import BookingReceived from './pages/BookingReceived';
 import BookingSuccess from './pages/BookingSuccess';
 import InsuranceRequired from './pages/InsuranceRequired';
+import WaiversInsurance from './pages/WaiversInsurance';
 import BookingDepositCancel from './pages/BookingDepositCancel';
 import VerifyBooking from './pages/VerifyBooking';
 import Admin from './pages/Admin';
@@ -66,6 +67,7 @@ function AppLayout() {
           <Route path="/booking-success" element={<BookingSuccess onNavigate={onNavigate} />} />
           <Route path="/success" element={<BookingSuccess onNavigate={onNavigate} />} />
           <Route path="/insurance-required" element={<InsuranceRequired onNavigate={onNavigate} />} />
+          <Route path="/waivers-insurance" element={<WaiversInsurance onNavigate={onNavigate} />} />
           <Route path="/booking-deposit-cancel" element={<BookingDepositCancel onNavigate={onNavigate} />} />
           <Route path="/verify" element={<VerifyBooking onNavigate={onNavigate} />} />
           <Route path="/pricing" element={<Pricing onNavigate={onNavigate} />} />

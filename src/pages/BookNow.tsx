@@ -19,18 +19,11 @@ import { logSupabaseError, userFacingSupabaseMessage } from '../lib/supabaseErro
 import { uploadDocumentToDocumentsBucket } from '../lib/storageUpload';
 import { PRICING, captainFeeForHours } from '../config/pricing';
 import {
-  SECURITY_DEPOSIT_AUTHORIZATION_CLAUSE,
   SECURITY_DEPOSIT_CARD_INTRO,
   SECURITY_DEPOSIT_MARKETING_BULLETS,
   SECURITY_DEPOSIT_SECTION_HEADING,
   SECURITY_DEPOSIT_SHORT_SUMMARY,
-  SECURITY_DEPOSIT_TERMS_PARAGRAPH,
 } from '../content/securityDeposit';
-import {
-  CANCELLATION_REFUND_POLICY_SUBSECTIONS,
-  CANCELLATION_REFUND_POLICY_TITLE,
-  CANCELLATION_REFUND_POLICY_WAIVER_ACKNOWLEDGMENT,
-} from '../content/cancellationRefundPolicy';
 import Spinner from '../components/Spinner';
 import SafeImage from '../components/SafeImage';
 import { getBoatPlaceholderImage } from '../lib/boatPlaceholders';
@@ -47,6 +40,11 @@ import {
   type CalendarDayAvailability,
   type DayInsight,
 } from '../lib/calendarInsights';
+import {
+  evaluateGrouponPromo,
+  type RentalLocation,
+} from '../lib/grouponPromo';
+import WaiverBlock, { waiverFormComplete } from '../components/booking/WaiverBlock';
 
 interface BookNowProps {
   onNavigate: (page: string) => void;
@@ -181,6 +179,8 @@ export default function BookNow({ onNavigate }: BookNowProps) {
   const bookingFormRef = useRef<HTMLDivElement | null>(null);
   const availabilityCalendarRef = useRef<HTMLDivElement | null>(null);
   const [rentalDurationPreset, setRentalDurationPreset] = useState<RentalDurationPreset | null>(null);
+  const [rentalLocation, setRentalLocation] = useState<RentalLocation>(null);
+  const [promoCodeInput, setPromoCodeInput] = useState('');
   const calendarIntelCacheRef = useRef<{ expiresAt: number; data: Map<string, DayInsight> } | null>(null);
 
   const buoyInsurancePagePath = useMemo(() => {
@@ -351,9 +351,20 @@ export default function BookNow({ onNavigate }: BookNowProps) {
 
     if (mode === 'rental' && !boatParam) {
       const loc = searchParams.get('location');
-      if (loc === 'daytona') setPrefillNotice('Booking from Daytona rentals.');
-      else if (loc === 'titusville') setPrefillNotice('Booking from Titusville rentals.');
-      else setPrefillNotice(null);
+      if (loc === 'daytona') {
+        setRentalLocation('daytona');
+        setPrefillNotice('Booking from Daytona rentals.');
+      } else if (loc === 'titusville') {
+        setRentalLocation('titusville');
+        setPrefillNotice('Booking from Titusville rentals.');
+      } else {
+        setPrefillNotice(null);
+      }
+    }
+    if (mode === 'rental') {
+      const loc = searchParams.get('location');
+      if (loc === 'daytona') setRentalLocation('daytona');
+      else if (loc === 'titusville') setRentalLocation('titusville');
     }
   }, [searchParams]);
 
@@ -933,11 +944,29 @@ export default function BookNow({ onNavigate }: BookNowProps) {
   };
 
   const pricing = bookingMode === 'rental' ? calculateRentalPricing() : calculateCharterPricing();
-  const amountDueToday = bookingMode === 'rental' ? Number((pricing.total * 0.5).toFixed(2)) : pricing.total;
-  const balanceBeforePickup = Number((pricing.total - amountDueToday).toFixed(2));
-  const waiverComplete = waiverData.agreed && waiverData.signature.trim().length > 0;
-  const checkoutRequirementsMet =
-    termsAccepted && waiverComplete && damageFeeAcknowledged;
+  const promoEligibility = {
+    bookingMode,
+    rentalLocation,
+    boatType: (selectedBoat?.type ?? 'standard') as 'standard' | 'premium',
+    rentalType: bookingData.rentalType,
+    captainIncluded: bookingData.captainIncluded,
+  };
+  const promoEvaluation = evaluateGrouponPromo(promoCodeInput, pricing.total, promoEligibility);
+  const originalTotal = pricing.total;
+  const reservationTotal =
+    promoEvaluation.status === 'applied' ? promoEvaluation.finalTotal : pricing.total;
+  const promoDiscountAmount =
+    promoEvaluation.status === 'applied' ? promoEvaluation.discountAmount : 0;
+  const amountDueToday =
+    bookingMode === 'rental'
+      ? Number((reservationTotal * 0.5).toFixed(2))
+      : reservationTotal;
+  const balanceBeforePickup = Number((reservationTotal - amountDueToday).toFixed(2));
+  const checkoutRequirementsMet = waiverFormComplete(
+    waiverData,
+    termsAccepted,
+    damageFeeAcknowledged
+  );
   const licensePreviewUrl = verificationData.licenseProofUrl.trim();
   const insurancePreviewUrl = verificationData.insuranceProofUrl.trim();
   const rentalInsuranceMissing = bookingMode === 'rental' && !insurancePreviewUrl;
@@ -1020,6 +1049,12 @@ export default function BookNow({ onNavigate }: BookNowProps) {
       return;
     }
 
+    if (promoEvaluation.status === 'wrong_trip') {
+      setCheckoutError('This code only works for Port Orange pontoon rentals');
+      checkoutPerf.end('aborted_promo_wrong_trip');
+      return;
+    }
+
     setProcessing(true);
 
     let checkoutOutcome = 'completed';
@@ -1074,9 +1109,18 @@ export default function BookNow({ onNavigate }: BookNowProps) {
               base_price: pricing.basePrice,
               peak_surcharge: 0,
               security_deposit: bookingMode === 'charter' ? 0 : pricing.deposit,
-              total_price: pricing.total,
+              total_price: reservationTotal,
               deposit_amount: depositAmount,
-              balance_due: pricing.total - depositAmount,
+              balance_due: reservationTotal - depositAmount,
+              rentalLocation,
+              promoCode:
+                promoEvaluation.status === 'applied' ? promoEvaluation.promoCode : null,
+              discountAmount:
+                promoEvaluation.status === 'applied' ? promoEvaluation.discountAmount : null,
+              originalTotal:
+                promoEvaluation.status === 'applied' ? promoEvaluation.originalTotal : null,
+              finalTotal:
+                promoEvaluation.status === 'applied' ? promoEvaluation.finalTotal : reservationTotal,
               is_night_tour:
                 bookingMode === 'charter' ? bookingData.charterType === 'night_bio' : false,
               is_rocket_tour:
@@ -1109,7 +1153,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
             waiver: {
               agreed: waiverData.agreed,
               signature: waiverData.signature.trim(),
-              accepted: waiverComplete,
+              accepted: checkoutRequirementsMet,
             },
             legal: {
               termsAccepted,
@@ -2401,158 +2445,20 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                   </div>
                 )}
 
-                <h3 className="mt-10 text-sm font-bold uppercase tracking-widest text-cyan-200/90">Waiver</h3>
-                <div className="mt-4 max-h-80 overflow-y-auto rounded-[var(--lz-radius)] border border-white/10 bg-slate-950/60 p-5">
-                  <h4 className="text-base font-bold text-white">Florida Boating Liability Waiver</h4>
-                  <div className="prose prose-sm prose-invert mt-4 max-w-none space-y-4 text-slate-300">
-                    <p>
-                      By signing this waiver, I acknowledge and agree to the following terms and conditions:
-                    </p>
-                    <h4 className="!mt-0 font-semibold text-slate-100">Assumption of Risk</h4>
-                    <p>
-                      I understand that boating activities involve inherent risks including but not limited to:
-                      injury, death, property damage, weather hazards, marine hazards, and equipment failure. I
-                      voluntarily assume all such risks.
-                    </p>
-                    <h4 className="font-semibold text-slate-100">Release of Liability</h4>
-                    <p>
-                      I hereby release, waive, discharge, and covenant not to sue Launch Zone Charters, its
-                      owners, employees, and agents from any and all liability for injury, death, or property
-                      damage arising from my participation in boating activities.
-                    </p>
-                    <h4 className="font-semibold text-slate-100">Indemnification</h4>
-                    <p>
-                      I agree to indemnify and hold harmless Launch Zone Charters from any claims, damages,
-                      or expenses arising from my use of the rental vessel.
-                    </p>
-                    <h4 className="font-semibold text-slate-100">Acknowledgments</h4>
-                    <ul className="list-disc list-inside space-y-1">
-                      {bookingMode === 'rental' ? (
-                        <>
-                          <li>I am at least 25 years of age</li>
-                          <li>I possess a valid boating license (if operating the vessel)</li>
-                          <li>I am physically capable of operating the vessel safely</li>
-                          <li>I will follow all maritime laws and regulations</li>
-                          <li>I am responsible for all passengers and their safety</li>
-                          <li>I am responsible for any damage to the vessel beyond normal wear and tear</li>
-                          <li>I understand late return fees apply</li>
-                        </>
-                      ) : (
-                        <>
-                          <li>I will follow captain safety instructions at all times.</li>
-                          <li>I understand charter timing can shift for weather and launch delays.</li>
-                          <li>I acknowledge reschedule rules for launch and marine conditions.</li>
-                        </>
-                      )}
-                    </ul>
-                    <h4 className="!mt-6 font-semibold text-slate-100">{CANCELLATION_REFUND_POLICY_TITLE}</h4>
-                    <div className="space-y-3">
-                      {CANCELLATION_REFUND_POLICY_SUBSECTIONS.map(({ heading, body }) => (
-                        <p key={heading} className="text-sm leading-relaxed">
-                          <strong className="text-slate-200">{heading}:</strong> {body}
-                        </p>
-                      ))}
-                      <p className="mt-4 border-t border-white/10 pt-4 text-sm leading-relaxed text-slate-300">
-                        {CANCELLATION_REFUND_POLICY_WAIVER_ACKNOWLEDGMENT}
-                      </p>
-                    </div>
-                    {bookingMode === 'rental' && (
-                      <>
-                        <h4 className="!mt-6 font-semibold text-slate-100">Security deposit</h4>
-                        <p>{SECURITY_DEPOSIT_TERMS_PARAGRAPH}</p>
-                        <p className="text-sm">
-                          <strong className="text-slate-200">Authorization.</strong>{' '}
-                          {SECURITY_DEPOSIT_AUTHORIZATION_CLAUSE}
-                        </p>
-                      </>
-                    )}
-                    <p className="text-sm italic">
-                      For full terms and conditions, see our{' '}
-                      <button
-                        type="button"
-                        onClick={() => onNavigate('terms')}
-                        className="font-semibold text-cyan-400 underline decoration-cyan-500/40 hover:text-cyan-300"
-                      >
-                        Terms & Conditions page
-                      </button>
-                      .
-                    </p>
-                  </div>
-                </div>
+                <WaiverBlock
+                  bookingMode={bookingMode}
+                  waiverData={waiverData}
+                  onWaiverDataChange={setWaiverData}
+                  termsAccepted={termsAccepted}
+                  onTermsAcceptedChange={setTermsAccepted}
+                  damageFeeAcknowledged={damageFeeAcknowledged}
+                  onDamageFeeAcknowledgedChange={setDamageFeeAcknowledged}
+                  onNavigateTerms={() => onNavigate('terms')}
+                  fieldClass={fieldClass}
+                  signatureHelperText="Electronic signature is required before payment. By typing your name, you agree this constitutes a legal electronic signature when the waiver checkbox is checked."
+                />
 
-                <h3 className="mt-10 text-sm font-bold uppercase tracking-widest text-cyan-200/90">
-                  {bookingMode === 'rental' ? 'Agreement & documents' : 'Agreement'}
-                </h3>
-                <div className="mt-4 space-y-6">
-                  <div className="flex items-start gap-3">
-                    <input
-                      type="checkbox"
-                      id="agreeTerms"
-                      checked={termsAccepted}
-                      onChange={(e) => setTermsAccepted(e.target.checked)}
-                      className="mt-1 h-5 w-5 shrink-0 rounded border-white/20 text-[var(--lz-cta)] focus:ring-cyan-500/40"
-                    />
-                    <label htmlFor="agreeTerms" className="text-sm font-semibold text-slate-100">
-                      I have read and agree to the Terms &amp; Conditions.
-                    </label>
-                  </div>
-                  <p className="-mt-3 pl-8 text-xs text-slate-400">
-                    Review full terms here:{' '}
-                    <button
-                      type="button"
-                      onClick={() => onNavigate('terms')}
-                      className="font-semibold text-cyan-400 underline decoration-cyan-500/40 hover:text-cyan-300"
-                    >
-                      Terms &amp; Conditions
-                    </button>
-                    .
-                  </p>
-
-                  <div className="flex items-start gap-3">
-                    <input
-                      type="checkbox"
-                      id="agree"
-                      checked={waiverData.agreed}
-                      onChange={(e) => setWaiverData({ ...waiverData, agreed: e.target.checked })}
-                      className="mt-1 h-5 w-5 shrink-0 rounded border-white/20 text-[var(--lz-cta)] focus:ring-cyan-500/40"
-                    />
-                    <label htmlFor="agree" className="text-sm font-semibold text-slate-100">
-                      I have read and agree to the waiver terms above.
-                    </label>
-                  </div>
-
-                  <div>
-                    <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-400">
-                      Electronic signature
-                    </label>
-                    <input
-                      type="text"
-                      value={waiverData.signature}
-                      onChange={(e) => setWaiverData({ ...waiverData, signature: e.target.value })}
-                      className={fieldClass}
-                      placeholder="Type your full legal name"
-                    />
-                    <p className="mt-1 text-xs text-slate-500">
-                      Electronic signature is required before payment. By typing your name, you agree this
-                      constitutes a legal electronic signature when the waiver checkbox is checked.
-                    </p>
-                  </div>
-
-                  <div className="flex items-start gap-3">
-                    <input
-                      type="checkbox"
-                      id="damageAck"
-                      checked={damageFeeAcknowledged}
-                      onChange={(e) => setDamageFeeAcknowledged(e.target.checked)}
-                      className="mt-1 h-5 w-5 shrink-0 rounded border-white/20 text-[var(--lz-cta)] focus:ring-cyan-500/40"
-                    />
-                    <label htmlFor="damageAck" className="text-sm font-semibold text-slate-100">
-                      I understand I am financially responsible for damage, prop strikes, grounding, towing,
-                      excessive cleaning, and missing equipment.
-                    </label>
-                  </div>
-
-                  {bookingMode === 'rental' && (
+                {bookingMode === 'rental' && (
                     <div className="space-y-4 rounded-[var(--lz-radius)] border border-white/10 bg-slate-950/50 p-4">
                       <p className="text-sm font-semibold text-white">License &amp; insurance (upload or link)</p>
                       <p className="text-xs text-slate-300">
@@ -2671,7 +2577,14 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                       </div>
                     </div>
                   )}
-                </div>
+
+                {bookingMode === 'rental' && (
+                  <div className="mb-4 rounded-[var(--lz-radius)] border border-cyan-400/25 bg-cyan-950/30 px-4 py-3 text-sm text-cyan-50">
+                    <p>
+                      Seen us on Groupon? Book direct and use your code at checkout for the same deal.
+                    </p>
+                  </div>
+                )}
 
                 <div className="mb-6 rounded-[var(--lz-radius)] border border-cyan-400/20 bg-slate-950/80 p-6 text-slate-100 shadow-[0_0_28px_rgba(0,207,255,0.08)]">
                   <h3 className="mb-4 text-lg font-bold uppercase tracking-wide text-white">Booking summary</h3>
@@ -2783,6 +2696,47 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                         <span>Included</span>
                       </div>
                     )}
+                    {bookingMode === 'rental' && (
+                      <div className="rounded-lg border border-white/10 bg-slate-950/60 p-3">
+                        <label htmlFor="promo-code" className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-300">
+                          Promo code
+                        </label>
+                        <input
+                          id="promo-code"
+                          type="text"
+                          value={promoCodeInput}
+                          onChange={(e) => setPromoCodeInput(e.target.value)}
+                          className={fieldClass}
+                          placeholder="e.g. GROUPON"
+                          autoComplete="off"
+                          spellCheck={false}
+                        />
+                        {promoEvaluation.status === 'applied' && (
+                          <p className="mt-2 flex items-center gap-1.5 text-sm font-semibold text-emerald-300">
+                            <Check className="h-4 w-4 shrink-0" aria-hidden />
+                            Promo applied
+                          </p>
+                        )}
+                        {promoEvaluation.status === 'wrong_trip' && (
+                          <p className="mt-2 text-sm text-amber-200">
+                            This code only works for Port Orange pontoon rentals
+                          </p>
+                        )}
+                      </div>
+                    )}
+                    {promoEvaluation.status === 'applied' && (
+                      <>
+                        <div className="my-3 border-t border-white/10"></div>
+                        <div className="flex justify-between text-slate-400">
+                          <span>Original price</span>
+                          <span className="line-through">${originalTotal.toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between text-emerald-300">
+                          <span>Promo discount</span>
+                          <span>−${promoDiscountAmount.toFixed(2)}</span>
+                        </div>
+                      </>
+                    )}
                     <div className="my-3 border-t border-white/10"></div>
                     <div className="flex justify-between text-sm text-cyan-100/90">
                       <span>{bookingMode === 'charter' ? 'Pay today (in full)' : 'Pay today (50% deposit)'}</span>
@@ -2797,7 +2751,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                     <div className="my-3 border-t border-white/10"></div>
                     <div className="flex justify-between text-xl font-bold">
                       <span>Reservation total</span>
-                      <span className="text-[var(--lz-cta)]">${pricing.total.toFixed(2)}</span>
+                      <span className="text-[var(--lz-cta)]">${reservationTotal.toFixed(2)}</span>
                     </div>
                     <p className="text-xs text-slate-400">
                       {bookingMode === 'charter'

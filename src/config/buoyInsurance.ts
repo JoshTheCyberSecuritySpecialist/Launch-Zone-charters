@@ -87,3 +87,20 @@ export function getInsuranceConfigForBooking(booking: unknown): BuoyInsuranceCon
   }
   return PONTOON_INSURANCE;
 }
+
+export type PreTripTripType = 'pontoon_rental' | 'center_console_rental' | 'captain_charter';
+
+export function getInsuranceConfigForTripType(tripType: PreTripTripType): BuoyInsuranceConfig | null {
+  if (tripType === 'center_console_rental') return CENTER_CONSOLE_INSURANCE;
+  if (tripType === 'pontoon_rental') return PONTOON_INSURANCE;
+  return null;
+}
+
+export function regNoForTripType(tripType: PreTripTripType): string | null {
+  const cfg = getInsuranceConfigForTripType(tripType);
+  return cfg?.regNo ?? null;
+}
+
+export function bookingModeForTripType(tripType: PreTripTripType): 'rental' | 'charter' {
+  return tripType === 'captain_charter' ? 'charter' : 'rental';
+}

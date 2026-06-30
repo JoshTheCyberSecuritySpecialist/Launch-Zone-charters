@@ -7,6 +7,7 @@ const ROUTES = {
   bookingReceived: '/booking-received',
   bookingSuccess: '/booking-success',
   bookingDepositCancel: '/booking-deposit-cancel',
+  waiversInsurance: '/waivers-insurance',
   pricing: '/pricing',
   launches: '/launches',
   conditions: '/conditions',
@@ -46,6 +47,7 @@ const PAGE_TO_PATH: Record<string, string> = {
   'booking-received': ROUTES.bookingReceived,
   'booking-success': ROUTES.bookingSuccess,
   'booking-deposit-cancel': ROUTES.bookingDepositCancel,
+  'waivers-insurance': ROUTES.waiversInsurance,
   pricing: ROUTES.pricing,
   launches: ROUTES.launches,
   conditions: ROUTES.conditions,
@@ -76,6 +78,7 @@ export function pageKeyFromPath(pathname: string): string {
   if (path === ROUTES.verify) return 'verify';
   if (path.startsWith('/log/')) return 'log-article';
   if (path === '/insurance-required') return 'insurance-required';
+  if (path === '/waivers-insurance') return 'waivers-insurance';
   if (path === '/admin/boats') return 'admin';
   if (path === '/boats' || path === '/boat-rentals-daytona-beach') return 'fleet-daytona';
   return PATH_TO_PAGE[path] ?? 'home';

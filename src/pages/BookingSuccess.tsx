@@ -20,14 +20,16 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
   const [searchParams] = useSearchParams();
   const sessionId = (searchParams.get('session_id') || '').trim();
   const bookingIdParam = (searchParams.get('bookingId') || '').trim();
-  const [bookingId, setBookingId] = useState('');
+  const [bookingId, setBookingId] = useState(bookingIdParam);
   const [insuranceStatus, setInsuranceStatus] = useState<string | null>(null);
+  const [bookingStatus, setBookingStatus] = useState<string | null>(null);
   const [insuranceConfig, setInsuranceConfig] = useState<BuoyInsuranceConfig>(PONTOON_INSURANCE);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const finalizedRef = useRef(false);
   const emailSentRef = useRef(false);
-  const redirectingRef = useRef(false);
+
+  const activeBookingId = bookingId || bookingIdParam;
 
   useEffect(() => {
     if (!env.apiUrlConfigured || !env.apiUrl) {
@@ -38,7 +40,6 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
     const api = env.apiUrl;
 
     if (sessionId) {
-      if (redirectingRef.current) return;
       if (finalizedRef.current) return;
       finalizedRef.current = true;
 
@@ -60,6 +61,8 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
             return;
           }
 
+          setBookingId(payload.bookingId);
+
           if (!emailSentRef.current) {
             emailSentRef.current = true;
             void fetch(`${api}/api/send-booking-confirmation`, {
@@ -73,10 +76,23 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
             });
           }
 
-          redirectingRef.current = true;
-          navigate(`/insurance-required?bookingId=${encodeURIComponent(payload.bookingId)}`, {
-            replace: true,
-          });
+          try {
+            const insRes = await fetch(
+              `${api}/api/public/booking-insurance-status?bookingId=${encodeURIComponent(payload.bookingId)}`
+            );
+            const insPayload = (await insRes.json().catch(() => ({}))) as {
+              insurance_status?: string;
+              status?: string;
+            };
+            if (insRes.ok) {
+              if (insPayload.insurance_status) setInsuranceStatus(insPayload.insurance_status);
+              if (insPayload.status) setBookingStatus(insPayload.status);
+            }
+          } catch {
+            setInsuranceStatus(null);
+          }
+
+          setLoading(false);
         } catch (err) {
           setError(err instanceof Error ? err.message : 'Could not finalize booking.');
           setLoading(false);
@@ -100,12 +116,14 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
         );
         const payload = (await res.json().catch(() => ({}))) as {
           insurance_status?: string;
+          status?: string;
           error?: string;
         };
         if (!res.ok) {
           setInsuranceStatus(null);
-        } else if (payload.insurance_status) {
-          setInsuranceStatus(payload.insurance_status);
+        } else {
+          if (payload.insurance_status) setInsuranceStatus(payload.insurance_status);
+          if (payload.status) setBookingStatus(payload.status);
         }
       } catch {
         setInsuranceStatus(null);
@@ -113,17 +131,17 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
         setLoading(false);
       }
     })();
-  }, [sessionId, bookingIdParam, navigate]);
+  }, [sessionId, bookingIdParam]);
 
   useEffect(() => {
     let cancelled = false;
-    if (!bookingIdParam) return;
+    if (!activeBookingId) return;
 
     async function resolveInsuranceConfig() {
       const { data } = await supabase
         .from('bookings')
         .select('boat_id, boats(id, name, type)')
-        .eq('id', bookingIdParam)
+        .eq('id', activeBookingId)
         .maybeSingle();
 
       if (cancelled) return;
@@ -144,7 +162,18 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
     return () => {
       cancelled = true;
     };
-  }, [bookingIdParam]);
+  }, [activeBookingId]);
+
+  const goInsuranceRequired = useMemo(
+    () =>
+      wrapRouterNavigate(
+        'booking_success',
+        'insurance_required',
+        navigate,
+        `/insurance-required?bookingId=${encodeURIComponent(activeBookingId)}`
+      ),
+    [navigate, activeBookingId]
+  );
 
   const goVerifyUpload = useMemo(
     () =>
@@ -152,12 +181,13 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
         'booking_success',
         'verify_upload',
         navigate,
-        `/verify?bookingId=${encodeURIComponent(bookingId)}`
+        `/verify?bookingId=${encodeURIComponent(activeBookingId)}`
       ),
-    [navigate, bookingId]
+    [navigate, activeBookingId]
   );
 
   const showInsuranceNudge = insuranceStatus !== null && insuranceStatus !== 'verified';
+  const showReadyForDeparture = bookingStatus === 'ready_for_departure';
 
   const shell = (inner: ReactNode) => (
     <div className="relative min-h-screen px-4 py-16">
@@ -172,18 +202,16 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
     return shell(
       <div className="lz-card-glass rounded-[var(--lz-radius-card)] p-8 text-center text-slate-200">
         <h1 className="font-display text-xl font-bold uppercase tracking-[0.12em] text-white md:text-2xl">
-          {sessionId ? 'Redirecting you to the next step…' : 'Loading your confirmation…'}
+          {sessionId ? 'Confirming your payment…' : 'Loading your confirmation…'}
         </h1>
         <p className="mt-3 text-sm text-slate-400">
-          {sessionId
-            ? 'Payment confirmed — next up: rental insurance.'
-            : 'Almost there.'}
+          {sessionId ? 'Payment confirmed — saving your reservation.' : 'Almost there.'}
         </p>
       </div>
     );
   }
 
-  if (error || !bookingId) {
+  if (error || !activeBookingId) {
     return shell(
       <div className="lz-card-glass rounded-[var(--lz-radius-card)] p-8 text-center">
         <h1 className="font-display text-xl font-bold uppercase tracking-[0.12em] text-white md:text-2xl">
@@ -205,6 +233,17 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
 
   return shell(
     <div className="lz-card-glass rounded-[var(--lz-radius-card)] p-8 text-slate-200 md:p-10">
+      {showReadyForDeparture ? (
+        <div className="mb-6 rounded-xl border border-emerald-400/40 bg-emerald-500/10 px-4 py-3 text-center text-emerald-50">
+          <p className="text-sm font-semibold md:text-base">
+            <span aria-hidden>🚤</span> Ready for departure
+          </p>
+          <p className="mt-1 text-xs text-emerald-100/90 md:text-sm">
+            Your booking is approved and cleared for pickup. See your confirmation email for ramp details.
+          </p>
+        </div>
+      ) : null}
+
       {showInsuranceNudge ? (
         <div className="mb-6 rounded-xl border border-amber-400/40 bg-amber-500/10 px-4 py-3 text-center text-amber-50">
           <p className="text-sm font-semibold md:text-base">
@@ -236,7 +275,7 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
           <Hash className="mt-0.5 h-5 w-5 shrink-0 text-cyan-400/80" aria-hidden />
           <div>
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Booking ID</p>
-            <p className="mt-1 break-all font-mono text-sm font-semibold text-white">{bookingId}</p>
+            <p className="mt-1 break-all font-mono text-sm font-semibold text-white">{activeBookingId}</p>
           </div>
         </div>
       </div>
@@ -282,6 +321,13 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
         </p>
         <p className="mt-2 text-xs font-semibold text-cyan-100/90">{insuranceConfig.label}</p>
         <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+          <button
+            type="button"
+            onClick={goInsuranceRequired}
+            className="lz-btn-primary inline-flex justify-center text-center text-sm !normal-case !tracking-wide"
+          >
+            Waivers &amp; insurance
+          </button>
           <a
             href={insuranceConfig.checkoutUrl}
             target="_blank"

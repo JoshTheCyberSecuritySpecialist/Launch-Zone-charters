@@ -13,6 +13,8 @@ const contactSubmission = require('./services/contactSubmission');
 const verificationReminder = require('./services/verificationReminder');
 const verificationSms = require('./services/verificationSms');
 const insuranceTripReminders = require('./services/insuranceTripReminders');
+const preTripNotifications = require('./services/preTripNotifications');
+const waiversDocsReminders = require('./services/waiversDocsReminders');
 const { getBioConditions } = require('./services/bioluminescenceService');
 const { getRocketConditions } = require('./services/rocketService');
 const { getLaunchSchedulePreview } = require('./services/rocketScheduleService');
@@ -1843,6 +1845,111 @@ function pickBestBookingRow(rows) {
 }
 
 /**
+ * Magic link: load booking for /waivers-insurance?bookingId= (UUID is the capability token).
+ */
+app.get('/api/public/waivers-booking', async (req, res) => {
+  const notFound = { message: 'Booking not found or no longer active.' };
+  try {
+    if (!supabaseConfigured) return res.status(503).json(notFound);
+
+    const bookingId = String(req.query.bookingId || '').trim();
+    if (!isBookingUuidParam(bookingId)) {
+      return res.status(400).json({ message: 'Invalid booking id.' });
+    }
+
+    const { data: booking, error: bErr } = await supabase
+      .from('bookings')
+      .select(
+        'id, customer_id, boat_id, start_time, end_time, rental_type, captain_included, status, payment_status, waiver_signed, license_status, insurance_status, license_url, insurance_url, boats(id, name, type)'
+      )
+      .eq('id', bookingId)
+      .maybeSingle();
+
+    if (bErr || !booking) return res.status(404).json(notFound);
+    if (['cancelled', 'completed'].includes(String(booking.status || ''))) {
+      return res.status(404).json(notFound);
+    }
+
+    const { data: customer, error: cErr } = await supabase
+      .from('customers')
+      .select('id, full_name, email, phone, id_document_url, insurance_proof_url')
+      .eq('id', booking.customer_id)
+      .maybeSingle();
+
+    if (cErr || !customer) return res.status(404).json(notFound);
+
+    const boat = Array.isArray(booking.boats) ? booking.boats[0] : booking.boats;
+    return res.json({ booking: toPublicBookingRow(booking, customer, boat) });
+  } catch (err) {
+    console.error('[waivers-booking]', err);
+    return res.status(500).json(notFound);
+  }
+});
+
+/**
+ * Public status for manual pre-trip submissions (submission id + email must match).
+ */
+app.get('/api/public/pre-trip-status', async (req, res) => {
+  try {
+    if (!supabaseConfigured) return res.status(503).json({ error: 'Server not configured' });
+
+    const submissionId = String(req.query.submissionId || '').trim();
+    const email = normalizeEmailParam(req.query.email);
+    if (!isBookingUuidParam(submissionId) || !email) {
+      return res.status(400).json({ error: 'submissionId and email are required' });
+    }
+
+    const { data: submission, error: sErr } = await supabase
+      .from('pre_trip_submissions')
+      .select('*')
+      .eq('id', submissionId)
+      .maybeSingle();
+
+    if (sErr || !submission) return res.status(404).json({ error: 'Not found' });
+    if (normalizeEmailParam(submission.email) !== email) {
+      return res.status(403).json({ error: 'Email does not match this submission' });
+    }
+
+    let matchedBooking = null;
+    if (submission.matched_booking_id) {
+      const { data: mb } = await supabase
+        .from('bookings')
+        .select('id, status, start_time, waiver_signed, license_status, insurance_status')
+        .eq('id', submission.matched_booking_id)
+        .maybeSingle();
+      matchedBooking = mb;
+    }
+
+    return res.json({
+      submission: {
+        id: submission.id,
+        customer_name: submission.customer_name,
+        trip_type: submission.trip_type,
+        groupon_code: submission.groupon_code,
+        waiver_signed: submission.waiver_signed,
+        license_status: submission.license_status,
+        insurance_status: submission.insurance_status,
+        has_license_url: Boolean(submission.license_url),
+        has_insurance_url: Boolean(submission.insurance_url),
+        admin_status: submission.admin_status,
+        matched_booking_id: submission.matched_booking_id,
+        created_at: submission.created_at,
+      },
+      matched_booking: matchedBooking
+        ? {
+            id: matchedBooking.id,
+            status: matchedBooking.status,
+            start_time: matchedBooking.start_time,
+          }
+        : null,
+    });
+  } catch (err) {
+    console.error('[pre-trip-status]', err);
+    return res.status(500).json({ error: 'Failed' });
+  }
+});
+
+/**
  * Public lookup for /waivers-insurance — email + phone must match; optional booking id or promo code.
  */
 app.post('/api/public/find-booking', async (req, res) => {
@@ -1996,6 +2103,13 @@ app.post('/api/booking-sign-waiver', async (req, res) => {
       }
     }
 
+    void preTripNotifications.maybeSendBookingWaiversConfirmation({
+      supabase,
+      resend,
+      resendFrom,
+      bookingId,
+    });
+
     return res.json({ ok: true, waiver_signed: true });
   } catch (err) {
     console.error('[booking-sign-waiver]', err);
@@ -2108,6 +2222,15 @@ app.post('/api/public/pre-trip-submission', async (req, res) => {
       console.error('[pre-trip-submission] insert:', insErr?.message);
       return res.status(500).json({ error: 'Could not save submission. Try again or call us.' });
     }
+
+    void preTripNotifications.onPreTripSubmissionCreated({
+      supabase,
+      resend,
+      resendFrom,
+      adminEmail: (process.env.ADMIN_EMAIL || '').trim(),
+      businessName: (process.env.BUSINESS_NAME || 'Launch Zone Charters').trim(),
+      submission: { ...row, id: inserted.id },
+    });
 
     return res.json({ ok: true, submissionId: inserted.id });
   } catch (err) {
@@ -2280,6 +2403,99 @@ app.patch('/api/admin/pre-trip-submissions/:id', async (req, res) => {
   }
 });
 
+/**
+ * Admin: suggest bookings to match a pre-trip submission (Groupon code, email, phone).
+ */
+app.get('/api/admin/pre-trip-submissions/:id/suggestions', async (req, res) => {
+  try {
+    const adminUser = await verifyAdminRequest(req, res);
+    if (!adminUser) return;
+
+    const submissionId = String(req.params.id || '').trim();
+    if (!isBookingUuidParam(submissionId)) {
+      return res.status(400).json({ error: 'Invalid submission id' });
+    }
+
+    const { data: submission, error: sErr } = await supabase
+      .from('pre_trip_submissions')
+      .select('id, email, phone, groupon_code, requested_trip_date')
+      .eq('id', submissionId)
+      .maybeSingle();
+    if (sErr || !submission) return res.status(404).json({ error: 'Submission not found' });
+
+    const suggestions = [];
+    const seen = new Set();
+
+    const pushCandidate = (booking, customer, boat, reason) => {
+      if (!booking?.id || seen.has(booking.id)) return;
+      seen.add(booking.id);
+      suggestions.push({
+        id: booking.id,
+        customer_name: customer?.full_name || null,
+        email: customer?.email || null,
+        start_time: booking.start_time,
+        promo_code: booking.promo_code || null,
+        status: booking.status,
+        boat_name: boat?.name || null,
+        match_reason: reason,
+      });
+    };
+
+    const groupon = String(submission.groupon_code || '').trim().toUpperCase();
+    if (groupon) {
+      const { data: promoBookings } = await supabase
+        .from('bookings')
+        .select('id, customer_id, start_time, status, promo_code, boats(name)')
+        .ilike('promo_code', groupon)
+        .not('status', 'eq', 'cancelled')
+        .order('start_time', { ascending: false })
+        .limit(5);
+
+      for (const b of promoBookings || []) {
+        const { data: customer } = await supabase
+          .from('customers')
+          .select('full_name, email')
+          .eq('id', b.customer_id)
+          .maybeSingle();
+        const boat = Array.isArray(b.boats) ? b.boats[0] : b.boats;
+        pushCandidate(b, customer, boat, 'Groupon code match');
+      }
+    }
+
+    const emailNorm = normalizeEmailParam(submission.email);
+    if (emailNorm) {
+      const { data: customers } = await supabase
+        .from('customers')
+        .select('id, full_name, email, phone')
+        .ilike('email', emailNorm);
+
+      for (const c of customers || []) {
+        const { data: bookings } = await supabase
+          .from('bookings')
+          .select('id, customer_id, start_time, status, promo_code, boats(name)')
+          .eq('customer_id', c.id)
+          .not('status', 'eq', 'cancelled')
+          .order('start_time', { ascending: false })
+          .limit(3);
+
+        for (const b of bookings || []) {
+          const boat = Array.isArray(b.boats) ? b.boats[0] : b.boats;
+          const reason =
+            submission.phone && phoneDigitsMatch(c.phone, submission.phone)
+              ? 'Email and phone match'
+              : 'Email match';
+          pushCandidate(b, c, boat, reason);
+        }
+      }
+    }
+
+    return res.json({ suggestions: suggestions.slice(0, 8) });
+  } catch (err) {
+    console.error('[admin/pre-trip-suggestions]', err);
+    return res.status(500).json({ error: 'Failed' });
+  }
+});
+
 /** Public read: insurance compliance flag for post-checkout confirmation UI (UUID is the capability token). */
 app.get('/api/public/booking-insurance-status', async (req, res) => {
   try {
@@ -2340,10 +2556,42 @@ app.post('/api/booking-mark-insurance-submitted', async (req, res) => {
       console.error('[booking-mark-insurance-submitted]', uErr.message);
       return res.status(500).json({ error: 'Could not update booking' });
     }
+
+    void preTripNotifications.maybeSendBookingWaiversConfirmation({
+      supabase,
+      resend,
+      resendFrom,
+      bookingId,
+    });
+
     return res.json({ ok: true, insurance_status: 'submitted' });
   } catch (err) {
     console.error('[booking-mark-insurance-submitted]', err);
     return res.status(500).json({ error: 'Failed' });
+  }
+});
+
+app.get('/api/cron/waivers-docs-reminders', async (req, res) => {
+  try {
+    const secret = String(process.env.CRON_SECRET || '').trim();
+    const auth = String(req.headers.authorization || '');
+    const bearer = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
+    const tok = bearer || String(req.query.secret || '').trim();
+    if (!secret || tok !== secret) return res.status(401).json({ error: 'Unauthorized' });
+    const bookingResult = await waiversDocsReminders.runWaiversDocsReminders({
+      supabase,
+      resend,
+      resendFrom,
+    });
+    const preTripResult = await waiversDocsReminders.runPreTripInsuranceReminders({
+      supabase,
+      resend,
+      resendFrom,
+    });
+    return res.json({ bookings: bookingResult, preTrip: preTripResult });
+  } catch (err) {
+    console.error('[cron/waivers-docs-reminders]', err);
+    return res.status(500).json({ error: err.message || 'Failed' });
   }
 });
 
@@ -2389,6 +2637,14 @@ app.post('/api/booking-mark-license-submitted', async (req, res) => {
       .from('customers')
       .update({ id_document_url: licenseUrl })
       .eq('id', booking.customer_id);
+
+    void preTripNotifications.maybeSendBookingWaiversConfirmation({
+      supabase,
+      resend,
+      resendFrom,
+      bookingId,
+    });
+
     return res.json({ ok: true, license_status: 'pending', license_url: licenseUrl });
   } catch (err) {
     console.error('[booking-mark-license-submitted]', err);
@@ -3095,3 +3351,17 @@ cron.schedule(
   { timezone: 'America/New_York' }
 );
 console.log('⏰ Trip insurance reminders: every 15 minutes (America/New_York)');
+
+cron.schedule(
+  '0 */6 * * *',
+  () => {
+    waiversDocsReminders.runWaiversDocsReminders({ supabase, resend, resendFrom }).catch((e) => {
+      console.error('[cron] waivers-docs-reminders:', e?.message || e);
+    });
+    waiversDocsReminders.runPreTripInsuranceReminders({ supabase, resend, resendFrom }).catch((e) => {
+      console.error('[cron] pre-trip-insurance-reminders:', e?.message || e);
+    });
+  },
+  { timezone: 'America/New_York' }
+);
+console.log('⏰ Waivers/docs reminders: every 6 hours (America/New_York)');

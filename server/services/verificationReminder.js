@@ -83,28 +83,28 @@ async function maybeSendVerificationReminder(opts) {
     console.warn('[verification-reminder] skipped: APP_PUBLIC_URL/FRONTEND_URL not configured');
     return { sent: false, reason: 'no_public_base' };
   }
-  const verifyUrl = `${base}/verify?bookingId=${encodeURIComponent(id)}`;
-  const subject = 'Complete Your Booking Verification - Launch Zone Charters';
+  const verifyUrl = `${base}/waivers-insurance?bookingId=${encodeURIComponent(id)}`;
+  const subject = 'Complete Your Pre-Trip Requirements - Launch Zone Charters';
 
   const textBody = `You're almost set!
 
-Please complete:
+Please complete your pre-trip requirements:
 - Waiver
-- Insurance
-- Boater License
+- License / ID
+- Buoy insurance (rentals)
 
 Finish here:
 ${verifyUrl}`;
 
   const htmlBody = `
     <p>You're almost set!</p>
-    <p><strong>Please complete:</strong></p>
+    <p><strong>Please complete your pre-trip requirements:</strong></p>
     <ul>
       <li>Waiver</li>
-      <li>Insurance</li>
-      <li>Boater License</li>
+      <li>License / ID</li>
+      <li>Buoy insurance (rentals)</li>
     </ul>
-    <p><a href="${escapeHtml(verifyUrl)}">Finish your verification here</a></p>
+    <p><a href="${escapeHtml(verifyUrl)}">Open Waivers &amp; Insurance</a></p>
     <p>If you have questions, call <a href="tel:803-542-1761">803-542-1761</a>.</p>
   `;
 

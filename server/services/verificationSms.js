@@ -6,15 +6,14 @@ const sms = require('./sms');
 
 function verifyLink(bookingId, publicAppBase) {
   const base = publicAppBase.replace(/\/$/, '');
-  return `${base}/verify?bookingId=${encodeURIComponent(String(bookingId).trim())}`;
+  return `${base}/waivers-insurance?bookingId=${encodeURIComponent(String(bookingId).trim())}`;
 }
 
 function buildVerificationMessage(link) {
   return `Launch Zone Charters:
 
-You're almost booked!
+Complete your pre-trip requirements (waiver, license, insurance):
 
-Complete verification here:
 ${link}
 
 Reply with questions anytime.`;

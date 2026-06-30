@@ -1,24 +1,28 @@
-import { useMemo, useState } from 'react';
-import {
-  CheckCircle2,
-  Circle,
-  ExternalLink,
-  Loader2,
-  Search,
-  Upload,
-  Shield,
-} from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { ExternalLink, Loader2, Search, Upload, Shield } from 'lucide-react';
 import WaiverBlock, { waiverFormComplete, type WaiverFormData } from '../components/booking/WaiverBlock';
+import PreTripStatusPanel from '../components/booking/PreTripStatusPanel';
+import ManualPreTripSubmission from '../components/booking/ManualPreTripSubmission';
 import {
+  fetchPreTripStatus,
+  fetchWaiversBookingById,
   findPublicBooking,
   signBookingWaiver,
   type PublicBookingMatch,
+  type PreTripStatusPayload,
 } from '../lib/publicBooking';
+import {
+  bookingAllCustomerStepsDone,
+  buildBookingChecklist,
+  buildSubmissionChecklist,
+  deriveBookingOverallStatus,
+  deriveSubmissionOverallStatus,
+} from '../lib/preTripStatus';
 import { getInsuranceConfigForBooking } from '../config/buoyInsurance';
 import { uploadDocumentToDocumentsBucket } from '../lib/storageUpload';
 import { supabase } from '../lib/supabase';
 import { env } from '../config/env.js';
-import ManualPreTripSubmission from '../components/booking/ManualPreTripSubmission';
 import { wrapSyncClick } from '../lib/clickPerf';
 
 interface WaiversInsuranceProps {
@@ -45,118 +49,23 @@ function formatTripDate(iso: string) {
   }
 }
 
-type ChecklistItem = {
-  key: string;
-  label: string;
-  done: boolean;
-  note?: string;
-};
-
-function buildChecklist(booking: PublicBookingMatch, isRental: boolean): ChecklistItem[] {
-  const paid =
-    booking.payment_status === 'deposit_paid' ||
-    booking.payment_status === 'paid' ||
-    booking.status === 'pending_verification' ||
-    booking.status === 'confirmed' ||
-    booking.status === 'ready_for_departure';
-
-  const items: ChecklistItem[] = [
-    {
-      key: 'payment',
-      label: 'Payment',
-      done: paid,
-      note: paid ? 'Deposit or payment received' : 'Pending payment',
-    },
-    {
-      key: 'waiver',
-      label: 'Waiver',
-      done: booking.waiver_signed,
-      note: booking.waiver_signed ? 'Signed' : 'Required',
-    },
-  ];
-
-  if (isRental) {
-    items.push(
-      {
-        key: 'license',
-        label: 'License / ID',
-        done: booking.license_status === 'verified' || booking.has_license_url,
-        note:
-          booking.license_status === 'verified'
-            ? 'Verified'
-            : booking.has_license_url
-              ? 'Uploaded — under review'
-              : 'Required for self-drive rental',
-      },
-      {
-        key: 'insurance',
-        label: 'Buoy insurance',
-        done:
-          booking.insurance_status === 'verified' ||
-          booking.insurance_status === 'submitted' ||
-          booking.has_insurance_url,
-        note:
-          booking.insurance_status === 'verified'
-            ? 'Verified'
-            : booking.insurance_status === 'submitted' || booking.has_insurance_url
-              ? 'Proof submitted — under review'
-              : 'Required before departure',
-      }
-    );
-  } else {
-    items.push({
-      key: 'insurance',
-      label: 'Rental insurance',
-      done: true,
-      note: 'Captain-led charter — Buoy rental insurance not required unless we contact you.',
-    });
-  }
-
-  items.push(
-    {
-      key: 'review',
-      label: 'Admin review',
-      done: booking.status === 'confirmed' || booking.status === 'ready_for_departure',
-      note:
-        booking.status === 'confirmed' || booking.status === 'ready_for_departure'
-          ? 'Approved'
-          : 'Pending staff review',
-    },
-    {
-      key: 'departure',
-      label: 'Ready for departure',
-      done: booking.status === 'ready_for_departure',
-      note:
-        booking.status === 'ready_for_departure'
-          ? 'Cleared for pickup'
-          : 'We will notify you when cleared',
-    }
-  );
-
-  return items;
-}
-
-function allStepsSubmitted(booking: PublicBookingMatch, isRental: boolean): boolean {
-  if (!booking.waiver_signed) return false;
-  if (!isRental) return true;
-  const insuranceOk =
-    booking.insurance_status === 'verified' ||
-    booking.insurance_status === 'submitted' ||
-    booking.has_insurance_url;
-  const licenseOk = booking.has_license_url || booking.license_status === 'verified';
-  return insuranceOk && licenseOk;
-}
-
 export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) {
+  const [searchParams] = useSearchParams();
+  const bookingIdFromUrl = searchParams.get('bookingId')?.trim() || '';
+  const submissionIdFromUrl = searchParams.get('submissionId')?.trim() || '';
+
   const [findEmail, setFindEmail] = useState('');
   const [findPhone, setFindPhone] = useState('');
   const [findCode, setFindCode] = useState('');
   const [findLoading, setFindLoading] = useState(false);
   const [findError, setFindError] = useState<string | null>(null);
+  const [magicLinkLoading, setMagicLinkLoading] = useState(Boolean(bookingIdFromUrl));
 
   const [booking, setBooking] = useState<PublicBookingMatch | null>(null);
   const [contactEmail, setContactEmail] = useState('');
   const [contactPhone, setContactPhone] = useState('');
+  const [magicLinkMode, setMagicLinkMode] = useState(false);
+  const [phoneConfirmNeeded, setPhoneConfirmNeeded] = useState(false);
 
   const [waiverData, setWaiverData] = useState<WaiverFormData>({ agreed: false, signature: '' });
   const [termsAccepted, setTermsAccepted] = useState(false);
@@ -169,12 +78,16 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
   const [proofBusy, setProofBusy] = useState(false);
   const [proofMessage, setProofMessage] = useState<string | null>(null);
 
-  const [submitted, setSubmitted] = useState(false);
   const [manualMode, setManualMode] = useState(false);
   const [manualSubmissionId, setManualSubmissionId] = useState<string | null>(null);
 
+  const [statusEmail, setStatusEmail] = useState('');
+  const [statusLoading, setStatusLoading] = useState(false);
+  const [statusError, setStatusError] = useState<string | null>(null);
+  const [submissionStatus, setSubmissionStatus] = useState<PreTripStatusPayload | null>(null);
+
   const fieldClass =
-    'lz-input-on-dark w-full rounded-xl border border-white/15 bg-slate-950/85 px-4 py-3 text-sm shadow-inner focus:border-[var(--lz-cta)]/55 focus:outline-none focus:ring-2 focus:ring-[var(--lz-cta)]/20';
+    'lz-input-on-dark w-full rounded-xl border border-white/15 bg-slate-950/85 px-4 py-3 text-base shadow-inner focus:border-[var(--lz-cta)]/55 focus:outline-none focus:ring-2 focus:ring-[var(--lz-cta)]/20';
 
   const isRental = booking ? !booking.captain_included : true;
   const bookingMode = isRental ? 'rental' : 'charter';
@@ -190,18 +103,77 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
     [booking]
   );
 
-  const checklist = booking ? buildChecklist(booking, isRental) : [];
+  const bookingChecklist = booking ? buildBookingChecklist(booking, isRental) : [];
+  const bookingOverallStatus = booking ? deriveBookingOverallStatus(booking, isRental) : null;
+  const showBookingActionSteps =
+    booking != null &&
+    bookingOverallStatus !== 'ready_for_departure' &&
+    !bookingAllCustomerStepsDone(booking, isRental);
+
+  const loadSubmissionStatus = useCallback(async (submissionId: string, email: string) => {
+    setStatusLoading(true);
+    setStatusError(null);
+    const result = await fetchPreTripStatus(submissionId, email);
+    setStatusLoading(false);
+    if (!result.ok) {
+      setSubmissionStatus(null);
+      setStatusError(result.error);
+      return;
+    }
+    setSubmissionStatus(result.data);
+    setManualSubmissionId(submissionId);
+    setStatusEmail(email.trim().toLowerCase());
+  }, []);
+
+  useEffect(() => {
+    if (!bookingIdFromUrl) return;
+    let cancelled = false;
+
+    (async () => {
+      setMagicLinkLoading(true);
+      setFindError(null);
+      const result = await fetchWaiversBookingById(bookingIdFromUrl);
+      if (cancelled) return;
+      setMagicLinkLoading(false);
+
+      if (!result.ok) {
+        setFindError(result.message);
+        return;
+      }
+
+      setBooking(result.booking);
+      setContactEmail(result.booking.email);
+      setFindEmail(result.booking.email);
+      setMagicLinkMode(true);
+      setPhoneConfirmNeeded(true);
+      setManualMode(false);
+      setManualSubmissionId(null);
+      setSubmissionStatus(null);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [bookingIdFromUrl]);
+
+  useEffect(() => {
+    if (!submissionIdFromUrl || bookingIdFromUrl) return;
+    if (statusEmail) {
+      void loadSubmissionStatus(submissionIdFromUrl, statusEmail);
+    }
+  }, [submissionIdFromUrl, bookingIdFromUrl, statusEmail, loadSubmissionStatus]);
 
   const handleFindBooking = async (e: React.FormEvent) => {
     e.preventDefault();
     setFindLoading(true);
     setFindError(null);
-    setSubmitted(false);
+    setSubmissionStatus(null);
+    setManualSubmissionId(null);
 
     const result = await findPublicBooking({
       email: findEmail,
       phone: findPhone,
-      code: findCode || undefined,
+      code: findCode || bookingIdFromUrl || undefined,
     });
 
     setFindLoading(false);
@@ -213,7 +185,8 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
     }
 
     setManualMode(false);
-    setManualSubmissionId(null);
+    setMagicLinkMode(false);
+    setPhoneConfirmNeeded(false);
     setBooking(result.booking);
     setContactEmail(findEmail.trim().toLowerCase());
     setContactPhone(findPhone.trim());
@@ -223,6 +196,11 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
   };
 
   const refreshBooking = async () => {
+    if (magicLinkMode && bookingIdFromUrl) {
+      const result = await fetchWaiversBookingById(bookingIdFromUrl);
+      if (result.ok) setBooking(result.booking);
+      return;
+    }
     if (!contactEmail || !contactPhone) return;
     const result = await findPublicBooking({
       email: contactEmail,
@@ -232,8 +210,13 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
     if (result.ok) setBooking(result.booking);
   };
 
+  const actionsBlocked = magicLinkMode && phoneConfirmNeeded && !contactPhone.trim();
+
   const handleSignWaiver = async () => {
-    if (!booking) return;
+    if (!booking || actionsBlocked) {
+      setWaiverMessage('Confirm the phone number on your booking to continue.');
+      return;
+    }
     if (!waiverFormComplete(waiverData, termsAccepted, damageFeeAcknowledged)) {
       setWaiverMessage('Complete all agreement checkboxes and your signature.');
       return;
@@ -261,7 +244,7 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
   const handleLicenseUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
-    if (!file || !booking) return;
+    if (!file || !booking || actionsBlocked) return;
 
     setLicenseBusy(true);
     setLicenseMessage(null);
@@ -296,7 +279,7 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
   const handleProofUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
-    if (!file || !booking) return;
+    if (!file || !booking || actionsBlocked) return;
 
     setProofBusy(true);
     setProofMessage(null);
@@ -345,38 +328,88 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
 
     setProofBusy(false);
     setProofMessage('Insurance proof uploaded.');
-    const refreshed = await findPublicBooking({
-      email: contactEmail,
-      phone: contactPhone,
-      code: booking.id,
-    });
-    if (refreshed.ok) {
-      setBooking(refreshed.booking);
-      if (allStepsSubmitted(refreshed.booking, isRental)) setSubmitted(true);
-    }
+    await refreshBooking();
   };
 
-  const showConfirmation =
-    submitted ||
-    (booking != null && booking.waiver_signed && allStepsSubmitted(booking, isRental));
+  const handleLoadSubmissionStatus = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!submissionIdFromUrl && !manualSubmissionId) return;
+    const id = manualSubmissionId || submissionIdFromUrl;
+    await loadSubmissionStatus(id, statusEmail);
+  };
+
+  const submissionView = submissionStatus?.submission ?? null;
+  const submissionChecklist = submissionView
+    ? buildSubmissionChecklist(submissionView, submissionStatus?.matched_booking ?? null)
+    : [];
+  const submissionOverallStatus = submissionView
+    ? deriveSubmissionOverallStatus(submissionView, submissionStatus?.matched_booking ?? null)
+    : null;
+
+  const showFindForm =
+    !booking &&
+    !manualMode &&
+    !manualSubmissionId &&
+    !submissionStatus &&
+    !magicLinkLoading &&
+    !submissionIdFromUrl;
+
+  const showStatusEmailGate = Boolean(submissionIdFromUrl) && !submissionStatus && !booking;
 
   return (
-    <div className="relative min-h-screen px-4 py-12 md:py-16">
+    <div className="relative min-h-screen px-4 py-10 md:py-14">
       <div className="relative z-[1] mx-auto max-w-2xl">
         <header className="mb-8 text-center">
-          <h1 className="font-display text-3xl font-bold uppercase tracking-[0.08em] text-white md:text-4xl">
+          <p className="text-xs font-bold uppercase tracking-[0.2em] text-cyan-300/80">Launch Zone Charters</p>
+          <h1 className="font-display mt-2 text-3xl font-bold uppercase tracking-[0.08em] text-white md:text-4xl">
             Waivers &amp; Insurance
           </h1>
           <p className="mt-3 text-sm text-slate-300 md:text-base">
-            Complete your required pre-trip steps before departure.
-          </p>
-          <p className="mt-4 rounded-[var(--lz-radius)] border border-cyan-400/25 bg-cyan-950/30 px-4 py-3 text-sm text-cyan-50">
-            Booked through Groupon, over the phone, or outside our website? Use this page to find your
-            booking and complete your required documents.
+            Complete your pre-trip steps in a few minutes — we will guide you through each one.
           </p>
         </header>
 
-        {!booking && !manualMode && !manualSubmissionId ? (
+        {magicLinkLoading ? (
+          <div className="lz-card-glass flex items-center justify-center gap-3 rounded-[var(--lz-radius-card)] p-10">
+            <Loader2 className="h-6 w-6 animate-spin text-cyan-300" aria-hidden />
+            <span className="text-sm text-slate-300">Loading your booking…</span>
+          </div>
+        ) : null}
+
+        {showStatusEmailGate ? (
+          <section className="lz-card-glass rounded-[var(--lz-radius-card)] p-6 md:p-8">
+            <h2 className="text-sm font-bold uppercase tracking-widest text-cyan-200/90">Check your status</h2>
+            <p className="mt-2 text-sm text-slate-400">
+              Enter the email you used when submitting your documents.
+            </p>
+            <form onSubmit={(e) => void handleLoadSubmissionStatus(e)} className="mt-5 space-y-4">
+              <input
+                type="email"
+                required
+                autoComplete="email"
+                value={statusEmail}
+                onChange={(e) => setStatusEmail(e.target.value)}
+                className={fieldClass}
+                placeholder="you@email.com"
+              />
+              <button
+                type="submit"
+                disabled={statusLoading}
+                className="lz-btn-primary flex w-full items-center justify-center gap-2 py-4 text-base !normal-case !tracking-wide"
+              >
+                {statusLoading ? <Loader2 className="h-5 w-5 animate-spin" aria-hidden /> : null}
+                View status
+              </button>
+              {statusError ? (
+                <p className="text-sm text-amber-100" role="alert">
+                  {statusError}
+                </p>
+              ) : null}
+            </form>
+          </section>
+        ) : null}
+
+        {showFindForm ? (
           <section className="lz-card-glass rounded-[var(--lz-radius-card)] p-6 md:p-8">
             <h2 className="text-sm font-bold uppercase tracking-widest text-cyan-200/90">
               Step 1 — Find your booking
@@ -425,7 +458,7 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
                 />
               </div>
               {findError ? (
-                <div className="rounded-lg border border-amber-400/30 bg-amber-950/40 px-4 py-3">
+                <div className="rounded-xl border border-amber-400/30 bg-amber-950/40 px-4 py-4">
                   <p className="text-sm text-amber-100" role="alert">
                     {findError}
                   </p>
@@ -439,7 +472,7 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
                       setManualMode(true);
                       setFindError(null);
                     })}
-                    className="lz-btn-primary mt-4 w-full justify-center text-sm !normal-case !tracking-wide"
+                    className="lz-btn-primary mt-4 w-full justify-center py-4 text-base !normal-case !tracking-wide"
                   >
                     Continue Without Booking
                   </button>
@@ -448,16 +481,16 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
               <button
                 type="submit"
                 disabled={findLoading}
-                className="lz-btn-primary flex w-full items-center justify-center gap-2 text-sm !normal-case !tracking-wide"
+                className="lz-btn-primary flex w-full items-center justify-center gap-2 py-4 text-base !normal-case !tracking-wide"
               >
-                {findLoading ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Search className="h-4 w-4" aria-hidden />}
+                {findLoading ? <Loader2 className="h-5 w-5 animate-spin" aria-hidden /> : <Search className="h-5 w-5" aria-hidden />}
                 Find My Booking
               </button>
             </form>
           </section>
         ) : null}
 
-        {manualMode && !manualSubmissionId ? (
+        {manualMode && !manualSubmissionId && !submissionStatus ? (
           <ManualPreTripSubmission
             initialEmail={findEmail}
             initialPhone={findPhone}
@@ -466,30 +499,34 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
             onSubmitted={(id) => {
               setManualSubmissionId(id);
               setManualMode(false);
+              void loadSubmissionStatus(id, findEmail.trim().toLowerCase() || statusEmail);
             }}
-            onBack={() => {
-              setManualMode(false);
-            }}
+            onBack={() => setManualMode(false)}
           />
         ) : null}
 
-        {manualSubmissionId ? (
-          <section className="lz-card-glass rounded-[var(--lz-radius-card)] border border-emerald-400/30 p-8 text-center">
-            <CheckCircle2 className="mx-auto h-12 w-12 text-emerald-300" aria-hidden />
-            <h2 className="mt-4 font-display text-xl font-bold uppercase tracking-wide text-white">
-              Submitted for review
-            </h2>
-            <p className="mt-3 text-sm leading-relaxed text-slate-300">
-              Our team will review your documents and match them to your reservation. You are not cleared
-              to operate the boat until Launch Zone Charters marks your booking{' '}
-              <strong className="text-emerald-200">Ready for Departure</strong>.
-            </p>
-            <p className="mt-4 font-mono text-xs text-slate-500">Reference: {manualSubmissionId}</p>
-          </section>
+        {submissionView && submissionOverallStatus ? (
+          <div className="space-y-6">
+            <PreTripStatusPanel
+              status={submissionOverallStatus}
+              checklist={submissionChecklist}
+              referenceId={submissionView.id}
+            />
+            <button
+              type="button"
+              onClick={wrapSyncClick('waivers_refresh_submission_status', () =>
+                void loadSubmissionStatus(submissionView.id, statusEmail)
+              )}
+              disabled={statusLoading}
+              className="lz-btn-primary w-full justify-center py-3 text-sm !normal-case !tracking-wide"
+            >
+              {statusLoading ? 'Refreshing…' : 'Refresh status'}
+            </button>
+          </div>
         ) : null}
 
-        {booking ? (
-          <div className="space-y-8">
+        {booking && bookingOverallStatus ? (
+          <div className="space-y-6">
             <section className="lz-card-glass rounded-[var(--lz-radius-card)] p-6 md:p-8">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
@@ -500,56 +537,62 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
                   </p>
                   <p className="mt-1 font-mono text-xs text-slate-500">ID: {booking.id}</p>
                 </div>
-                <button
-                  type="button"
-                  onClick={wrapSyncClick('waivers_insurance_change_booking', () => {
-                    setBooking(null);
-                    setSubmitted(false);
-                  })}
-                  className="text-sm font-semibold text-cyan-300 underline decoration-cyan-500/30"
-                >
-                  Find a different booking
-                </button>
-              </div>
-
-              <ul className="mt-6 space-y-2">
-                {checklist.map((item) => (
-                  <li
-                    key={item.key}
-                    className="flex items-start gap-3 rounded-lg border border-white/10 bg-slate-950/40 px-3 py-2.5 text-sm"
+                {!magicLinkMode ? (
+                  <button
+                    type="button"
+                    onClick={wrapSyncClick('waivers_insurance_change_booking', () => {
+                      setBooking(null);
+                      setMagicLinkMode(false);
+                    })}
+                    className="text-sm font-semibold text-cyan-300 underline decoration-cyan-500/30"
                   >
-                    {item.done ? (
-                      <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-400" aria-hidden />
-                    ) : (
-                      <Circle className="mt-0.5 h-5 w-5 shrink-0 text-slate-500" aria-hidden />
-                    )}
-                    <div>
-                      <p className="font-semibold text-white">{item.label}</p>
-                      {item.note ? <p className="text-xs text-slate-400">{item.note}</p> : null}
-                    </div>
-                  </li>
-                ))}
-              </ul>
+                    Find a different booking
+                  </button>
+                ) : null}
+              </div>
             </section>
 
-            {showConfirmation ? (
-              <section className="lz-card-glass rounded-[var(--lz-radius-card)] border border-emerald-400/30 p-6 text-center md:p-8">
-                <CheckCircle2 className="mx-auto h-12 w-12 text-emerald-300" aria-hidden />
-                <h2 className="mt-4 font-display text-xl font-bold uppercase tracking-wide text-white">
-                  Submitted for review
+            <PreTripStatusPanel
+              status={bookingOverallStatus}
+              checklist={bookingChecklist}
+              referenceId={booking.id}
+            />
+
+            {magicLinkMode && phoneConfirmNeeded ? (
+              <section className="lz-card-glass rounded-[var(--lz-radius-card)] border border-cyan-400/25 p-6">
+                <h2 className="text-sm font-bold uppercase tracking-widest text-cyan-200/90">
+                  Confirm your phone
                 </h2>
-                <p className="mt-3 text-sm leading-relaxed text-slate-300">
-                  Our team will review your documents before departure. You are not cleared to operate the
-                  boat until Launch Zone Charters marks your booking{' '}
-                  <strong className="text-emerald-200">Ready for Departure</strong>.
+                <p className="mt-2 text-sm text-slate-400">
+                  For security, enter the phone number on your booking (ends in{' '}
+                  {booking.phone_last4 || '****'}).
                 </p>
+                <input
+                  type="tel"
+                  autoComplete="tel"
+                  value={contactPhone}
+                  onChange={(e) => setContactPhone(e.target.value)}
+                  className={`${fieldClass} mt-4`}
+                  placeholder="Your phone number"
+                />
+                <button
+                  type="button"
+                  onClick={wrapSyncClick('waivers_phone_confirm', () => {
+                    if (contactPhone.trim()) setPhoneConfirmNeeded(false);
+                  })}
+                  className="lz-btn-primary mt-4 w-full justify-center py-4 text-base !normal-case !tracking-wide"
+                >
+                  Continue
+                </button>
               </section>
-            ) : (
+            ) : null}
+
+            {showBookingActionSteps ? (
               <>
                 {!booking.waiver_signed ? (
                   <section className="lz-card-glass rounded-[var(--lz-radius-card)] p-6 md:p-8">
                     <h2 className="text-sm font-bold uppercase tracking-widest text-cyan-200/90">
-                      Step 2 — Sign waiver
+                      Sign waiver
                     </h2>
                     <WaiverBlock
                       bookingMode={bookingMode}
@@ -565,9 +608,9 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
                     />
                     <button
                       type="button"
-                      disabled={waiverBusy}
+                      disabled={waiverBusy || actionsBlocked}
                       onClick={() => void handleSignWaiver()}
-                      className="lz-btn-primary mt-6 w-full justify-center text-sm !normal-case !tracking-wide"
+                      className="lz-btn-primary mt-6 w-full justify-center py-4 text-base !normal-case !tracking-wide"
                     >
                       {waiverBusy ? 'Saving…' : 'Save waiver'}
                     </button>
@@ -588,21 +631,21 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
                   <>
                     <section className="lz-card-glass rounded-[var(--lz-radius-card)] p-6 md:p-8">
                       <h2 className="text-sm font-bold uppercase tracking-widest text-cyan-200/90">
-                        Step 3 — License / ID
+                        License / ID
                       </h2>
                       <p className="mt-2 text-sm text-slate-400">
-                        Upload your boating license or government ID (JPEG, PNG, WebP, GIF, or PDF — max 10 MB).
+                        Upload your boating license or government ID (JPEG, PNG, WebP, GIF, or PDF).
                       </p>
-                      <label className="mt-4 flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-white/20 bg-slate-950/30 px-4 py-8 hover:border-cyan-400/40">
-                        <Upload className="mb-2 h-8 w-8 text-slate-500" aria-hidden />
-                        <span className="text-sm font-semibold text-slate-200">
-                          {licenseBusy ? 'Uploading…' : 'Choose license file'}
+                      <label className="mt-4 flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-white/20 bg-slate-950/30 px-4 py-10 hover:border-cyan-400/40">
+                        <Upload className="mb-2 h-10 w-10 text-slate-500" aria-hidden />
+                        <span className="text-base font-semibold text-slate-200">
+                          {licenseBusy ? 'Uploading…' : 'Tap to upload license'}
                         </span>
                         <input
                           type="file"
                           accept={FILE_ACCEPT}
                           className="sr-only"
-                          disabled={licenseBusy}
+                          disabled={licenseBusy || actionsBlocked}
                           onChange={(e) => void handleLicenseUpload(e)}
                         />
                       </label>
@@ -616,12 +659,9 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
                     {insuranceConfig ? (
                       <section className="lz-card-glass rounded-[var(--lz-radius-card)] p-6 md:p-8">
                         <h2 className="text-sm font-bold uppercase tracking-widest text-cyan-200/90">
-                          Step 4 — Buoy rental insurance
+                          Buoy rental insurance
                         </h2>
                         <p className="mt-2 text-sm font-semibold text-cyan-100/95">{insuranceConfig.label}</p>
-                        <p className="mt-1 text-xs text-slate-400">
-                          QR and button go to the same Buoy insurance checkout.
-                        </p>
                         <div className="mt-5 flex justify-center rounded-xl border border-white/10 bg-white p-4">
                           <img
                             src={insuranceConfig.qrImage}
@@ -635,31 +675,31 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
                           href={insuranceConfig.checkoutUrl}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="lz-btn-primary mt-5 inline-flex w-full items-center justify-center gap-2 text-sm !normal-case !tracking-wide"
+                          className="lz-btn-primary mt-5 inline-flex w-full items-center justify-center gap-2 py-4 text-base !normal-case !tracking-wide"
                         >
                           Get Buoy Insurance
-                          <ExternalLink className="h-4 w-4" aria-hidden />
+                          <ExternalLink className="h-5 w-5" aria-hidden />
                         </a>
                       </section>
                     ) : null}
 
                     <section className="lz-card-glass rounded-[var(--lz-radius-card)] p-6 md:p-8">
                       <h2 className="text-sm font-bold uppercase tracking-widest text-cyan-200/90">
-                        Step 5 — Upload insurance proof
+                        Upload insurance proof
                       </h2>
                       <p className="mt-2 text-sm text-slate-400">
-                        After purchasing Buoy coverage, upload a screenshot or PDF of your policy (max 5 MB).
+                        After purchasing Buoy coverage, upload a screenshot or PDF of your policy.
                       </p>
-                      <label className="mt-4 flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-white/20 bg-slate-950/30 px-4 py-8 hover:border-cyan-400/40">
-                        <Upload className="mb-2 h-8 w-8 text-slate-500" aria-hidden />
-                        <span className="text-sm font-semibold text-slate-200">
-                          {proofBusy ? 'Uploading…' : 'Choose proof file'}
+                      <label className="mt-4 flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-white/20 bg-slate-950/30 px-4 py-10 hover:border-cyan-400/40">
+                        <Upload className="mb-2 h-10 w-10 text-slate-500" aria-hidden />
+                        <span className="text-base font-semibold text-slate-200">
+                          {proofBusy ? 'Uploading…' : 'Tap to upload proof'}
                         </span>
                         <input
                           type="file"
                           accept={FILE_ACCEPT}
                           className="sr-only"
-                          disabled={proofBusy}
+                          disabled={proofBusy || actionsBlocked}
                           onChange={(e) => void handleProofUpload(e)}
                         />
                       </label>
@@ -679,7 +719,15 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
                   </section>
                 ) : null}
               </>
-            )}
+            ) : null}
+
+            <button
+              type="button"
+              onClick={() => void refreshBooking()}
+              className="w-full rounded-xl border border-white/15 bg-slate-950/50 py-3 text-sm font-semibold text-cyan-200 hover:bg-slate-900/60"
+            >
+              Refresh status
+            </button>
           </div>
         ) : null}
       </div>

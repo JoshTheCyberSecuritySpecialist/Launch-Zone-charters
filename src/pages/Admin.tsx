@@ -18,7 +18,7 @@ import {
 import { supabase } from '../lib/supabase';
 import type { UserVerificationsRow } from '../lib/supabase';
 import { logSupabaseError } from '../lib/supabaseErrors';
-import { adminUpdatePreTripSubmission } from '../lib/publicBooking';
+import { adminUpdatePreTripSubmission, fetchPreTripMatchSuggestions, type PreTripMatchSuggestion } from '../lib/publicBooking';
 import { useAuth } from '../contexts/useAuth';
 import FullPageLoader from '../components/FullPageLoader';
 import Logo from '../components/ui/Logo';
@@ -262,6 +262,8 @@ export default function Admin({ onNavigate }: AdminProps) {
   const [incidentCounts, setIncidentCounts] = useState<Record<string, number>>({});
   const [selectedIncidentBookingId, setSelectedIncidentBookingId] = useState<string>('');
   const [preTripSubmissions, setPreTripSubmissions] = useState<PreTripSubmissionRow[]>([]);
+  const [preTripSuggestions, setPreTripSuggestions] = useState<Record<string, PreTripMatchSuggestion[]>>({});
+  const [preTripSuggestionsLoading, setPreTripSuggestionsLoading] = useState<string | null>(null);
   const [preTripLoading, setPreTripLoading] = useState(false);
   const [preTripMatchIds, setPreTripMatchIds] = useState<Record<string, string>>({});
   const [preTripNotes, setPreTripNotes] = useState<Record<string, string>>({});
@@ -929,6 +931,30 @@ export default function Admin({ onNavigate }: AdminProps) {
     if (!isAdmin) return;
     void loadPreTripSubmissions();
   }, [isAdmin, loadPreTripSubmissions]);
+
+  const loadPreTripSuggestions = async (submissionId: string) => {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    const token = session?.access_token;
+    if (!token) return;
+    setPreTripSuggestionsLoading(submissionId);
+    const out = await fetchPreTripMatchSuggestions(token, submissionId);
+    setPreTripSuggestionsLoading(null);
+    if (out.ok) {
+      setPreTripSuggestions((prev) => ({ ...prev, [submissionId]: out.suggestions }));
+    }
+  };
+
+  const copyWaiversLink = async (bookingId: string) => {
+    const url = `${window.location.origin}/waivers-insurance?bookingId=${encodeURIComponent(bookingId)}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      setNotice({ variant: 'success', text: 'Waivers link copied to clipboard.' });
+    } catch {
+      window.prompt('Copy this waivers link:', url);
+    }
+  };
 
   const runPreTripAdminAction = async (
     submissionId: string,
@@ -2088,6 +2114,45 @@ export default function Admin({ onNavigate }: AdminProps) {
                           }
                           className="mb-2 w-full min-w-[180px] rounded border border-slate-300 px-2 py-1 text-xs"
                         />
+                        {row.groupon_code || row.email ? (
+                          <div className="mb-2">
+                            <button
+                              type="button"
+                              disabled={preTripSuggestionsLoading === row.id}
+                              onClick={() => void loadPreTripSuggestions(row.id)}
+                              className="text-xs font-semibold text-cyan-700 hover:underline disabled:opacity-50"
+                            >
+                              {preTripSuggestionsLoading === row.id
+                                ? 'Finding matches…'
+                                : 'Suggest matching bookings'}
+                            </button>
+                            {(preTripSuggestions[row.id] || []).length > 0 ? (
+                              <ul className="mt-2 space-y-1">
+                                {preTripSuggestions[row.id].map((s) => (
+                                  <li key={s.id}>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setPreTripMatchIds((prev) => ({ ...prev, [row.id]: s.id }))
+                                      }
+                                      className="w-full rounded border border-emerald-200 bg-emerald-50 px-2 py-1 text-left text-[11px] text-emerald-900 hover:bg-emerald-100"
+                                    >
+                                      <span className="font-semibold">{s.match_reason}</span>
+                                      <br />
+                                      {s.customer_name || 'Customer'} ·{' '}
+                                      {new Date(s.start_time).toLocaleDateString()}
+                                      {s.promo_code ? ` · ${s.promo_code}` : ''}
+                                      <br />
+                                      <span className="font-mono text-[10px]">{s.id}</span>
+                                    </button>
+                                  </li>
+                                ))}
+                              </ul>
+                            ) : preTripSuggestions[row.id] ? (
+                              <p className="mt-1 text-[11px] text-slate-500">No automatic matches found.</p>
+                            ) : null}
+                          </div>
+                        ) : null}
                         <textarea
                           placeholder="Admin notes"
                           rows={2}
@@ -2474,6 +2539,15 @@ export default function Admin({ onNavigate }: AdminProps) {
                           className="rounded bg-green-600 px-3 py-1 text-sm font-semibold text-white transition-colors hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-40"
                         >
                           Approve
+                        </button>
+                        <button
+                          type="button"
+                          disabled={tableLoading}
+                          onClick={() => void copyWaiversLink(booking.id)}
+                          className="rounded border border-cyan-300 bg-cyan-50 px-3 py-1 text-sm font-semibold text-cyan-900 transition-colors hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-40"
+                          title="Copy /waivers-insurance?bookingId= link for this customer"
+                        >
+                          Copy waivers link
                         </button>
                         <button
                           type="button"

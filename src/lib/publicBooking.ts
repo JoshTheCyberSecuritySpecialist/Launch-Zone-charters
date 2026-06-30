@@ -63,6 +63,111 @@ export async function findPublicBooking(input: {
   return { ok: true, booking: payload.booking };
 }
 
+export async function fetchWaiversBookingById(
+  bookingId: string
+): Promise<FindBookingResult> {
+  if (!env.apiUrlConfigured || !env.apiUrl) {
+    return { ok: false, message: 'API is not configured. Please call 803-542-1761 for help.' };
+  }
+
+  const res = await fetch(
+    `${env.apiUrl}/api/public/waivers-booking?bookingId=${encodeURIComponent(bookingId.trim())}`
+  );
+  const payload = (await res.json().catch(() => ({}))) as {
+    booking?: PublicBookingMatch;
+    message?: string;
+    error?: string;
+  };
+
+  if (!res.ok || !payload.booking) {
+    return {
+      ok: false,
+      message: payload.message || payload.error || 'Booking not found or no longer active.',
+    };
+  }
+
+  return { ok: true, booking: payload.booking };
+}
+
+export type PreTripStatusPayload = {
+  submission: {
+    id: string;
+    customer_name: string | null;
+    trip_type: string;
+    groupon_code: string | null;
+    waiver_signed: boolean;
+    license_status: string;
+    insurance_status: string;
+    has_license_url: boolean;
+    has_insurance_url: boolean;
+    admin_status: string;
+    matched_booking_id: string | null;
+    created_at: string;
+  };
+  matched_booking: {
+    id: string;
+    status: string;
+    start_time: string;
+  } | null;
+};
+
+export async function fetchPreTripStatus(
+  submissionId: string,
+  email: string
+): Promise<{ ok: true; data: PreTripStatusPayload } | { ok: false; error: string }> {
+  if (!env.apiUrlConfigured || !env.apiUrl) {
+    return { ok: false, error: 'API is not configured.' };
+  }
+
+  const params = new URLSearchParams({
+    submissionId: submissionId.trim(),
+    email: email.trim().toLowerCase(),
+  });
+  const res = await fetch(`${env.apiUrl}/api/public/pre-trip-status?${params}`);
+  const payload = (await res.json().catch(() => ({}))) as PreTripStatusPayload & { error?: string };
+
+  if (!res.ok) {
+    return { ok: false, error: payload.error || 'Could not load status.' };
+  }
+
+  return { ok: true, data: payload };
+}
+
+export type PreTripMatchSuggestion = {
+  id: string;
+  customer_name: string | null;
+  email: string | null;
+  start_time: string;
+  promo_code: string | null;
+  status: string;
+  boat_name: string | null;
+  match_reason: string;
+};
+
+export async function fetchPreTripMatchSuggestions(
+  token: string,
+  submissionId: string
+): Promise<{ ok: true; suggestions: PreTripMatchSuggestion[] } | { ok: false; error: string }> {
+  if (!env.apiUrlConfigured || !env.apiUrl) {
+    return { ok: false, error: 'API not configured' };
+  }
+
+  const res = await fetch(
+    `${env.apiUrl}/api/admin/pre-trip-submissions/${encodeURIComponent(submissionId)}/suggestions`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  const payload = (await res.json().catch(() => ({}))) as {
+    suggestions?: PreTripMatchSuggestion[];
+    error?: string;
+  };
+
+  if (!res.ok) {
+    return { ok: false, error: payload.error || 'Could not load suggestions' };
+  }
+
+  return { ok: true, suggestions: payload.suggestions || [] };
+}
+
 export async function signBookingWaiver(input: {
   bookingId: string;
   email: string;

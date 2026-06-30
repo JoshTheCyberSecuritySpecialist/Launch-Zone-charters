@@ -89,7 +89,7 @@ async function runTripInsuranceReminders(opts) {
     const email = String(customer.email).trim();
     const phone = String(customer.phone || '').trim();
     const insuranceUrl = base
-      ? `${base}/insurance-required?bookingId=${encodeURIComponent(row.id)}`
+      ? `${base}/waivers-insurance?bookingId=${encodeURIComponent(row.id)}`
       : '';
 
     const textBody = insuranceUrl

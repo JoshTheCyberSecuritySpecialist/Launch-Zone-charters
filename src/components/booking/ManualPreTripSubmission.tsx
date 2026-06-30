@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { ExternalLink, Loader2, Upload } from 'lucide-react';
 import WaiverBlock, { waiverFormComplete, type WaiverFormData } from './WaiverBlock';
+import PreTripStepper from './PreTripStepper';
 import {
   bookingModeForTripType,
   getInsuranceConfigForTripType,
@@ -17,6 +18,14 @@ const TRIP_OPTIONS: { value: PreTripTripType; label: string }[] = [
   { value: 'center_console_rental', label: 'Center Console Rental' },
   { value: 'captain_charter', label: 'Captain-Led Charter' },
 ];
+
+type ManualStep =
+  | 'info'
+  | 'waiver'
+  | 'license'
+  | 'buoy'
+  | 'proof'
+  | 'submit';
 
 interface ManualPreTripSubmissionProps {
   initialEmail: string;
@@ -36,6 +45,7 @@ export default function ManualPreTripSubmission({
   onBack,
 }: ManualPreTripSubmissionProps) {
   const [draftId] = useState(() => crypto.randomUUID());
+  const [step, setStep] = useState<ManualStep>('info');
 
   const [customerName, setCustomerName] = useState('');
   const [email, setEmail] = useState(initialEmail);
@@ -59,12 +69,35 @@ export default function ManualPreTripSubmission({
   const [submitError, setSubmitError] = useState<string | null>(null);
 
   const fieldClass =
-    'lz-input-on-dark w-full rounded-xl border border-white/15 bg-slate-950/85 px-4 py-3 text-sm shadow-inner focus:border-[var(--lz-cta)]/55 focus:outline-none focus:ring-2 focus:ring-[var(--lz-cta)]/20';
+    'lz-input-on-dark w-full rounded-xl border border-white/15 bg-slate-950/85 px-4 py-3 text-base shadow-inner focus:border-[var(--lz-cta)]/55 focus:outline-none focus:ring-2 focus:ring-[var(--lz-cta)]/20';
 
   const isRental = tripType !== 'captain_charter';
   const bookingMode = bookingModeForTripType(tripType);
   const insuranceConfig = useMemo(() => getInsuranceConfigForTripType(tripType), [tripType]);
   const uploadKey = `pre-trip/${draftId}`;
+
+  const steps = useMemo(() => {
+    const base = [
+      { key: 'info', label: 'Your info' },
+      { key: 'waiver', label: 'Waiver' },
+      { key: 'license', label: 'License' },
+    ];
+    if (isRental) {
+      base.push({ key: 'buoy', label: 'Buoy' }, { key: 'proof', label: 'Proof' });
+    }
+    base.push({ key: 'submit', label: 'Submit' });
+    return base;
+  }, [isRental]);
+
+  const goNext = () => {
+    const idx = steps.findIndex((s) => s.key === step);
+    if (idx < steps.length - 1) setStep(steps[idx + 1].key as ManualStep);
+  };
+
+  const goBack = () => {
+    const idx = steps.findIndex((s) => s.key === step);
+    if (idx > 0) setStep(steps[idx - 1].key as ManualStep);
+  };
 
   const handleLicenseUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -102,14 +135,17 @@ export default function ManualPreTripSubmission({
     setSubmitError(null);
     if (!customerName.trim()) {
       setSubmitError('Enter your full name.');
+      setStep('info');
       return;
     }
     if (!waiverFormComplete(waiverData, termsAccepted, damageFeeAcknowledged)) {
       setSubmitError('Complete the waiver and agreement section.');
+      setStep('waiver');
       return;
     }
     if (isRental && !licenseUrl) {
       setSubmitError('Upload your license or ID before submitting.');
+      setStep('license');
       return;
     }
 
@@ -137,10 +173,14 @@ export default function ManualPreTripSubmission({
     onSubmitted(result.submissionId);
   };
 
+  const bigBtn = 'lz-btn-primary w-full justify-center py-4 text-base !normal-case !tracking-wide';
+  const ghostBtn =
+    'w-full rounded-xl border border-white/15 py-3 text-sm font-semibold text-cyan-200 hover:bg-slate-900/50';
+
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
       <section className="lz-card-glass rounded-[var(--lz-radius-card)] p-6 md:p-8">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-sm font-bold uppercase tracking-widest text-cyan-200/90">
             Continue without a booking
           </h2>
@@ -149,141 +189,165 @@ export default function ManualPreTripSubmission({
             onClick={wrapSyncClick('manual_pre_trip_back', onBack)}
             className="text-sm font-semibold text-cyan-300 underline decoration-cyan-500/30"
           >
-            ← Back to find booking
+            ← Back
           </button>
         </div>
         <p className="text-sm text-slate-400">
-          Our team will match your documents to your reservation manually.
+          Our team will match your documents to your reservation.
         </p>
-
-        <div className="mt-6 space-y-4">
-          <div>
-            <label htmlFor="mpt-name" className="mb-1 block text-xs font-semibold uppercase text-slate-400">
-              Full name
-            </label>
-            <input
-              id="mpt-name"
-              type="text"
-              required
-              value={customerName}
-              onChange={(e) => setCustomerName(e.target.value)}
-              className={fieldClass}
-            />
-          </div>
-          <div>
-            <label htmlFor="mpt-email" className="mb-1 block text-xs font-semibold uppercase text-slate-400">
-              Email
-            </label>
-            <input
-              id="mpt-email"
-              type="email"
-              required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className={fieldClass}
-            />
-          </div>
-          <div>
-            <label htmlFor="mpt-phone" className="mb-1 block text-xs font-semibold uppercase text-slate-400">
-              Phone
-            </label>
-            <input
-              id="mpt-phone"
-              type="tel"
-              required
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-              className={fieldClass}
-            />
-          </div>
-          <div>
-            <label htmlFor="mpt-trip" className="mb-1 block text-xs font-semibold uppercase text-slate-400">
-              Trip type
-            </label>
-            <select
-              id="mpt-trip"
-              value={tripType}
-              onChange={(e) => setTripType(e.target.value as PreTripTripType)}
-              className={fieldClass}
-            >
-              {TRIP_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label htmlFor="mpt-groupon" className="mb-1 block text-xs font-semibold uppercase text-slate-400">
-              Groupon code <span className="text-slate-500">(optional)</span>
-            </label>
-            <input
-              id="mpt-groupon"
-              type="text"
-              value={grouponCode}
-              onChange={(e) => setGrouponCode(e.target.value)}
-              className={fieldClass}
-            />
-          </div>
-          <div>
-            <label htmlFor="mpt-date" className="mb-1 block text-xs font-semibold uppercase text-slate-400">
-              Requested trip date <span className="text-slate-500">(optional)</span>
-            </label>
-            <input
-              id="mpt-date"
-              type="datetime-local"
-              value={requestedTripDate}
-              onChange={(e) => setRequestedTripDate(e.target.value)}
-              className={fieldClass}
-            />
-          </div>
-        </div>
+        <PreTripStepper steps={steps} currentKey={step} className="mt-6" />
       </section>
 
-      <section className="lz-card-glass rounded-[var(--lz-radius-card)] p-6 md:p-8">
-        <h2 className="text-sm font-bold uppercase tracking-widest text-cyan-200/90">Sign waiver</h2>
-        <WaiverBlock
-          bookingMode={bookingMode}
-          waiverData={waiverData}
-          onWaiverDataChange={setWaiverData}
-          termsAccepted={termsAccepted}
-          onTermsAcceptedChange={setTermsAccepted}
-          damageFeeAcknowledged={damageFeeAcknowledged}
-          onDamageFeeAcknowledgedChange={setDamageFeeAcknowledged}
-          onNavigateTerms={onNavigateTerms}
-          fieldClass={fieldClass}
-          idPrefix="mpt-"
-        />
-      </section>
-
-      <section className="lz-card-glass rounded-[var(--lz-radius-card)] p-6 md:p-8">
-        <h2 className="text-sm font-bold uppercase tracking-widest text-cyan-200/90">License / ID</h2>
-        <p className="mt-2 text-sm text-slate-400">
-          {isRental
-            ? 'Required for self-drive rentals.'
-            : 'Optional for charters unless we request it.'}
-        </p>
-        <label className="mt-4 flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-white/20 bg-slate-950/30 px-4 py-8 hover:border-cyan-400/40">
-          <Upload className="mb-2 h-8 w-8 text-slate-500" aria-hidden />
-          <span className="text-sm font-semibold text-slate-200">
-            {licenseBusy ? 'Uploading…' : 'Choose license file'}
-          </span>
-          <input
-            type="file"
-            accept={FILE_ACCEPT}
-            className="sr-only"
-            disabled={licenseBusy}
-            onChange={(e) => void handleLicenseUpload(e)}
-          />
-        </label>
-        {licenseMessage ? <p className="mt-3 text-sm text-slate-300">{licenseMessage}</p> : null}
-      </section>
-
-      {isRental && insuranceConfig ? (
+      {step === 'info' ? (
         <section className="lz-card-glass rounded-[var(--lz-radius-card)] p-6 md:p-8">
-          <h2 className="text-sm font-bold uppercase tracking-widest text-cyan-200/90">Buoy rental insurance</h2>
-          <p className="mt-2 text-sm font-semibold text-cyan-100/95">{insuranceConfig.label}</p>
-          <p className="mt-1 text-xs text-slate-400">QR and button go to the same insurance checkout.</p>
+          <div className="space-y-4">
+            <div>
+              <label htmlFor="mpt-name" className="mb-1 block text-xs font-semibold uppercase text-slate-400">
+                Full name
+              </label>
+              <input
+                id="mpt-name"
+                type="text"
+                required
+                value={customerName}
+                onChange={(e) => setCustomerName(e.target.value)}
+                className={fieldClass}
+              />
+            </div>
+            <div>
+              <label htmlFor="mpt-email" className="mb-1 block text-xs font-semibold uppercase text-slate-400">
+                Email
+              </label>
+              <input
+                id="mpt-email"
+                type="email"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className={fieldClass}
+              />
+            </div>
+            <div>
+              <label htmlFor="mpt-phone" className="mb-1 block text-xs font-semibold uppercase text-slate-400">
+                Phone
+              </label>
+              <input
+                id="mpt-phone"
+                type="tel"
+                required
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                className={fieldClass}
+              />
+            </div>
+            <div>
+              <label htmlFor="mpt-trip" className="mb-1 block text-xs font-semibold uppercase text-slate-400">
+                Trip type
+              </label>
+              <select
+                id="mpt-trip"
+                value={tripType}
+                onChange={(e) => setTripType(e.target.value as PreTripTripType)}
+                className={fieldClass}
+              >
+                {TRIP_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label htmlFor="mpt-groupon" className="mb-1 block text-xs font-semibold uppercase text-slate-400">
+                Groupon code <span className="text-slate-500">(optional)</span>
+              </label>
+              <input
+                id="mpt-groupon"
+                type="text"
+                value={grouponCode}
+                onChange={(e) => setGrouponCode(e.target.value)}
+                className={fieldClass}
+              />
+            </div>
+            <div>
+              <label htmlFor="mpt-date" className="mb-1 block text-xs font-semibold uppercase text-slate-400">
+                Requested trip date <span className="text-slate-500">(optional)</span>
+              </label>
+              <input
+                id="mpt-date"
+                type="datetime-local"
+                value={requestedTripDate}
+                onChange={(e) => setRequestedTripDate(e.target.value)}
+                className={fieldClass}
+              />
+            </div>
+          </div>
+          <button type="button" onClick={goNext} className={`${bigBtn} mt-6`}>
+            Continue
+          </button>
+        </section>
+      ) : null}
+
+      {step === 'waiver' ? (
+        <section className="lz-card-glass rounded-[var(--lz-radius-card)] p-6 md:p-8">
+          <WaiverBlock
+            bookingMode={bookingMode}
+            waiverData={waiverData}
+            onWaiverDataChange={setWaiverData}
+            termsAccepted={termsAccepted}
+            onTermsAcceptedChange={setTermsAccepted}
+            damageFeeAcknowledged={damageFeeAcknowledged}
+            onDamageFeeAcknowledgedChange={setDamageFeeAcknowledged}
+            onNavigateTerms={onNavigateTerms}
+            fieldClass={fieldClass}
+            idPrefix="mpt-"
+          />
+          <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+            <button type="button" onClick={goBack} className={ghostBtn}>
+              Back
+            </button>
+            <button type="button" onClick={goNext} className={bigBtn}>
+              Continue
+            </button>
+          </div>
+        </section>
+      ) : null}
+
+      {step === 'license' ? (
+        <section className="lz-card-glass rounded-[var(--lz-radius-card)] p-6 md:p-8">
+          <p className="text-sm text-slate-400">
+            {isRental
+              ? 'Required for self-drive rentals.'
+              : 'Optional for charters unless we request it.'}
+          </p>
+          <label className="mt-4 flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-white/20 bg-slate-950/30 px-4 py-10 hover:border-cyan-400/40">
+            <Upload className="mb-2 h-10 w-10 text-slate-500" aria-hidden />
+            <span className="text-base font-semibold text-slate-200">
+              {licenseBusy ? 'Uploading…' : 'Tap to upload license'}
+            </span>
+            <input
+              type="file"
+              accept={FILE_ACCEPT}
+              className="sr-only"
+              disabled={licenseBusy}
+              onChange={(e) => void handleLicenseUpload(e)}
+            />
+          </label>
+          {licenseMessage ? <p className="mt-3 text-sm text-slate-300">{licenseMessage}</p> : null}
+          <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+            <button type="button" onClick={goBack} className={ghostBtn}>
+              Back
+            </button>
+            <button type="button" onClick={goNext} className={bigBtn}>
+              Continue
+            </button>
+          </div>
+        </section>
+      ) : null}
+
+      {step === 'buoy' && isRental && insuranceConfig ? (
+        <section className="lz-card-glass rounded-[var(--lz-radius-card)] p-6 md:p-8">
+          <p className="text-sm font-semibold text-cyan-100/95">{insuranceConfig.label}</p>
           <div className="mt-5 flex justify-center rounded-xl border border-white/10 bg-white p-4">
             <img
               src={insuranceConfig.qrImage}
@@ -295,29 +359,29 @@ export default function ManualPreTripSubmission({
             href={insuranceConfig.checkoutUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="lz-btn-primary mt-5 inline-flex w-full items-center justify-center gap-2 text-sm !normal-case !tracking-wide"
+            className={`${bigBtn} mt-5 inline-flex items-center gap-2`}
           >
             Get Buoy Insurance
-            <ExternalLink className="h-4 w-4" aria-hidden />
+            <ExternalLink className="h-5 w-5" aria-hidden />
           </a>
+          <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+            <button type="button" onClick={goBack} className={ghostBtn}>
+              Back
+            </button>
+            <button type="button" onClick={goNext} className={bigBtn}>
+              I purchased insurance — continue
+            </button>
+          </div>
         </section>
-      ) : (
-        <section className="lz-card-glass rounded-[var(--lz-radius-card)] p-6 text-sm text-slate-300">
-          Captain-led charter: Buoy rental insurance is not required unless Launch Zone Charters instructs
-          you otherwise.
-        </section>
-      )}
+      ) : null}
 
-      {isRental ? (
+      {step === 'proof' && isRental ? (
         <section className="lz-card-glass rounded-[var(--lz-radius-card)] p-6 md:p-8">
-          <h2 className="text-sm font-bold uppercase tracking-widest text-cyan-200/90">
-            Upload insurance proof
-          </h2>
-          <p className="mt-2 text-sm text-slate-400">After purchasing Buoy coverage, upload your proof here.</p>
-          <label className="mt-4 flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-white/20 bg-slate-950/30 px-4 py-8 hover:border-cyan-400/40">
-            <Upload className="mb-2 h-8 w-8 text-slate-500" aria-hidden />
-            <span className="text-sm font-semibold text-slate-200">
-              {proofBusy ? 'Uploading…' : 'Choose proof file'}
+          <p className="text-sm text-slate-400">Upload your Buoy policy screenshot or PDF.</p>
+          <label className="mt-4 flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-white/20 bg-slate-950/30 px-4 py-10 hover:border-cyan-400/40">
+            <Upload className="mb-2 h-10 w-10 text-slate-500" aria-hidden />
+            <span className="text-base font-semibold text-slate-200">
+              {proofBusy ? 'Uploading…' : 'Tap to upload proof'}
             </span>
             <input
               type="file"
@@ -328,25 +392,45 @@ export default function ManualPreTripSubmission({
             />
           </label>
           {proofMessage ? <p className="mt-3 text-sm text-slate-300">{proofMessage}</p> : null}
+          <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+            <button type="button" onClick={goBack} className={ghostBtn}>
+              Back
+            </button>
+            <button type="button" onClick={goNext} className={bigBtn}>
+              Continue
+            </button>
+          </div>
         </section>
       ) : null}
 
-      <section className="lz-card-glass rounded-[var(--lz-radius-card)] p-6 md:p-8">
-        {submitError ? (
-          <p className="mb-4 text-sm text-amber-200" role="alert">
-            {submitError}
+      {step === 'submit' ? (
+        <section className="lz-card-glass rounded-[var(--lz-radius-card)] p-6 md:p-8">
+          <h2 className="text-lg font-semibold text-white">Ready to submit?</h2>
+          <p className="mt-2 text-sm text-slate-400">
+            Our team will review your documents and match them to your booking. You are not cleared
+            until we mark you <strong className="text-cyan-100">Ready for Departure</strong>.
           </p>
-        ) : null}
-        <button
-          type="button"
-          disabled={submitBusy}
-          onClick={() => void handleSubmit()}
-          className="lz-btn-primary flex w-full items-center justify-center gap-2 text-sm !normal-case !tracking-wide"
-        >
-          {submitBusy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null}
-          Submit for review
-        </button>
-      </section>
+          {submitError ? (
+            <p className="mt-4 text-sm text-amber-200" role="alert">
+              {submitError}
+            </p>
+          ) : null}
+          <div className="mt-6 flex flex-col gap-3">
+            <button
+              type="button"
+              disabled={submitBusy}
+              onClick={() => void handleSubmit()}
+              className={`${bigBtn} flex items-center gap-2`}
+            >
+              {submitBusy ? <Loader2 className="h-5 w-5 animate-spin" aria-hidden /> : null}
+              Submit for review
+            </button>
+            <button type="button" onClick={goBack} className={ghostBtn}>
+              Back
+            </button>
+          </div>
+        </section>
+      ) : null}
     </div>
   );
 }

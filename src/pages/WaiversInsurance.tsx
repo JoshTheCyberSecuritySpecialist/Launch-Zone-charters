@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { ExternalLink, Loader2, Search, Upload, Shield } from 'lucide-react';
+import { Calendar, ClipboardCheck, ExternalLink, Loader2, Search, Upload, Shield } from 'lucide-react';
 import WaiverBlock, { waiverFormComplete, type WaiverFormData } from '../components/booking/WaiverBlock';
 import PreTripStatusPanel from '../components/booking/PreTripStatusPanel';
 import ManualPreTripSubmission from '../components/booking/ManualPreTripSubmission';
@@ -80,6 +80,9 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
 
   const [manualMode, setManualMode] = useState(false);
   const [manualSubmissionId, setManualSubmissionId] = useState<string | null>(null);
+  const [entryMode, setEntryMode] = useState<'booking' | 'manual' | null>(
+    bookingIdFromUrl ? 'booking' : null
+  );
 
   const [statusEmail, setStatusEmail] = useState('');
   const [statusLoading, setStatusLoading] = useState(false);
@@ -144,6 +147,7 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
       setBooking(result.booking);
       setContactEmail(result.booking.email);
       setFindEmail(result.booking.email);
+      setEntryMode('booking');
       setMagicLinkMode(true);
       setPhoneConfirmNeeded(true);
       setManualMode(false);
@@ -346,19 +350,29 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
     ? deriveSubmissionOverallStatus(submissionView, submissionStatus?.matched_booking ?? null)
     : null;
 
+  const showEntryOptions =
+    !booking &&
+    !manualMode &&
+    !manualSubmissionId &&
+    !submissionStatus &&
+    !magicLinkLoading &&
+    !submissionIdFromUrl &&
+    !entryMode;
+
   const showFindForm =
     !booking &&
     !manualMode &&
     !manualSubmissionId &&
     !submissionStatus &&
     !magicLinkLoading &&
-    !submissionIdFromUrl;
+    !submissionIdFromUrl &&
+    entryMode === 'booking';
 
   const showStatusEmailGate = Boolean(submissionIdFromUrl) && !submissionStatus && !booking;
 
   return (
     <div className="relative min-h-screen px-4 py-10 md:py-14">
-      <div className="relative z-[1] mx-auto max-w-2xl">
+      <div className="relative z-[1] mx-auto max-w-4xl">
         <header className="mb-8 text-center">
           <p className="text-xs font-bold uppercase tracking-[0.2em] text-cyan-300/80">Launch Zone Charters</p>
           <h1 className="font-display mt-2 text-3xl font-bold uppercase tracking-[0.08em] text-white md:text-4xl">
@@ -377,7 +391,7 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
         ) : null}
 
         {showStatusEmailGate ? (
-          <section className="lz-card-glass rounded-[var(--lz-radius-card)] p-6 md:p-8">
+          <section className="lz-card-glass mx-auto max-w-2xl rounded-[var(--lz-radius-card)] p-6 md:p-8">
             <h2 className="text-sm font-bold uppercase tracking-widest text-cyan-200/90">Check your status</h2>
             <p className="mt-2 text-sm text-slate-400">
               Enter the email you used when submitting your documents.
@@ -409,8 +423,62 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
           </section>
         ) : null}
 
+        {showEntryOptions ? (
+          <section className="space-y-5">
+            <div className="grid gap-4 md:grid-cols-2">
+              <article className="lz-card-glass flex h-full flex-col rounded-[var(--lz-radius-card)] border border-cyan-400/20 p-6 md:p-7">
+                <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-cyan-300/25 bg-cyan-400/10 text-cyan-200">
+                  <Calendar className="h-6 w-6" aria-hidden />
+                </div>
+                <h2 className="mt-5 text-xl font-bold text-white">I Have a Booking</h2>
+                <p className="mt-2 flex-1 text-sm leading-relaxed text-slate-300">
+                  Find your trip and complete your waiver, license, and insurance steps.
+                </p>
+                <button
+                  type="button"
+                  onClick={wrapSyncClick('waivers_choose_booking_lookup', () => {
+                    setEntryMode('booking');
+                    setManualMode(false);
+                    setFindError(null);
+                  })}
+                  className="lz-btn-primary mt-6 flex w-full items-center justify-center gap-2 py-4 text-base !normal-case !tracking-wide"
+                >
+                  <Search className="h-5 w-5" aria-hidden />
+                  Find My Booking
+                </button>
+              </article>
+
+              <article className="lz-card-glass flex h-full flex-col rounded-[var(--lz-radius-card)] border border-[var(--lz-cta)]/25 p-6 md:p-7">
+                <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-[var(--lz-cta)]/30 bg-[var(--lz-cta)]/10 text-[var(--lz-cta)]">
+                  <ClipboardCheck className="h-6 w-6" aria-hidden />
+                </div>
+                <h2 className="mt-5 text-xl font-bold text-white">I Don&apos;t Have a Booking Yet</h2>
+                <p className="mt-2 flex-1 text-sm leading-relaxed text-slate-300">
+                  Booked through Groupon, phone, text, or need to complete requirements before we match your trip?
+                </p>
+                <button
+                  type="button"
+                  onClick={wrapSyncClick('waivers_choose_manual_submission', () => {
+                    setEntryMode('manual');
+                    setManualMode(true);
+                    setFindError(null);
+                  })}
+                  className="lz-btn-primary mt-6 flex w-full items-center justify-center gap-2 py-4 text-base !normal-case !tracking-wide"
+                >
+                  <Shield className="h-5 w-5" aria-hidden />
+                  Continue Without Booking
+                </button>
+              </article>
+            </div>
+
+            <p className="rounded-2xl border border-white/10 bg-slate-950/35 px-4 py-3 text-center text-sm text-slate-300">
+              Not sure? Choose "I Don&apos;t Have a Booking Yet" and our team will match your documents manually.
+            </p>
+          </section>
+        ) : null}
+
         {showFindForm ? (
-          <section className="lz-card-glass rounded-[var(--lz-radius-card)] p-6 md:p-8">
+          <section className="lz-card-glass mx-auto max-w-2xl rounded-[var(--lz-radius-card)] p-6 md:p-8">
             <h2 className="text-sm font-bold uppercase tracking-widest text-cyan-200/90">
               Step 1 — Find your booking
             </h2>
@@ -469,6 +537,7 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
                   <button
                     type="button"
                     onClick={wrapSyncClick('waivers_insurance_manual_start', () => {
+                      setEntryMode('manual');
                       setManualMode(true);
                       setFindError(null);
                     })}
@@ -491,22 +560,28 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
         ) : null}
 
         {manualMode && !manualSubmissionId && !submissionStatus ? (
-          <ManualPreTripSubmission
-            initialEmail={findEmail}
-            initialPhone={findPhone}
-            initialGrouponCode={findCode}
-            onNavigateTerms={() => onNavigate('terms')}
-            onSubmitted={(id) => {
-              setManualSubmissionId(id);
-              setManualMode(false);
-              void loadSubmissionStatus(id, findEmail.trim().toLowerCase() || statusEmail);
-            }}
-            onBack={() => setManualMode(false)}
-          />
+          <div className="mx-auto max-w-2xl">
+            <ManualPreTripSubmission
+              initialEmail={findEmail}
+              initialPhone={findPhone}
+              initialGrouponCode={findCode}
+              onNavigateTerms={() => onNavigate('terms')}
+              onSubmitted={(id, email) => {
+                setManualSubmissionId(id);
+                setManualMode(false);
+                setStatusEmail(email);
+                void loadSubmissionStatus(id, email);
+              }}
+              onBack={() => {
+                setManualMode(false);
+                setEntryMode(null);
+              }}
+            />
+          </div>
         ) : null}
 
         {submissionView && submissionOverallStatus ? (
-          <div className="space-y-6">
+          <div className="mx-auto max-w-2xl space-y-6">
             <PreTripStatusPanel
               status={submissionOverallStatus}
               checklist={submissionChecklist}
@@ -526,7 +601,7 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
         ) : null}
 
         {booking && bookingOverallStatus ? (
-          <div className="space-y-6">
+          <div className="mx-auto max-w-2xl space-y-6">
             <section className="lz-card-glass rounded-[var(--lz-radius-card)] p-6 md:p-8">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
@@ -542,6 +617,7 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
                     type="button"
                     onClick={wrapSyncClick('waivers_insurance_change_booking', () => {
                       setBooking(null);
+                      setEntryMode('booking');
                       setMagicLinkMode(false);
                     })}
                     className="text-sm font-semibold text-cyan-300 underline decoration-cyan-500/30"

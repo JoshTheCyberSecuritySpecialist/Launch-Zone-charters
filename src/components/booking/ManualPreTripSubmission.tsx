@@ -32,7 +32,7 @@ interface ManualPreTripSubmissionProps {
   initialPhone: string;
   initialGrouponCode?: string;
   onNavigateTerms: () => void;
-  onSubmitted: (submissionId: string) => void;
+  onSubmitted: (submissionId: string, email: string) => void;
   onBack: () => void;
 }
 
@@ -170,7 +170,7 @@ export default function ManualPreTripSubmission({
       setSubmitError(result.error);
       return;
     }
-    onSubmitted(result.submissionId);
+    onSubmitted(result.submissionId, email.trim().toLowerCase());
   };
 
   const bigBtn = 'lz-btn-primary w-full justify-center py-4 text-base !normal-case !tracking-wide';

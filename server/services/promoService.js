@@ -243,6 +243,9 @@ function promoMatchesBooking(row, input, eligibility) {
   if (appliesTo === 'private') {
     return category === 'private';
   }
+  if (appliesTo === 'charters') {
+    return category === 'charters' || category === 'private';
+  }
   return appliesTo === category;
 }
 

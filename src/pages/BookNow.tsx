@@ -325,27 +325,27 @@ export default function BookNow({ onNavigate }: BookNowProps) {
         setStep(1);
         next.time = '19:00';
         next.charterType = 'night_bio';
-        next.hours = 3;
+        next.hours = 1;
       }
       if (charterType === 'rocket' || charterType === 'rocket_launch') {
         setBookingMode('charter');
         setStep(1);
         next.charterType = 'rocket_launch';
-        next.hours = 4;
+        next.hours = 1;
       }
       if (charterType === 'bio' || charterType === 'night_bio') {
         setBookingMode('charter');
         setStep(1);
         next.charterType = 'night_bio';
         next.time = '19:00';
-        next.hours = 3;
+        next.hours = 1;
       }
       if (charterType === 'sunset' || charterType === 'sunset_cruise') {
         setBookingMode('charter');
         setStep(1);
         next.charterType = 'sunset_cruise';
         next.time = '18:30';
-        next.hours = 2;
+        next.hours = 1;
       }
       return next;
     });
@@ -1063,7 +1063,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
         ? new Date(bookingData.slotStartIso.trim())
         : new Date(`${bookingData.date}T${bookingData.time}`);
       const endDateTime = new Date(
-        startDateTime.getTime() + bookingData.hours * 60 * 60 * 1000
+        startDateTime.getTime() + (bookingMode === 'charter' ? 1 : bookingData.hours) * 60 * 60 * 1000
       );
       const apiBase = env.apiUrl;
       const depositAmount = amountDueToday;
@@ -1094,7 +1094,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
               boatName: bookingMode === 'charter' ? null : selectedBoat?.name,
               start_time: startDateTime.toISOString(),
               end_time: endDateTime.toISOString(),
-              duration_hours: bookingData.hours,
+              duration_hours: bookingMode === 'charter' ? 1 : bookingData.hours,
               rental_type: bookingData.rentalType,
               captain_included: bookingMode === 'charter' ? true : bookingData.captainIncluded,
               captain_fee: bookingMode === 'charter' ? 0 : pricing.captainFee,
@@ -1518,7 +1518,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                         charterVariant: 'private',
                         passengerCount: 1,
                         rentalType: 'half_day',
-                        hours: 4,
+                        hours: 1,
                       }));
                       setStep(1);
                     }}
@@ -1541,7 +1541,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                         charterVariant: 'private',
                         passengerCount: 1,
                         rentalType: 'half_day',
-                        hours: 3,
+                        hours: 1,
                         time: '19:00',
                       }));
                       setStep(1);
@@ -1565,7 +1565,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                         charterVariant: 'private',
                         passengerCount: 1,
                         rentalType: 'half_day',
-                        hours: 2,
+                        hours: 1,
                         time: '18:30',
                       }));
                       setStep(1);

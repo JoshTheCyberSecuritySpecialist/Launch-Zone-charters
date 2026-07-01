@@ -116,6 +116,7 @@ function computeExpectedBookingTotals({
   const fullDay = Number(boat?.full_day_rate || 0);
 
   if (bookingMode === 'charter') {
+    const charterDurationHours = 1;
     const guests = Math.min(BIO_SHARED_MAX_GUESTS, Math.max(BIO_SHARED_MIN_GUESTS, Number(passengerCount) || 1));
     const ticketPrice =
       charterType === 'bio'
@@ -129,6 +130,7 @@ function computeExpectedBookingTotals({
       basePrice: totalPrice,
       ticketPrice,
       guestCount: guests,
+      durationHours: charterDurationHours,
       totalPrice,
       amountDueToday: totalPrice,
     };
@@ -866,8 +868,10 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
     guest_count: isCharterBooking ? passengerCount : 1,
     total_amount: expected.totalPrice,
     start_time: booking.start_time,
-    end_time: booking.end_time,
-    duration_hours: Number(booking.duration_hours || 0),
+    end_time: isCharterBooking
+      ? new Date(new Date(String(booking.start_time)).getTime() + 60 * 60 * 1000).toISOString()
+      : booking.end_time,
+    duration_hours: isCharterBooking ? 1 : Number(booking.duration_hours || 0),
     rental_type: booking.rental_type,
     captain_included: Boolean(booking.captain_included),
     captain_fee: captainFeeStored,
@@ -1794,8 +1798,10 @@ app.post('/api/create-checkout-session', async (req, res) => {
       guest_count: isCharterBooking ? passengerCount : 1,
       total_amount: expected.totalPrice,
       start_time: authoritativeBooking.start_time,
-      end_time: authoritativeBooking.end_time,
-      duration_hours: Number(authoritativeBooking.duration_hours || 0),
+      end_time: isCharterBooking
+        ? new Date(new Date(String(authoritativeBooking.start_time)).getTime() + 60 * 60 * 1000).toISOString()
+        : authoritativeBooking.end_time,
+      duration_hours: isCharterBooking ? 1 : Number(authoritativeBooking.duration_hours || 0),
       rental_type: authoritativeBooking.rental_type,
       captain_included: Boolean(authoritativeBooking.captain_included),
       captain_fee: captainFeeStored,

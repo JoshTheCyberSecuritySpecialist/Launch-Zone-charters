@@ -40,10 +40,7 @@ import {
   type CalendarDayAvailability,
   type DayInsight,
 } from '../lib/calendarInsights';
-import {
-  evaluateGrouponPromo,
-  type RentalLocation,
-} from '../lib/grouponPromo';
+import type { RentalLocation } from '../lib/grouponPromo';
 import WaiverBlock, { waiverFormComplete } from '../components/booking/WaiverBlock';
 
 interface BookNowProps {
@@ -56,6 +53,14 @@ interface ApiTimeSlot {
   label: string;
   startHHMM?: string;
 }
+
+type PromoValidationResult = {
+  promoCode: string;
+  originalTotal: number;
+  discountAmount: number;
+  finalTotal: number;
+  description?: string | null;
+};
 
 const FORECAST_LAT = 28.6122;
 const FORECAST_LON = -80.8076;
@@ -181,6 +186,9 @@ export default function BookNow({ onNavigate }: BookNowProps) {
   const [rentalDurationPreset, setRentalDurationPreset] = useState<RentalDurationPreset | null>(null);
   const [rentalLocation, setRentalLocation] = useState<RentalLocation>(null);
   const [promoCodeInput, setPromoCodeInput] = useState('');
+  const [promoValidation, setPromoValidation] = useState<PromoValidationResult | null>(null);
+  const [promoMessage, setPromoMessage] = useState<{ variant: 'success' | 'error'; text: string } | null>(null);
+  const [promoApplying, setPromoApplying] = useState(false);
   const calendarIntelCacheRef = useRef<{ expiresAt: number; data: Map<string, DayInsight> } | null>(null);
 
   const buoyInsurancePagePath = useMemo(() => {
@@ -944,19 +952,12 @@ export default function BookNow({ onNavigate }: BookNowProps) {
   };
 
   const pricing = bookingMode === 'rental' ? calculateRentalPricing() : calculateCharterPricing();
-  const promoEligibility = {
-    bookingMode,
-    rentalLocation,
-    boatType: (selectedBoat?.type ?? 'standard') as 'standard' | 'premium',
-    rentalType: bookingData.rentalType,
-    captainIncluded: bookingData.captainIncluded,
-  };
-  const promoEvaluation = evaluateGrouponPromo(promoCodeInput, pricing.total, promoEligibility);
+  const normalizedPromoInput = promoCodeInput.trim().toUpperCase();
+  const appliedPromo =
+    promoValidation && promoValidation.promoCode === normalizedPromoInput ? promoValidation : null;
   const originalTotal = pricing.total;
-  const reservationTotal =
-    promoEvaluation.status === 'applied' ? promoEvaluation.finalTotal : pricing.total;
-  const promoDiscountAmount =
-    promoEvaluation.status === 'applied' ? promoEvaluation.discountAmount : 0;
+  const reservationTotal = appliedPromo ? appliedPromo.finalTotal : pricing.total;
+  const promoDiscountAmount = appliedPromo ? appliedPromo.discountAmount : 0;
   const amountDueToday =
     bookingMode === 'rental'
       ? Number((reservationTotal * 0.5).toFixed(2))
@@ -1009,6 +1010,76 @@ export default function BookNow({ onNavigate }: BookNowProps) {
   const bookingSecondaryCta =
     'lz-btn-secondary min-h-[48px] w-full justify-center px-5 py-3.5 text-sm font-semibold uppercase tracking-[0.1em]';
 
+  useEffect(() => {
+    setPromoValidation(null);
+    setPromoMessage(null);
+  }, [
+    bookingMode,
+    bookingData.rentalType,
+    bookingData.captainIncluded,
+    bookingData.charterVariant,
+    normalizedPromoInput,
+    originalTotal,
+    rentalLocation,
+    selectedBoat?.type,
+  ]);
+
+  const handleApplyPromo = async () => {
+    const code = normalizedPromoInput;
+    setPromoValidation(null);
+    setPromoMessage(null);
+    if (!code) {
+      setPromoMessage({ variant: 'error', text: 'Enter a promo code first.' });
+      return;
+    }
+    if (!env.apiUrlConfigured || !env.apiUrl) {
+      setPromoMessage({ variant: 'error', text: 'Promo validation is not available right now.' });
+      return;
+    }
+    setPromoApplying(true);
+    try {
+      const res = await fetch(`${env.apiUrl}/api/promo/validate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          code,
+          bookingType:
+            bookingMode === 'charter' && bookingData.charterVariant === 'private' ? 'private' : bookingMode,
+          rentalLocation,
+          subtotal: originalTotal,
+          rentalType: bookingData.rentalType,
+          boatType: selectedBoat?.type === 'premium' ? 'premium' : 'standard',
+          captainIncluded: bookingMode === 'rental' ? bookingData.captainIncluded : true,
+          charterVariant: bookingMode === 'charter' ? bookingData.charterVariant : null,
+        }),
+      });
+      const payload = (await res.json().catch(() => ({}))) as Partial<PromoValidationResult> & {
+        error?: string;
+      };
+      if (!res.ok || !payload.promoCode) {
+        setPromoMessage({ variant: 'error', text: payload.error || 'Promo code could not be applied.' });
+        return;
+      }
+      const nextPromo: PromoValidationResult = {
+        promoCode: payload.promoCode,
+        originalTotal: Number(payload.originalTotal || originalTotal),
+        discountAmount: Number(payload.discountAmount || 0),
+        finalTotal: Number(payload.finalTotal || originalTotal),
+        description: payload.description || null,
+      };
+      setPromoValidation(nextPromo);
+      setPromoMessage({
+        variant: 'success',
+        text: `Promo ${nextPromo.promoCode} applied: -$${nextPromo.discountAmount.toFixed(2)}`,
+      });
+    } catch (err) {
+      if (import.meta.env.DEV) console.warn('[promo-validate]', err);
+      setPromoMessage({ variant: 'error', text: 'Could not validate promo code. Please try again.' });
+    } finally {
+      setPromoApplying(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -1049,9 +1120,9 @@ export default function BookNow({ onNavigate }: BookNowProps) {
       return;
     }
 
-    if (promoEvaluation.status === 'wrong_trip') {
-      setCheckoutError('This code only works for Port Orange pontoon rentals');
-      checkoutPerf.end('aborted_promo_wrong_trip');
+    if (normalizedPromoInput && !appliedPromo) {
+      setCheckoutError('Please apply your promo code or clear it before checkout.');
+      checkoutPerf.end('aborted_promo_not_applied');
       return;
     }
 
@@ -1113,14 +1184,10 @@ export default function BookNow({ onNavigate }: BookNowProps) {
               deposit_amount: depositAmount,
               balance_due: reservationTotal - depositAmount,
               rentalLocation,
-              promoCode:
-                promoEvaluation.status === 'applied' ? promoEvaluation.promoCode : null,
-              discountAmount:
-                promoEvaluation.status === 'applied' ? promoEvaluation.discountAmount : null,
-              originalTotal:
-                promoEvaluation.status === 'applied' ? promoEvaluation.originalTotal : null,
-              finalTotal:
-                promoEvaluation.status === 'applied' ? promoEvaluation.finalTotal : reservationTotal,
+              promoCode: appliedPromo ? appliedPromo.promoCode : null,
+              discountAmount: appliedPromo ? appliedPromo.discountAmount : null,
+              originalTotal: appliedPromo ? appliedPromo.originalTotal : null,
+              finalTotal: appliedPromo ? appliedPromo.finalTotal : reservationTotal,
               is_night_tour:
                 bookingMode === 'charter' ? bookingData.charterType === 'night_bio' : false,
               is_rocket_tour:
@@ -2696,44 +2763,51 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                         <span>Included</span>
                       </div>
                     )}
-                    {bookingMode === 'rental' && (
-                      <div className="rounded-lg border border-white/10 bg-slate-950/60 p-3">
-                        <label htmlFor="promo-code" className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-300">
-                          Promo code
-                        </label>
+                    <div className="rounded-lg border border-white/10 bg-slate-950/60 p-3">
+                      <label htmlFor="promo-code" className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-300">
+                        Promo code
+                      </label>
+                      <div className="flex flex-col gap-2 sm:flex-row">
                         <input
                           id="promo-code"
                           type="text"
                           value={promoCodeInput}
                           onChange={(e) => setPromoCodeInput(e.target.value)}
                           className={fieldClass}
-                          placeholder="e.g. GROUPON"
+                          placeholder="e.g. VIP50"
                           autoComplete="off"
                           spellCheck={false}
                         />
-                        {promoEvaluation.status === 'applied' && (
-                          <p className="mt-2 flex items-center gap-1.5 text-sm font-semibold text-emerald-300">
-                            <Check className="h-4 w-4 shrink-0" aria-hidden />
-                            Promo applied
-                          </p>
-                        )}
-                        {promoEvaluation.status === 'wrong_trip' && (
-                          <p className="mt-2 text-sm text-amber-200">
-                            This code only works for Port Orange pontoon rentals
-                          </p>
-                        )}
+                        <button
+                          type="button"
+                          onClick={() => void handleApplyPromo()}
+                          disabled={promoApplying || !promoCodeInput.trim()}
+                          className="rounded-md bg-cyan-500 px-4 py-2 text-sm font-bold text-slate-950 transition-colors hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {promoApplying ? 'Applying...' : 'Apply'}
+                        </button>
                       </div>
-                    )}
-                    {promoEvaluation.status === 'applied' && (
+                      {promoMessage && (
+                        <p
+                          className={`mt-2 flex items-center gap-1.5 text-sm font-semibold ${
+                            promoMessage.variant === 'success' ? 'text-emerald-300' : 'text-amber-200'
+                          }`}
+                        >
+                          {promoMessage.variant === 'success' && <Check className="h-4 w-4 shrink-0" aria-hidden />}
+                          {promoMessage.text}
+                        </p>
+                      )}
+                    </div>
+                    {appliedPromo && (
                       <>
                         <div className="my-3 border-t border-white/10"></div>
-                        <div className="flex justify-between text-slate-400">
-                          <span>Original price</span>
-                          <span className="line-through">${originalTotal.toFixed(2)}</span>
+                        <div className="flex justify-between text-slate-300">
+                          <span>Subtotal</span>
+                          <span>${originalTotal.toFixed(2)}</span>
                         </div>
                         <div className="flex justify-between text-emerald-300">
-                          <span>Promo discount</span>
-                          <span>−${promoDiscountAmount.toFixed(2)}</span>
+                          <span>Promo {appliedPromo.promoCode} applied</span>
+                          <span>-${promoDiscountAmount.toFixed(2)}</span>
                         </div>
                       </>
                     )}

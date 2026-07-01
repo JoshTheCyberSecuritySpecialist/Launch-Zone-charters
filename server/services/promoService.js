@@ -1,16 +1,18 @@
 /**
- * Server-authoritative Groupon promo validation.
- * Adjust GROUPON_PROMO_PRICES when deal terms change (keep in sync with src/lib/grouponPromo.ts).
+ * Server-authoritative promo validation.
+ *
+ * Generic percent/fixed discounts are loaded from public.promo_codes. The legacy
+ * Groupon codes are also seeded there, with this fallback preserved for deployments
+ * that have not run the migration yet.
  */
-
-/** Standard Groupon deal — 4hr $171.00, 8hr $315.00 */
-/** Groupon Fun deal — 4hr $153.90, 8hr $283.50 */
 const GROUPON_PROMO_PRICES = {
   GROUPON: { half_day: 171.0, full_day: 315.0 },
   GROUPONFUN: { half_day: 153.9, full_day: 283.5 },
 };
 
 const WRONG_TRIP_MESSAGE = 'This code only works for Port Orange pontoon rentals';
+const VALID_DISCOUNT_TYPES = new Set(['percent', 'fixed']);
+const VALID_APPLIES_TO = new Set(['all', 'rentals', 'charters', 'groupon', 'private']);
 
 function roundMoney(v) {
   const n = Number(v);
@@ -22,6 +24,19 @@ function normalizePromoCode(raw) {
   return String(raw || '')
     .trim()
     .toUpperCase();
+}
+
+function normalizeDiscountType(raw) {
+  const v = String(raw || '').trim().toLowerCase();
+  return VALID_DISCOUNT_TYPES.has(v) ? v : 'fixed';
+}
+
+function normalizeAppliesTo(raw) {
+  const v = String(raw || 'all').trim().toLowerCase();
+  if (v === 'rental') return 'rentals';
+  if (v === 'charter') return 'charters';
+  if (v === 'private_charter' || v === 'private-charter') return 'private';
+  return VALID_APPLIES_TO.has(v) ? v : 'all';
 }
 
 function normalizeRentalLocation(raw) {
@@ -62,6 +77,9 @@ function buildEligibilityInput({ booking, boatRow }) {
       .trim()
       .toLowerCase(),
     captainIncluded: Boolean(booking.captain_included),
+    charterVariant: String(booking.charterVariant || booking.charter_variant || '')
+      .trim()
+      .toLowerCase(),
   };
 }
 
@@ -90,11 +108,167 @@ function evaluateGrouponPromo(rawCode, originalTotal, eligibility) {
   };
 }
 
+function bookingCategory(input = {}) {
+  const raw = String(input.bookingType || input.bookingMode || '').trim().toLowerCase();
+  const charterVariant = String(input.charterVariant || '').trim().toLowerCase();
+  if (raw === 'private' || charterVariant === 'private') return 'private';
+  if (raw === 'groupon') return 'groupon';
+  if (raw === 'charter' || raw === 'charters') return 'charters';
+  if (raw === 'rental' || raw === 'rentals') return 'rentals';
+  return raw || 'rentals';
+}
+
+function buildVirtualGrouponRow(code) {
+  if (!GROUPON_PROMO_PRICES[code]) return null;
+  return {
+    id: null,
+    code,
+    description: code === 'GROUPONFUN' ? 'Legacy Groupon Fun direct-booking price match' : 'Legacy Groupon direct-booking price match',
+    discount_type: 'fixed',
+    discount_value: 0,
+    max_uses: null,
+    used_count: 0,
+    active: true,
+    applies_to: 'groupon',
+    starts_at: null,
+    expires_at: null,
+  };
+}
+
+async function loadPromoCode(supabaseAdmin, code) {
+  if (!supabaseAdmin) return { row: buildVirtualGrouponRow(code), error: null };
+  const { data, error } = await supabaseAdmin
+    .from('promo_codes')
+    .select('*')
+    .eq('code', code)
+    .maybeSingle();
+
+  if (error) {
+    const missingTable =
+      error.code === '42P01' || /relation .*promo_codes.* does not exist/i.test(String(error.message || ''));
+    if (missingTable) {
+      return { row: buildVirtualGrouponRow(code), error: null };
+    }
+    return { row: null, error };
+  }
+  return { row: data || buildVirtualGrouponRow(code), error: null };
+}
+
+function promoMatchesBooking(row, input, eligibility) {
+  const appliesTo = normalizeAppliesTo(row?.applies_to);
+  if (appliesTo === 'all') return true;
+  if (appliesTo === 'groupon') {
+    return Boolean(GROUPON_PROMO_PRICES[row.code]) && isPortOrangePontoonRental(eligibility);
+  }
+  const category = bookingCategory(input);
+  if (appliesTo === 'private') {
+    return category === 'private';
+  }
+  return appliesTo === category;
+}
+
+function calculateGenericDiscount(row, originalTotal) {
+  const discountType = normalizeDiscountType(row.discount_type);
+  const value = Number(row.discount_value);
+  if (!Number.isFinite(value) || value <= 0) {
+    return { error: 'Promo code is not configured correctly.' };
+  }
+
+  const original = roundMoney(originalTotal);
+  const rawDiscount = discountType === 'percent' ? original * (Math.min(value, 100) / 100) : value;
+  const discountAmount = roundMoney(Math.min(Math.max(0, rawDiscount), original));
+  const finalTotal = roundMoney(Math.max(0, original - discountAmount));
+
+  return {
+    promoCode: row.code,
+    originalTotal: original,
+    discountAmount,
+    finalTotal,
+  };
+}
+
+async function validatePromoCode(supabaseAdmin, input = {}) {
+  const promoCode = normalizePromoCode(input.code || input.promoCode || input.promo_code);
+  if (!promoCode) {
+    return { ok: false, error: 'Enter a promo code.' };
+  }
+
+  const originalTotal = roundMoney(Number(input.subtotal ?? input.originalTotal ?? input.totalPrice ?? 0));
+  if (!Number.isFinite(originalTotal) || originalTotal < 0) {
+    return { ok: false, error: 'Invalid booking subtotal.' };
+  }
+
+  const { row, error } = await loadPromoCode(supabaseAdmin, promoCode);
+  if (error) {
+    console.warn('[promo-validate] promo lookup:', error.message);
+    return { ok: false, error: 'Could not validate promo code.' };
+  }
+  if (!row) {
+    return { ok: false, error: 'Invalid promo code.' };
+  }
+
+  const now = input.now instanceof Date ? input.now : new Date();
+  if (row.active !== true) {
+    return { ok: false, error: 'Promo code is inactive.' };
+  }
+  if (row.starts_at && new Date(String(row.starts_at)).getTime() > now.getTime()) {
+    return { ok: false, error: 'Promo code is not active yet.' };
+  }
+  if (row.expires_at && new Date(String(row.expires_at)).getTime() < now.getTime()) {
+    return { ok: false, error: 'Promo code has expired.' };
+  }
+  const maxUses = row.max_uses == null ? null : Number(row.max_uses);
+  const usedCount = Number(row.used_count || 0);
+  if (maxUses != null && Number.isFinite(maxUses) && maxUses >= 0 && usedCount >= maxUses) {
+    return { ok: false, error: 'Promo code usage limit has been reached.' };
+  }
+
+  const eligibility = {
+    bookingMode: bookingCategory(input) === 'charters' || bookingCategory(input) === 'private' ? 'charter' : 'rental',
+    rentalLocation: normalizeRentalLocation(input.rentalLocation),
+    boatType: String(input.boatType || 'standard').trim().toLowerCase() === 'premium' ? 'premium' : 'standard',
+    rentalType: String(input.rentalType || input.rental_type || '').trim().toLowerCase(),
+    captainIncluded: Boolean(input.captainIncluded || input.captain_included),
+    charterVariant: String(input.charterVariant || '').trim().toLowerCase(),
+  };
+
+  if (!promoMatchesBooking(row, input, eligibility)) {
+    return {
+      ok: false,
+      error: normalizeAppliesTo(row.applies_to) === 'groupon' ? WRONG_TRIP_MESSAGE : 'Promo code does not apply to this booking.',
+    };
+  }
+
+  let result;
+  if (GROUPON_PROMO_PRICES[promoCode] && normalizeAppliesTo(row.applies_to) === 'groupon') {
+    result = evaluateGrouponPromo(promoCode, originalTotal, eligibility);
+    if (result.status === 'wrong_trip') {
+      return { ok: false, error: result.message || WRONG_TRIP_MESSAGE };
+    }
+    if (result.status !== 'applied') {
+      return { ok: false, error: 'Invalid promo code.' };
+    }
+  } else {
+    const generic = calculateGenericDiscount(row, originalTotal);
+    if (generic.error) return { ok: false, error: generic.error };
+    result = generic;
+  }
+
+  return {
+    ok: true,
+    promoCode,
+    originalTotal: result.originalTotal,
+    discountAmount: result.discountAmount,
+    finalTotal: result.finalTotal,
+    description: row.description || null,
+  };
+}
+
 /**
  * Apply validated promo to server-computed totals. Never trusts client discount fields.
  * @returns {{ expected: object, promo: object|null, error: string|null }}
  */
-function applyPromoToExpectedTotals(expected, { booking, boatRow, bookingMode }) {
+async function applyPromoToExpectedTotals(expected, { supabaseAdmin, booking, boatRow, bookingMode }) {
   const rawPromo = booking.promoCode != null ? booking.promoCode : booking.promo_code;
   const promoInput = String(rawPromo || '').trim();
   if (!promoInput) {
@@ -102,16 +276,19 @@ function applyPromoToExpectedTotals(expected, { booking, boatRow, bookingMode })
   }
 
   const eligibility = buildEligibilityInput({ booking, boatRow });
-  const result = evaluateGrouponPromo(promoInput, expected.totalPrice, eligibility);
+  const result = await validatePromoCode(supabaseAdmin, {
+    code: promoInput,
+    bookingType: bookingMode || eligibility.bookingMode,
+    rentalLocation: booking.rentalLocation,
+    subtotal: expected.totalPrice,
+    boatType: eligibility.boatType,
+    rentalType: eligibility.rentalType,
+    captainIncluded: eligibility.captainIncluded,
+    charterVariant: eligibility.charterVariant,
+  });
 
-  if (result.status === 'unknown') {
-    return { expected, promo: null, error: 'Invalid promo code' };
-  }
-  if (result.status === 'wrong_trip') {
-    return { expected, promo: null, error: result.message || WRONG_TRIP_MESSAGE };
-  }
-  if (result.status !== 'applied') {
-    return { expected, promo: null, error: null };
+  if (!result.ok) {
+    return { expected, promo: null, error: result.error || 'Invalid promo code' };
   }
 
   const mode = String(bookingMode || eligibility.bookingMode || 'rental').trim().toLowerCase();
@@ -138,12 +315,42 @@ function applyPromoToExpectedTotals(expected, { booking, boatRow, bookingMode })
   };
 }
 
+async function incrementPromoUsage(supabaseAdmin, promoCode) {
+  const code = normalizePromoCode(promoCode);
+  if (!supabaseAdmin || !code) return;
+  const { error } = await supabaseAdmin.rpc('increment_promo_code_usage', { p_code: code });
+  if (!error) return;
+
+  const { data: row, error: selectError } = await supabaseAdmin
+    .from('promo_codes')
+    .select('used_count')
+    .eq('code', code)
+    .maybeSingle();
+  if (selectError || !row) {
+    if (selectError && selectError.code !== '42P01') {
+      console.warn('[promo-usage] lookup:', selectError.message);
+    }
+    return;
+  }
+  const nextUsedCount = Number(row.used_count || 0) + 1;
+  const { error: updateError } = await supabaseAdmin
+    .from('promo_codes')
+    .update({ used_count: nextUsedCount, updated_at: new Date().toISOString() })
+    .eq('code', code);
+  if (updateError) {
+    console.warn('[promo-usage] update:', updateError.message);
+  }
+}
+
 module.exports = {
   GROUPON_PROMO_PRICES,
   WRONG_TRIP_MESSAGE,
   normalizePromoCode,
+  normalizeAppliesTo,
   normalizeRentalLocation,
   isPortOrangePontoonRental,
   evaluateGrouponPromo,
+  validatePromoCode,
   applyPromoToExpectedTotals,
+  incrementPromoUsage,
 };

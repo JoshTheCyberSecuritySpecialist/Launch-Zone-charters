@@ -23,7 +23,13 @@ const { getLaunchSchedulePreview } = require('./services/rocketScheduleService')
 const { getWeeklyForecast } = require('./services/weeklyForecastService');
 const { getMarineConditions } = require('./services/marineConditionsService');
 const availabilityService = require('./services/availabilityService');
-const { applyPromoToExpectedTotals } = require('./services/promoService');
+const {
+  applyPromoToExpectedTotals,
+  incrementPromoUsage,
+  normalizeAppliesTo,
+  normalizePromoCode,
+  validatePromoCode,
+} = require('./services/promoService');
 const cron = require('node-cron');
 const { runMonitor } = require('./jobs/conditionMonitor');
 
@@ -837,7 +843,8 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
     boat: boatRow,
   });
 
-  const promoApplied = applyPromoToExpectedTotals(expected, {
+  const promoApplied = await applyPromoToExpectedTotals(expected, {
+    supabaseAdmin: supabase,
     booking,
     boatRow,
     bookingMode,
@@ -914,9 +921,9 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
     license_url: booking.license_url || null,
     insurance_url: booking.insurance_url || null,
     promo_code: promoFields?.promo_code || null,
-    discount_amount: promoFields?.discount_amount ?? null,
-    original_total: promoFields?.original_total ?? null,
-    final_total: promoFields?.final_total ?? null,
+    discount_amount: promoFields?.discount_amount ?? 0,
+    original_total: promoFields?.original_total ?? expected.totalPrice,
+    final_total: promoFields?.final_total ?? expected.totalPrice,
   };
 
   try {
@@ -990,6 +997,10 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
     if (waiverErr) {
       console.warn('[finalize-checkout-session] waiver insert:', waiverErr.message);
     }
+  }
+
+  if (promoFields?.promo_code) {
+    await incrementPromoUsage(supabase, promoFields.promo_code);
   }
 
   const { error: delDraftErr } = await supabase
@@ -1282,6 +1293,189 @@ app.get('/api/availability/times', async (req, res) => {
   }
 });
 
+function parseNullableNumber(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : NaN;
+}
+
+function parseNullableInteger(value) {
+  const n = parseNullableNumber(value);
+  if (n === null) return null;
+  if (!Number.isFinite(n)) return NaN;
+  return Math.max(0, Math.floor(n));
+}
+
+function parseNullableIso(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const d = new Date(raw);
+  return Number.isFinite(d.getTime()) ? d.toISOString() : undefined;
+}
+
+function promoPayloadFromRequest(body, { partial = false } = {}) {
+  const out = {};
+  const errors = [];
+  const hasAny = (...keys) => keys.some((key) => Object.prototype.hasOwnProperty.call(body, key));
+
+  if (!partial || hasAny('code')) {
+    const code = normalizePromoCode(body.code);
+    if (!code) errors.push('Code is required.');
+    else out.code = code.slice(0, 80);
+  }
+
+  if (!partial || hasAny('description')) {
+    const description = String(body.description || '').trim();
+    out.description = description ? description.slice(0, 500) : null;
+  }
+
+  if (!partial || hasAny('discount_type', 'discountType')) {
+    const discountType = String(body.discount_type || body.discountType || '').trim().toLowerCase();
+    if (!['percent', 'fixed'].includes(discountType)) errors.push('Discount type must be percent or fixed.');
+    else out.discount_type = discountType;
+  }
+
+  if (!partial || hasAny('discount_value', 'discountValue')) {
+    const discountValue = Number(body.discount_value ?? body.discountValue);
+    if (!Number.isFinite(discountValue) || discountValue < 0) errors.push('Discount value must be a positive number.');
+    else out.discount_value = roundMoney(discountValue);
+  }
+
+  if (!partial || hasAny('max_uses', 'maxUses')) {
+    const maxUses = parseNullableInteger(body.max_uses ?? body.maxUses);
+    if (Number.isNaN(maxUses)) errors.push('Max uses must be a whole number.');
+    else out.max_uses = maxUses;
+  }
+
+  if (!partial || hasAny('active')) {
+    out.active = body.active == null ? true : Boolean(body.active);
+  }
+
+  if (!partial || hasAny('applies_to', 'appliesTo')) {
+    out.applies_to = normalizeAppliesTo(body.applies_to ?? body.appliesTo);
+  }
+
+  if (!partial || hasAny('starts_at', 'startsAt')) {
+    const startsAt = parseNullableIso(body.starts_at ?? body.startsAt);
+    if (startsAt === undefined) errors.push('Start date is invalid.');
+    else out.starts_at = startsAt;
+  }
+
+  if (!partial || hasAny('expires_at', 'expiresAt')) {
+    const expiresAt = parseNullableIso(body.expires_at ?? body.expiresAt);
+    if (expiresAt === undefined) errors.push('Expiration date is invalid.');
+    else out.expires_at = expiresAt;
+  }
+
+  return { payload: out, errors };
+}
+
+app.get('/api/admin/promo-codes', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const { data, error } = await supabase
+      .from('promo_codes')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    return res.json({ promoCodes: data || [] });
+  } catch (err) {
+    console.error('[admin-promo-codes:list]', err);
+    return res.status(500).json({ error: 'Could not load promo codes.' });
+  }
+});
+
+app.post('/api/admin/promo-codes', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const { payload, errors } = promoPayloadFromRequest(req.body || {});
+    if (errors.length) return res.status(400).json({ error: errors[0] });
+    const { data, error } = await supabase
+      .from('promo_codes')
+      .insert(payload)
+      .select('*')
+      .single();
+    if (error) {
+      if (error.code === '23505') return res.status(409).json({ error: 'Promo code already exists.' });
+      throw error;
+    }
+    return res.status(201).json({ promoCode: data });
+  } catch (err) {
+    console.error('[admin-promo-codes:create]', err);
+    return res.status(500).json({ error: 'Could not create promo code.' });
+  }
+});
+
+app.patch('/api/admin/promo-codes/:id', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const id = String(req.params.id || '').trim();
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid promo code id.' });
+    const { payload, errors } = promoPayloadFromRequest(req.body || {}, { partial: true });
+    if (errors.length) return res.status(400).json({ error: errors[0] });
+    const update = { ...payload, updated_at: new Date().toISOString() };
+    const { data, error } = await supabase
+      .from('promo_codes')
+      .update(update)
+      .eq('id', id)
+      .select('*')
+      .single();
+    if (error) {
+      if (error.code === '23505') return res.status(409).json({ error: 'Promo code already exists.' });
+      throw error;
+    }
+    return res.json({ promoCode: data });
+  } catch (err) {
+    console.error('[admin-promo-codes:update]', err);
+    return res.status(500).json({ error: 'Could not update promo code.' });
+  }
+});
+
+app.delete('/api/admin/promo-codes/:id', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const id = String(req.params.id || '').trim();
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid promo code id.' });
+    const { data, error } = await supabase
+      .from('promo_codes')
+      .update({ active: false, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .select('*')
+      .single();
+    if (error) throw error;
+    return res.json({ promoCode: data });
+  } catch (err) {
+    console.error('[admin-promo-codes:delete]', err);
+    return res.status(500).json({ error: 'Could not deactivate promo code.' });
+  }
+});
+
+app.post('/api/promo/validate', async (req, res) => {
+  try {
+    if (!supabaseConfigured) {
+      return res.status(503).json({ error: 'Server not configured' });
+    }
+    const result = await validatePromoCode(supabase, req.body || {});
+    if (!result.ok) {
+      return res.status(400).json({ error: result.error || 'Invalid promo code.' });
+    }
+    return res.json({
+      originalTotal: result.originalTotal,
+      discountAmount: result.discountAmount,
+      finalTotal: result.finalTotal,
+      promoCode: result.promoCode,
+      description: result.description || null,
+    });
+  } catch (err) {
+    console.error('[promo-validate]', err);
+    return res.status(500).json({ error: 'Could not validate promo code.' });
+  }
+});
+
 /**
  * Pay-first flow: create Stripe Checkout, defer booking insert until success page finalize call.
  * POST body: { customer: {...}, booking: {...}, waiver: {...}, legal: {...} }
@@ -1415,7 +1609,8 @@ app.post('/api/create-checkout-session', async (req, res) => {
       boat: boatRow,
     });
 
-    const promoApplied = applyPromoToExpectedTotals(expected, {
+    const promoApplied = await applyPromoToExpectedTotals(expected, {
+      supabaseAdmin: supabase,
       booking,
       boatRow,
       bookingMode,
@@ -1561,7 +1756,7 @@ app.post('/api/create-checkout-session', async (req, res) => {
       balance_due: roundMoney(expected.totalPrice - expected.amountDueToday),
       promoCode: promoFields?.promo_code || null,
       discountAmount: promoFields?.discount_amount ?? null,
-      originalTotal: promoFields?.original_total ?? null,
+      originalTotal: promoFields?.original_total ?? expected.totalPrice,
       finalTotal: promoFields?.final_total ?? expected.totalPrice,
     };
 
@@ -1603,9 +1798,9 @@ app.post('/api/create-checkout-session', async (req, res) => {
       license_url: authoritativeBooking.license_url || null,
       insurance_url: authoritativeBooking.insurance_url || null,
       promo_code: promoFields?.promo_code || null,
-      discount_amount: promoFields?.discount_amount ?? null,
-      original_total: promoFields?.original_total ?? null,
-      final_total: promoFields?.final_total ?? null,
+      discount_amount: promoFields?.discount_amount ?? 0,
+      original_total: promoFields?.original_total ?? expected.totalPrice,
+      final_total: promoFields?.final_total ?? expected.totalPrice,
     };
 
     const { error: holdErr } = await supabase.from('bookings').insert(holdInsert);

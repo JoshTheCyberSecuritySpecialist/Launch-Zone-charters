@@ -13,6 +13,20 @@ const GROUPON_PROMO_PRICES = {
 const WRONG_TRIP_MESSAGE = 'This code only works for Port Orange pontoon rentals';
 const VALID_DISCOUNT_TYPES = new Set(['percent', 'fixed']);
 const VALID_APPLIES_TO = new Set(['all', 'rentals', 'charters', 'groupon', 'private']);
+const PROMO_ERROR_MESSAGES = {
+  code_required: 'Enter a promo code.',
+  invalid_subtotal: 'Invalid booking subtotal.',
+  code_not_found: 'Promo code not found.',
+  code_inactive: 'Promo code is inactive.',
+  code_not_started: 'Promo code is not active yet.',
+  code_expired: 'Promo code has expired.',
+  max_uses_reached: 'Promo code max uses reached.',
+  wrong_location: 'Groupon codes only work for Port Orange pontoon rentals.',
+  wrong_boat: 'Groupon codes only work for pontoon rentals.',
+  wrong_duration: 'Groupon codes only work for 4-hour or 8-hour rentals.',
+  wrong_trip_type: 'Promo code does not apply to this booking type.',
+  server_validation_failed: 'Server validation failed.',
+};
 
 function roundMoney(v) {
   const n = Number(v);
@@ -43,24 +57,68 @@ function normalizeRentalLocation(raw) {
   const loc = String(raw || '')
     .trim()
     .toLowerCase();
-  if (loc === 'daytona') return 'daytona';
+  const compact = loc.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (
+    compact === 'port orange' ||
+    compact === 'daytona' ||
+    compact === 'daytona beach'
+  ) {
+    return 'port-orange';
+  }
   if (loc === 'titusville') return 'titusville';
-  return null;
+  return compact || null;
 }
 
-/** Port Orange area pontoon rentals use ?location=daytona and standard (non-premium) boats. */
+function normalizeBoatName(raw) {
+  return String(raw || '').trim().toLowerCase();
+}
+
+function normalizeBookingType(raw) {
+  const v = String(raw || '').trim().toLowerCase();
+  if (v === 'charters') return 'charter';
+  if (v === 'rentals') return 'rental';
+  return v;
+}
+
+function normalizeDurationHours(raw) {
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function isPontoonBoat(input = {}) {
+  const boatName = normalizeBoatName(input.boatName);
+  const boatType = String(input.boatType || '').trim().toLowerCase();
+  return (
+    boatName.includes('suncatcher') ||
+    boatName.includes('pontoon') ||
+    boatType.includes('pontoon')
+  );
+}
+
+function promoError(reasonCode, fallback) {
+  return {
+    ok: false,
+    reasonCode,
+    error: PROMO_ERROR_MESSAGES[reasonCode] || fallback || PROMO_ERROR_MESSAGES.server_validation_failed,
+  };
+}
+
+/** Port Orange area pontoon rentals use ?location=daytona / Port Orange aliases. */
 function isPortOrangePontoonRental({
   bookingMode,
   rentalLocation,
   boatType,
+  boatName,
   rentalType,
+  durationHours,
   captainIncluded,
 }) {
+  const duration = normalizeDurationHours(durationHours);
   return (
     bookingMode === 'rental' &&
-    rentalLocation === 'daytona' &&
-    boatType === 'standard' &&
-    (rentalType === 'half_day' || rentalType === 'full_day') &&
+    rentalLocation === 'port-orange' &&
+    isPontoonBoat({ boatType, boatName }) &&
+    (rentalType === 'half_day' || rentalType === 'full_day' || duration === 4 || duration === 8) &&
     !captainIncluded
   );
 }
@@ -73,9 +131,11 @@ function buildEligibilityInput({ booking, boatRow }) {
     bookingMode: bookingMode === 'charter' ? 'charter' : 'rental',
     rentalLocation: normalizeRentalLocation(booking.rentalLocation),
     boatType: String(boatRow?.type || 'standard').trim().toLowerCase() === 'premium' ? 'premium' : 'standard',
+    boatName: normalizeBoatName(booking.boatName || booking.boat_name || boatRow?.name),
     rentalType: String(booking.rental_type || '')
       .trim()
       .toLowerCase(),
+    durationHours: normalizeDurationHours(booking.duration_hours),
     captainIncluded: Boolean(booking.captain_included),
     charterVariant: String(booking.charterVariant || booking.charter_variant || '')
       .trim()
@@ -90,13 +150,32 @@ function evaluateGrouponPromo(rawCode, originalTotal, eligibility) {
   const priceTable = GROUPON_PROMO_PRICES[promoCode];
   if (!priceTable) return { status: 'unknown', promoCode };
 
-  if (!isPortOrangePontoonRental(eligibility)) {
-    return { status: 'wrong_trip', promoCode, message: WRONG_TRIP_MESSAGE };
+  const location = normalizeRentalLocation(eligibility.rentalLocation);
+  const duration = normalizeDurationHours(eligibility.durationHours);
+  if (eligibility.bookingMode !== 'rental') {
+    return { status: 'wrong_trip', promoCode, reasonCode: 'wrong_trip_type', message: PROMO_ERROR_MESSAGES.wrong_trip_type };
+  }
+  if (location !== 'port-orange') {
+    return { status: 'wrong_trip', promoCode, reasonCode: 'wrong_location', message: PROMO_ERROR_MESSAGES.wrong_location };
+  }
+  if (!isPontoonBoat(eligibility)) {
+    return { status: 'wrong_trip', promoCode, reasonCode: 'wrong_boat', message: PROMO_ERROR_MESSAGES.wrong_boat };
+  }
+  if (
+    eligibility.rentalType !== 'half_day' &&
+    eligibility.rentalType !== 'full_day' &&
+    duration !== 4 &&
+    duration !== 8
+  ) {
+    return { status: 'wrong_trip', promoCode, reasonCode: 'wrong_duration', message: PROMO_ERROR_MESSAGES.wrong_duration };
+  }
+  if (eligibility.captainIncluded) {
+    return { status: 'wrong_trip', promoCode, reasonCode: 'wrong_trip_type', message: WRONG_TRIP_MESSAGE };
   }
 
-  const rentalType = eligibility.rentalType;
+  const rentalType = eligibility.rentalType || (duration === 8 ? 'full_day' : 'half_day');
   const finalTotal =
-    rentalType === 'half_day' ? priceTable.half_day : priceTable.full_day;
+    rentalType === 'full_day' || duration === 8 ? priceTable.full_day : priceTable.half_day;
   const discountAmount = roundMoney(Math.max(0, originalTotal - finalTotal));
 
   return {
@@ -190,76 +269,87 @@ function calculateGenericDiscount(row, originalTotal) {
 async function validatePromoCode(supabaseAdmin, input = {}) {
   const promoCode = normalizePromoCode(input.code || input.promoCode || input.promo_code);
   if (!promoCode) {
-    return { ok: false, error: 'Enter a promo code.' };
+    return promoError('code_required');
   }
 
-  const originalTotal = roundMoney(Number(input.subtotal ?? input.originalTotal ?? input.totalPrice ?? 0));
-  if (!Number.isFinite(originalTotal) || originalTotal < 0) {
-    return { ok: false, error: 'Invalid booking subtotal.' };
+  const discountableSubtotal = roundMoney(Number(input.subtotal ?? input.originalSubtotal ?? input.originalTotal ?? input.totalPrice ?? 0));
+  const securityDeposit = roundMoney(Number(input.securityDeposit ?? input.security_deposit ?? 0));
+  const originalTotal = roundMoney(discountableSubtotal + securityDeposit);
+  if (!Number.isFinite(discountableSubtotal) || discountableSubtotal < 0 || !Number.isFinite(securityDeposit) || securityDeposit < 0) {
+    return promoError('invalid_subtotal');
   }
 
   const { row, error } = await loadPromoCode(supabaseAdmin, promoCode);
   if (error) {
     console.warn('[promo-validate] promo lookup:', error.message);
-    return { ok: false, error: 'Could not validate promo code.' };
+    return promoError('server_validation_failed');
   }
   if (!row) {
-    return { ok: false, error: 'Invalid promo code.' };
+    return promoError('code_not_found');
   }
 
   const now = input.now instanceof Date ? input.now : new Date();
   if (row.active !== true) {
-    return { ok: false, error: 'Promo code is inactive.' };
+    return promoError('code_inactive');
   }
   if (row.starts_at && new Date(String(row.starts_at)).getTime() > now.getTime()) {
-    return { ok: false, error: 'Promo code is not active yet.' };
+    return promoError('code_not_started');
   }
   if (row.expires_at && new Date(String(row.expires_at)).getTime() < now.getTime()) {
-    return { ok: false, error: 'Promo code has expired.' };
+    return promoError('code_expired');
   }
   const maxUses = row.max_uses == null ? null : Number(row.max_uses);
   const usedCount = Number(row.used_count || 0);
   if (maxUses != null && Number.isFinite(maxUses) && maxUses >= 0 && usedCount >= maxUses) {
-    return { ok: false, error: 'Promo code usage limit has been reached.' };
+    return promoError('max_uses_reached');
   }
 
+  const category = bookingCategory(input);
   const eligibility = {
-    bookingMode: bookingCategory(input) === 'charters' || bookingCategory(input) === 'private' ? 'charter' : 'rental',
+    bookingMode: category === 'charters' || category === 'private' ? 'charter' : 'rental',
     rentalLocation: normalizeRentalLocation(input.rentalLocation),
+    boatName: normalizeBoatName(input.boatName),
     boatType: String(input.boatType || 'standard').trim().toLowerCase() === 'premium' ? 'premium' : 'standard',
     rentalType: String(input.rentalType || input.rental_type || '').trim().toLowerCase(),
+    durationHours: normalizeDurationHours(input.durationHours || input.duration_hours),
     captainIncluded: Boolean(input.captainIncluded || input.captain_included),
     charterVariant: String(input.charterVariant || '').trim().toLowerCase(),
   };
 
   if (!promoMatchesBooking(row, input, eligibility)) {
-    return {
-      ok: false,
-      error: normalizeAppliesTo(row.applies_to) === 'groupon' ? WRONG_TRIP_MESSAGE : 'Promo code does not apply to this booking.',
-    };
+    if (normalizeAppliesTo(row.applies_to) === 'groupon') {
+      const grouponCheck = evaluateGrouponPromo(promoCode, discountableSubtotal, eligibility);
+      return promoError(grouponCheck.reasonCode || 'wrong_trip_type');
+    }
+    return promoError('wrong_trip_type');
   }
 
   let result;
   if (GROUPON_PROMO_PRICES[promoCode] && normalizeAppliesTo(row.applies_to) === 'groupon') {
-    result = evaluateGrouponPromo(promoCode, originalTotal, eligibility);
+    result = evaluateGrouponPromo(promoCode, discountableSubtotal, eligibility);
     if (result.status === 'wrong_trip') {
-      return { ok: false, error: result.message || WRONG_TRIP_MESSAGE };
+      return promoError(result.reasonCode || 'wrong_trip_type', result.message);
     }
     if (result.status !== 'applied') {
-      return { ok: false, error: 'Invalid promo code.' };
+      return promoError('code_not_found');
     }
   } else {
-    const generic = calculateGenericDiscount(row, originalTotal);
-    if (generic.error) return { ok: false, error: generic.error };
+    const generic = calculateGenericDiscount(row, discountableSubtotal);
+    if (generic.error) return promoError('server_validation_failed', generic.error);
     result = generic;
   }
 
+  const finalSubtotal = roundMoney(result.finalTotal);
+  const finalTotal = roundMoney(finalSubtotal + securityDeposit);
   return {
     ok: true,
     promoCode,
-    originalTotal: result.originalTotal,
+    originalSubtotal: roundMoney(discountableSubtotal),
+    finalSubtotal,
+    securityDeposit,
+    originalTotal,
     discountAmount: result.discountAmount,
-    finalTotal: result.finalTotal,
+    finalTotal,
     description: row.description || null,
   };
 }
@@ -280,7 +370,13 @@ async function applyPromoToExpectedTotals(expected, { supabaseAdmin, booking, bo
     code: promoInput,
     bookingType: bookingMode || eligibility.bookingMode,
     rentalLocation: booking.rentalLocation,
-    subtotal: expected.totalPrice,
+    boatName: eligibility.boatName,
+    durationHours: eligibility.durationHours,
+    subtotal:
+      expected.mode === 'rental'
+        ? roundMoney(expected.totalPrice - Number(booking.security_deposit || 0))
+        : expected.totalPrice,
+    securityDeposit: expected.mode === 'rental' ? Number(booking.security_deposit || 0) : 0,
     boatType: eligibility.boatType,
     rentalType: eligibility.rentalType,
     captainIncluded: eligibility.captainIncluded,

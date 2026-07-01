@@ -56,10 +56,14 @@ interface ApiTimeSlot {
 
 type PromoValidationResult = {
   promoCode: string;
+  originalSubtotal: number;
+  finalSubtotal: number;
+  securityDeposit: number;
   originalTotal: number;
   discountAmount: number;
   finalTotal: number;
   description?: string | null;
+  reasonCode?: string;
 };
 
 const FORECAST_LAT = 28.6122;
@@ -955,6 +959,8 @@ export default function BookNow({ onNavigate }: BookNowProps) {
   const normalizedPromoInput = promoCodeInput.trim().toUpperCase();
   const appliedPromo =
     promoValidation && promoValidation.promoCode === normalizedPromoInput ? promoValidation : null;
+  const securityDepositAmount = bookingMode === 'rental' ? Number(pricing.deposit || 0) : 0;
+  const discountableSubtotal = Number((pricing.total - securityDepositAmount).toFixed(2));
   const originalTotal = pricing.total;
   const reservationTotal = appliedPromo ? appliedPromo.finalTotal : pricing.total;
   const promoDiscountAmount = appliedPromo ? appliedPromo.discountAmount : 0;
@@ -1019,8 +1025,10 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     bookingData.captainIncluded,
     bookingData.charterVariant,
     normalizedPromoInput,
+    discountableSubtotal,
     originalTotal,
     rentalLocation,
+    selectedBoat?.name,
     selectedBoat?.type,
   ]);
 
@@ -1038,30 +1046,45 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     }
     setPromoApplying(true);
     try {
+      const promoPayload = {
+        code,
+        bookingType:
+          bookingMode === 'charter' && bookingData.charterVariant === 'private' ? 'private' : bookingMode,
+        rentalLocation,
+        boatName: selectedBoat?.name || '',
+        durationHours: bookingData.hours,
+        subtotal: discountableSubtotal,
+        securityDeposit: securityDepositAmount,
+        rentalType: bookingData.rentalType,
+        boatType: selectedBoat?.type === 'premium' ? 'premium' : 'standard',
+        captainIncluded: bookingMode === 'rental' ? bookingData.captainIncluded : true,
+        charterVariant: bookingMode === 'charter' ? bookingData.charterVariant : null,
+      };
+      if (import.meta.env.DEV) {
+        console.info('[promo-validate] payload', promoPayload);
+      }
       const res = await fetch(`${env.apiUrl}/api/promo/validate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          code,
-          bookingType:
-            bookingMode === 'charter' && bookingData.charterVariant === 'private' ? 'private' : bookingMode,
-          rentalLocation,
-          subtotal: originalTotal,
-          rentalType: bookingData.rentalType,
-          boatType: selectedBoat?.type === 'premium' ? 'premium' : 'standard',
-          captainIncluded: bookingMode === 'rental' ? bookingData.captainIncluded : true,
-          charterVariant: bookingMode === 'charter' ? bookingData.charterVariant : null,
-        }),
+        body: JSON.stringify(promoPayload),
       });
       const payload = (await res.json().catch(() => ({}))) as Partial<PromoValidationResult> & {
         error?: string;
+        reasonCode?: string;
       };
+      if (import.meta.env.DEV) {
+        console.info('[promo-validate] result', payload);
+        if (!res.ok) console.info('[promo-validate] reason', payload.reasonCode || 'server_validation_failed');
+      }
       if (!res.ok || !payload.promoCode) {
         setPromoMessage({ variant: 'error', text: payload.error || 'Promo code could not be applied.' });
         return;
       }
       const nextPromo: PromoValidationResult = {
         promoCode: payload.promoCode,
+        originalSubtotal: Number(payload.originalSubtotal || discountableSubtotal),
+        finalSubtotal: Number(payload.finalSubtotal || discountableSubtotal),
+        securityDeposit: Number(payload.securityDeposit || securityDepositAmount),
         originalTotal: Number(payload.originalTotal || originalTotal),
         discountAmount: Number(payload.discountAmount || 0),
         finalTotal: Number(payload.finalTotal || originalTotal),
@@ -1171,6 +1194,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
             },
             booking: {
               boat_id: selectedBoat.id,
+              boatName: selectedBoat.name,
               start_time: startDateTime.toISOString(),
               end_time: endDateTime.toISOString(),
               duration_hours: bookingData.hours,
@@ -2802,12 +2826,16 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                       <>
                         <div className="my-3 border-t border-white/10"></div>
                         <div className="flex justify-between text-slate-300">
-                          <span>Subtotal</span>
-                          <span>${originalTotal.toFixed(2)}</span>
+                          <span>{bookingMode === 'rental' ? 'Rental subtotal' : 'Subtotal'}</span>
+                          <span>${appliedPromo.originalSubtotal.toFixed(2)}</span>
                         </div>
                         <div className="flex justify-between text-emerald-300">
                           <span>Promo {appliedPromo.promoCode} applied</span>
                           <span>-${promoDiscountAmount.toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between text-slate-300">
+                          <span>{bookingMode === 'rental' ? 'Rental after promo' : 'Subtotal after promo'}</span>
+                          <span>${appliedPromo.finalSubtotal.toFixed(2)}</span>
                         </div>
                       </>
                     )}

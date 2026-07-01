@@ -20,6 +20,47 @@ CREATE TABLE IF NOT EXISTS public.promo_codes (
   CONSTRAINT promo_codes_used_count_nonnegative CHECK (used_count >= 0)
 );
 
+-- CREATE TABLE IF NOT EXISTS does not upgrade a pre-existing table, so make
+-- this migration safe for remotes that already have an earlier promo_codes stub.
+ALTER TABLE public.promo_codes
+  ADD COLUMN IF NOT EXISTS id uuid DEFAULT gen_random_uuid(),
+  ADD COLUMN IF NOT EXISTS code text,
+  ADD COLUMN IF NOT EXISTS description text,
+  ADD COLUMN IF NOT EXISTS discount_type text DEFAULT 'fixed',
+  ADD COLUMN IF NOT EXISTS discount_value numeric DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS max_uses integer,
+  ADD COLUMN IF NOT EXISTS used_count integer DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS active boolean DEFAULT true,
+  ADD COLUMN IF NOT EXISTS applies_to text DEFAULT 'all',
+  ADD COLUMN IF NOT EXISTS starts_at timestamptz,
+  ADD COLUMN IF NOT EXISTS expires_at timestamptz,
+  ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now(),
+  ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
+
+UPDATE public.promo_codes
+SET
+  code = upper(trim(code)),
+  discount_type = COALESCE(NULLIF(discount_type, ''), 'fixed'),
+  discount_value = COALESCE(discount_value, 0),
+  used_count = COALESCE(used_count, 0),
+  active = COALESCE(active, true),
+  applies_to = COALESCE(NULLIF(applies_to, ''), 'all'),
+  created_at = COALESCE(created_at, now()),
+  updated_at = COALESCE(updated_at, now());
+
+ALTER TABLE public.promo_codes
+  ALTER COLUMN id SET DEFAULT gen_random_uuid(),
+  ALTER COLUMN discount_type SET DEFAULT 'fixed',
+  ALTER COLUMN discount_value SET DEFAULT 0,
+  ALTER COLUMN used_count SET DEFAULT 0,
+  ALTER COLUMN active SET DEFAULT true,
+  ALTER COLUMN applies_to SET DEFAULT 'all',
+  ALTER COLUMN created_at SET DEFAULT now(),
+  ALTER COLUMN updated_at SET DEFAULT now();
+
+CREATE UNIQUE INDEX IF NOT EXISTS promo_codes_code_unique_idx
+  ON public.promo_codes (code);
+
 COMMENT ON TABLE public.promo_codes IS 'Admin-managed booking promo codes. Customers validate codes only through the backend API.';
 COMMENT ON COLUMN public.promo_codes.applies_to IS 'Booking scope: all, rentals, charters, groupon, or private.';
 

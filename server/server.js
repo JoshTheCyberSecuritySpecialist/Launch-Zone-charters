@@ -811,7 +811,7 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
 
   const { data: boatRow, error: boatErr } = await supabase
     .from('boats')
-    .select('id, hourly_rate, half_day_rate, full_day_rate, type')
+    .select('id, name, hourly_rate, half_day_rate, full_day_rate, type')
     .eq('id', String(booking.boat_id))
     .maybeSingle();
   if (boatErr) {
@@ -1440,6 +1440,27 @@ app.delete('/api/admin/promo-codes/:id', async (req, res) => {
   try {
     const id = String(req.params.id || '').trim();
     if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid promo code id.' });
+
+    const { data: existing, error: lookupError } = await supabase
+      .from('promo_codes')
+      .select('id, code, used_count')
+      .eq('id', id)
+      .single();
+    if (lookupError || !existing) throw lookupError || new Error('Promo code not found.');
+
+    const { count: bookingUseCount, error: bookingUseError } = await supabase
+      .from('bookings')
+      .select('id', { count: 'exact', head: true })
+      .eq('promo_code', existing.code);
+    if (bookingUseError) throw bookingUseError;
+
+    const safeToDelete = Number(existing.used_count || 0) === 0 && Number(bookingUseCount || 0) === 0;
+    if (safeToDelete) {
+      const { error: deleteError } = await supabase.from('promo_codes').delete().eq('id', id);
+      if (deleteError) throw deleteError;
+      return res.json({ deleted: true, deactivated: false, promoCode: existing });
+    }
+
     const { data, error } = await supabase
       .from('promo_codes')
       .update({ active: false, updated_at: new Date().toISOString() })
@@ -1447,10 +1468,10 @@ app.delete('/api/admin/promo-codes/:id', async (req, res) => {
       .select('*')
       .single();
     if (error) throw error;
-    return res.json({ promoCode: data });
+    return res.json({ deleted: false, deactivated: true, promoCode: data });
   } catch (err) {
     console.error('[admin-promo-codes:delete]', err);
-    return res.status(500).json({ error: 'Could not deactivate promo code.' });
+    return res.status(500).json({ error: 'Could not delete or deactivate promo code.' });
   }
 });
 
@@ -1459,11 +1480,24 @@ app.post('/api/promo/validate', async (req, res) => {
     if (!supabaseConfigured) {
       return res.status(503).json({ error: 'Server not configured' });
     }
+    if (!isProduction) {
+      console.info('[promo-validate] payload', req.body || {});
+    }
     const result = await validatePromoCode(supabase, req.body || {});
+    if (!isProduction) {
+      console.info('[promo-validate] result', result);
+      if (!result.ok) console.info('[promo-validate] reason', result.reasonCode || 'server_validation_failed');
+    }
     if (!result.ok) {
-      return res.status(400).json({ error: result.error || 'Invalid promo code.' });
+      return res.status(400).json({
+        error: result.error || 'Invalid promo code.',
+        reasonCode: result.reasonCode || 'server_validation_failed',
+      });
     }
     return res.json({
+      originalSubtotal: result.originalSubtotal,
+      finalSubtotal: result.finalSubtotal,
+      securityDeposit: result.securityDeposit,
       originalTotal: result.originalTotal,
       discountAmount: result.discountAmount,
       finalTotal: result.finalTotal,
@@ -1587,7 +1621,7 @@ app.post('/api/create-checkout-session', async (req, res) => {
     // Server-authoritative pricing: compute expected totals server-side.
     const { data: boatRow, error: boatErr } = await supabase
       .from('boats')
-      .select('id, hourly_rate, half_day_rate, full_day_rate, type')
+    .select('id, name, hourly_rate, half_day_rate, full_day_rate, type')
       .eq('id', String(booking.boat_id))
       .maybeSingle();
     if (boatErr) {

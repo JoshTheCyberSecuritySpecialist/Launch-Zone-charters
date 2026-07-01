@@ -870,15 +870,18 @@ export default function Admin({ onNavigate }: AdminProps) {
 
   const deactivatePromoCode = useCallback(
     async (row: PromoCodeRow) => {
-      if (!window.confirm(`Deactivate promo code ${row.code}?`)) return;
+      if (!window.confirm(`Delete promo code ${row.code} if unused? If it has been used, it will be deactivated instead.`)) return;
       setPromoBusyId(row.id);
       try {
-        await apiRequest(`/api/admin/promo-codes/${encodeURIComponent(row.id)}`, { method: 'DELETE' });
-        setNotice({ variant: 'success', text: 'Promo code deactivated.' });
+        const payload = await apiRequest(`/api/admin/promo-codes/${encodeURIComponent(row.id)}`, { method: 'DELETE' });
+        setNotice({
+          variant: 'success',
+          text: payload.deleted ? 'Promo code deleted.' : 'Promo code deactivated.',
+        });
         await loadPromoCodes();
       } catch (err) {
         console.error('[admin-promo-delete]', err);
-        setNotice({ variant: 'error', text: err instanceof Error ? err.message : 'Could not deactivate promo code.' });
+        setNotice({ variant: 'error', text: err instanceof Error ? err.message : 'Could not delete promo code.' });
       } finally {
         setPromoBusyId(null);
       }
@@ -1903,7 +1906,7 @@ export default function Admin({ onNavigate }: AdminProps) {
                           </button>
                           <button
                             type="button"
-                            disabled={promoBusyId === row.id || !row.active}
+                            disabled={promoBusyId === row.id}
                             onClick={() => void deactivatePromoCode(row)}
                             className="ml-2 inline-flex items-center gap-1 rounded-md px-2 py-1 text-sm font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50"
                           >

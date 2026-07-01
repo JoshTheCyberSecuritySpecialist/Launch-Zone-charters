@@ -138,7 +138,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     captainIncluded: false,
     charterType: 'rocket_launch' as CharterType,
     charterVariant: 'private' as CharterVariant,
-    passengerCount: 4,
+    passengerCount: 1,
     charterRequestOnly: false,
     fullName: '',
     email: '',
@@ -467,31 +467,25 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     void loadBoats();
   }, [loadBoats]);
 
-  const BIO_SHARED_PER_PERSON = 75;
+  const BIO_SHARED_PER_PERSON = 150;
   const ROCKET_SHARED_PER_PERSON = 85;
   const SUNSET_SHARED_PER_PERSON = 75;
-  const BIO_SHARED_MAX_GUESTS = 2;
-  const SUNSET_EXPERIENCE_SURCHARGE = 75;
+  const BIO_SHARED_MAX_GUESTS = 6;
 
   const isBioCharter = bookingMode === 'charter' && bookingData.charterType === 'night_bio';
   const isRocketCharter = bookingMode === 'charter' && bookingData.charterType === 'rocket_launch';
   const isSunsetCharter = bookingMode === 'charter' && bookingData.charterType === 'sunset_cruise';
-  /** Charters that use the same confirm-details step for private vs shared (not rentals). */
-  const charterUsesPrivateSharedStep = isBioCharter || isRocketCharter || isSunsetCharter;
-  const isSharedTour =
-    bookingMode === 'charter' &&
-    bookingData.charterVariant === 'shared' &&
-    (bookingData.charterType === 'night_bio' ||
-      bookingData.charterType === 'rocket_launch' ||
-      bookingData.charterType === 'sunset_cruise');
+  /** Charters use a ticket-style checkout and skip rental add-ons. */
+  const charterUsesPrivateSharedStep = false;
+  const isSharedTour = false;
   const sharedTourPerPerson = (() => {
-    if (!isSharedTour) return BIO_SHARED_PER_PERSON;
     if (bookingData.charterType === 'night_bio') return BIO_SHARED_PER_PERSON;
     if (bookingData.charterType === 'rocket_launch') return ROCKET_SHARED_PER_PERSON;
     return SUNSET_SHARED_PER_PERSON;
   })();
   const sharedTourOverLimit =
-    isSharedTour && bookingData.passengerCount > BIO_SHARED_MAX_GUESTS;
+    bookingMode === 'charter' &&
+    (bookingData.passengerCount < 1 || bookingData.passengerCount > BIO_SHARED_MAX_GUESTS);
   const sharedHoursUntilTrip = (() => {
     if (!bookingData.date) return Number.POSITIVE_INFINITY;
     const [y, m, d] = bookingData.date.split('-').map(Number);
@@ -511,7 +505,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
   const durationHoursForAvailability = bookingData.hours;
 
   useEffect(() => {
-    if (!env.apiUrlConfigured || !env.apiUrl || !selectedBoat?.id) {
+    if (bookingMode !== 'rental' || !env.apiUrlConfigured || !env.apiUrl || !selectedBoat?.id) {
       setAvailabilityByDate(new Map());
       return;
     }
@@ -550,7 +544,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
         if (!ac.signal.aborted) setAvailCalendarLoading(false);
       });
     return () => ac.abort();
-  }, [selectedBoat?.id, durationHoursForAvailability, env.apiUrl, env.apiUrlConfigured]);
+  }, [bookingMode, selectedBoat?.id, durationHoursForAvailability, env.apiUrl, env.apiUrlConfigured]);
 
   useEffect(() => {
     const cached = calendarIntelCacheRef.current;
@@ -622,7 +616,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
   }, []);
 
   useEffect(() => {
-    if (!env.apiUrlConfigured || !env.apiUrl || !selectedBoat?.id || !bookingData.date) {
+    if (bookingMode !== 'rental' || !env.apiUrlConfigured || !env.apiUrl || !selectedBoat?.id || !bookingData.date) {
       setTimeSlots([]);
       setTimesManualFallback(false);
       return;
@@ -689,6 +683,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
       });
     return () => ac.abort();
   }, [
+    bookingMode,
     selectedBoat?.id,
     bookingData.date,
     durationHoursForAvailability,
@@ -701,10 +696,12 @@ export default function BookNow({ onNavigate }: BookNowProps) {
   const todayYmdLocal = ymdInTimezone(BUSINESS_TIMEZONE);
   const apiAvailEnabled = env.apiUrlConfigured && Boolean(env.apiUrl);
   const dateMarkedUnavailable =
+    bookingMode === 'rental' &&
     availabilityByDate.size > 0 &&
     Boolean(bookingData.date) &&
     isDayMarkedUnavailable(availabilityByDate, bookingData.date);
   const noSlotsForDay =
+    bookingMode === 'rental' &&
     apiAvailEnabled &&
     !availTimesLoading &&
     !timesManualFallback &&
@@ -775,60 +772,6 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     return cells;
   }
 
-  function calculateCharterPrice({
-    basePrice,
-    date,
-    experience,
-  }: {
-    basePrice: number;
-    date: string;
-    experience: string;
-  }) {
-    const d = new Date(date).getDay();
-    const month = new Date(date).getMonth() + 1;
-    const isWeekend = d === 5 || d === 6 || d === 0;
-
-    const exp = experience.toLowerCase();
-    const isRocketLaunch = exp.includes('rocket');
-    const isNight = exp.includes('night');
-    const isBioTour = exp.includes('bio');
-    const isSunset = exp.includes('sunset');
-    const isPeakBioSeason = isBioTour && month >= 6 && month <= 9;
-
-    const weekendSurcharge = isWeekend ? 75 : 0;
-    const rocketLaunchSurcharge = isRocketLaunch ? (isNight ? 200 : 150) : 0;
-    const bioTourSurcharge = isBioTour ? 100 : 0;
-    const sunsetExperienceSurcharge = isSunset ? SUNSET_EXPERIENCE_SURCHARGE : 0;
-    const nightExperienceSurcharge = isNight ? 50 : 0;
-    const peakSeasonSurcharge = isPeakBioSeason ? 50 : 0;
-
-    const total =
-      basePrice +
-      weekendSurcharge +
-      rocketLaunchSurcharge +
-      bioTourSurcharge +
-      sunsetExperienceSurcharge +
-      nightExperienceSurcharge +
-      peakSeasonSurcharge;
-
-    return {
-      weekendSurcharge,
-      rocketLaunchSurcharge,
-      bioTourSurcharge,
-      sunsetExperienceSurcharge,
-      nightExperienceSurcharge,
-      peakSeasonSurcharge,
-      total,
-    };
-  }
-
-  function charterBasePriceForBoat(boat: Boat | null, hours: number): number {
-    if (!boat) return 0;
-    const hourly = Number(boat.hourly_rate);
-    const duration = Math.max(0, Number(hours) || 0);
-    return Number((hourly * duration).toFixed(2));
-  }
-
   const calculateRentalPricing = () => {
     if (!selectedBoat) {
       return {
@@ -883,75 +826,19 @@ export default function BookNow({ onNavigate }: BookNowProps) {
 
   const calculateCharterPricing = () => {
     const guests = Math.min(BIO_SHARED_MAX_GUESTS, Math.max(1, Number(bookingData.passengerCount) || 1));
-
-    if (bookingData.charterType === 'night_bio' && bookingData.charterVariant === 'shared') {
-      const sharedTotal = guests * BIO_SHARED_PER_PERSON;
-      return {
-        basePrice: Number(sharedTotal),
-        captainFee: 0,
-        deposit: 0,
-        weekendSurcharge: 0,
-        rocketLaunchSurcharge: 0,
-        bioTourSurcharge: 0,
-        sunsetExperienceSurcharge: 0,
-        nightExperienceSurcharge: 0,
-        peakSeasonSurcharge: 0,
-        total: Number(sharedTotal),
-      };
-    }
-
-    if (bookingData.charterType === 'rocket_launch' && bookingData.charterVariant === 'shared') {
-      const sharedTotal = guests * ROCKET_SHARED_PER_PERSON;
-      return {
-        basePrice: Number(sharedTotal),
-        captainFee: 0,
-        deposit: 0,
-        weekendSurcharge: 0,
-        rocketLaunchSurcharge: 0,
-        bioTourSurcharge: 0,
-        sunsetExperienceSurcharge: 0,
-        nightExperienceSurcharge: 0,
-        peakSeasonSurcharge: 0,
-        total: Number(sharedTotal),
-      };
-    }
-
-    if (bookingData.charterType === 'sunset_cruise' && bookingData.charterVariant === 'shared') {
-      const sharedTotal = guests * SUNSET_SHARED_PER_PERSON;
-      return {
-        basePrice: Number(sharedTotal),
-        captainFee: 0,
-        deposit: 0,
-        weekendSurcharge: 0,
-        rocketLaunchSurcharge: 0,
-        bioTourSurcharge: 0,
-        sunsetExperienceSurcharge: 0,
-        nightExperienceSurcharge: 0,
-        peakSeasonSurcharge: 0,
-        total: Number(sharedTotal),
-      };
-    }
-
-    const basePrice = charterBasePriceForBoat(selectedBoat, bookingData.hours);
-
-    const experience = charterSelectedDescription();
-    const priceCalc = calculateCharterPrice({
-      basePrice: Number(basePrice),
-      date: bookingData.date,
-      experience,
-    });
-
+    const ticketPrice = sharedTourPerPerson;
+    const total = Number((guests * ticketPrice).toFixed(2));
     return {
-      basePrice: Number(basePrice),
+      basePrice: total,
       captainFee: 0,
       deposit: 0,
-      weekendSurcharge: Number(priceCalc.weekendSurcharge),
-      rocketLaunchSurcharge: Number(priceCalc.rocketLaunchSurcharge),
-      bioTourSurcharge: Number(priceCalc.bioTourSurcharge),
-      sunsetExperienceSurcharge: Number(priceCalc.sunsetExperienceSurcharge),
-      nightExperienceSurcharge: Number(priceCalc.nightExperienceSurcharge),
-      peakSeasonSurcharge: Number(priceCalc.peakSeasonSurcharge),
-      total: Number(priceCalc.total),
+      weekendSurcharge: 0,
+      rocketLaunchSurcharge: 0,
+      bioTourSurcharge: 0,
+      sunsetExperienceSurcharge: 0,
+      nightExperienceSurcharge: 0,
+      peakSeasonSurcharge: 0,
+      total,
     };
   };
 
@@ -977,8 +864,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
   const licensePreviewUrl = verificationData.licenseProofUrl.trim();
   const insurancePreviewUrl = verificationData.insuranceProofUrl.trim();
   const rentalInsuranceMissing = bookingMode === 'rental' && !insurancePreviewUrl;
-  const charterNeedsBoatSelection =
-    bookingMode === 'charter' && !isSharedTour && !selectedBoat;
+  const charterNeedsBoatSelection = false;
   const charterPd =
     isSharedTour
       ? {
@@ -1108,17 +994,28 @@ export default function BookNow({ onNavigate }: BookNowProps) {
 
     const checkoutPerf = beginAsyncInteraction('checkout_submit');
 
-    if (!selectedBoat) {
+    if (bookingMode === 'rental' && !selectedBoat) {
       alert('Please select a boat.');
       checkoutPerf.end('aborted_no_boat');
       return;
     }
+    if (bookingMode === 'charter' && !bookingData.date) {
+      setCheckoutError('Choose your date.');
+      checkoutPerf.end('aborted_no_date');
+      return;
+    }
+    if (bookingMode === 'charter' && !bookingData.time && !bookingData.slotStartIso) {
+      setCheckoutError('Choose your time.');
+      checkoutPerf.end('aborted_no_time');
+      return;
+    }
+    if (bookingMode === 'charter' && (bookingData.passengerCount < 1 || bookingData.passengerCount > BIO_SHARED_MAX_GUESTS)) {
+      setCheckoutError('Select number of guests.');
+      checkoutPerf.end('aborted_guest_count');
+      return;
+    }
     if (!bookingData.date || !bookingData.fullName || !bookingData.email || !bookingData.phone) {
-      alert(
-        bookingMode === 'charter'
-          ? 'Please complete your contact information and trip date.'
-          : 'Please complete your contact information and rental date.'
-      );
+      alert('Please complete your contact information and trip date.');
       checkoutPerf.end('aborted_form_incomplete');
       return;
     }
@@ -1193,8 +1090,8 @@ export default function BookNow({ onNavigate }: BookNowProps) {
               sms_opt_in: false,
             },
             booking: {
-              boat_id: selectedBoat.id,
-              boatName: selectedBoat.name,
+              boat_id: bookingMode === 'charter' ? null : selectedBoat?.id,
+              boatName: bookingMode === 'charter' ? null : selectedBoat?.name,
               start_time: startDateTime.toISOString(),
               end_time: endDateTime.toISOString(),
               duration_hours: bookingData.hours,
@@ -1376,7 +1273,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     trackEvent?: string;
   }) => {
     const past = iso < todayYmdLocal;
-    const calKnown = availabilityByDate.size > 0;
+    const calKnown = bookingMode === 'rental' && availabilityByDate.size > 0;
     const dayAvail = availabilityByDate.get(iso);
     const open = calKnown
       ? typeof dayAvail === 'boolean'
@@ -1503,7 +1400,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
             {showNeutralChooser
               ? 'Choose a captain-led charter or a self-drive rental, then pick your boat and schedule. Charters and rentals use different pricing and requirements — your selections below set the right path.'
               : bookingMode === 'charter'
-                ? 'Choose your charter experience and boat, see your all-in price, then check out. Captain & fuel included; no security deposit.'
+                ? 'Choose your charter experience, date, time, and guests, then check out. Captain & fuel included; no security deposit.'
                 : 'Pick your boat and schedule, add options, then check out with Stripe: today you pay 50% of your reservation total (which includes the refundable $300 security deposit). After checkout we verify compliance details and approvals.'}
           </p>
           <p className="mx-auto mt-3 max-w-2xl text-xs leading-snug text-slate-500 md:text-sm">
@@ -1619,7 +1516,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                         captainIncluded: true,
                         charterType: 'rocket_launch',
                         charterVariant: 'private',
-                        passengerCount: 6,
+                        passengerCount: 1,
                         rentalType: 'half_day',
                         hours: 4,
                       }));
@@ -1642,7 +1539,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                         captainIncluded: true,
                         charterType: 'night_bio',
                         charterVariant: 'private',
-                        passengerCount: 6,
+                        passengerCount: 1,
                         rentalType: 'half_day',
                         hours: 3,
                         time: '19:00',
@@ -1666,7 +1563,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                         captainIncluded: true,
                         charterType: 'sunset_cruise',
                         charterVariant: 'private',
-                        passengerCount: 6,
+                        passengerCount: 1,
                         rentalType: 'half_day',
                         hours: 2,
                         time: '18:30',
@@ -1706,7 +1603,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                 </h2>
                 <p className="mt-2 text-sm text-slate-400">
                   {bookingMode === 'charter'
-                    ? 'Pick your boat, then choose date and start time together.'
+                    ? 'Choose date, time, and guests for your charter.'
                     : 'Select a vessel, rental length, and when you want to go.'}
                 </p>
 
@@ -1730,58 +1627,48 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                   </div>
                 )}
 
-                <h3 className={`${bookingSectionTitle} mb-0`}>
-                  {bookingMode === 'charter' ? 'Choose your boat' : 'Choose your boat'}
-                </h3>
-                {bookingMode === 'charter' ? (
-                  <p className="mt-1 text-sm text-slate-400">
-                    Tap an option. Pricing updates after both boat and date are set.
-                  </p>
-                ) : null}
-                <div className="mt-4 grid gap-4 md:grid-cols-2">
-                  {boatsLoading && boats.length === 0 ? (
-                    <div className="col-span-full flex min-h-[12rem] flex-col items-center justify-center gap-3 rounded-2xl border border-cyan-500/20 bg-slate-950/40 px-6 py-12">
-                      <Spinner size="md" tone="onDark" />
-                      <p className="text-sm text-slate-400">Loading vessels…</p>
-                    </div>
-                  ) : boatsError ? (
-                    <div className="col-span-full rounded-2xl border border-red-400/35 bg-red-950/30 px-5 py-5">
-                      <p className="font-semibold text-red-100">Could not load vessels</p>
-                      <p className="mt-2 text-sm text-red-100/85">{boatsError}</p>
-                      <button
-                        type="button"
-                        onClick={() => void loadBoats()}
-                        className="mt-4 rounded-lg border border-red-400/40 bg-red-950/50 px-4 py-2 text-sm font-semibold text-red-50 hover:bg-red-950/70"
-                      >
-                        Try again
-                      </button>
-                    </div>
-                  ) : boats.length === 0 ? (
-                    <div className="col-span-full rounded-2xl border border-amber-400/30 bg-amber-950/20 px-5 py-8 text-center">
-                      <p className="text-base font-semibold text-amber-50">No vessels available to book online</p>
-                      <p className="mt-2 text-sm text-slate-300">
-                        Our fleet list may be updating, or bookings are paused. Call{' '}
-                        {env.contactPhone ? (
-                          <a
-                            href={`tel:${env.contactPhone.replace(/\D/g, '')}`}
-                            className="font-semibold text-cyan-300 underline decoration-cyan-500/40"
+                {bookingMode === 'rental' && (
+                  <>
+                    <h3 className={`${bookingSectionTitle} mb-0`}>Choose your boat</h3>
+                    <div className="mt-4 grid gap-4 md:grid-cols-2">
+                      {boatsLoading && boats.length === 0 ? (
+                        <div className="col-span-full flex min-h-[12rem] flex-col items-center justify-center gap-3 rounded-2xl border border-cyan-500/20 bg-slate-950/40 px-6 py-12">
+                          <Spinner size="md" tone="onDark" />
+                          <p className="text-sm text-slate-400">Loading vessels…</p>
+                        </div>
+                      ) : boatsError ? (
+                        <div className="col-span-full rounded-2xl border border-red-400/35 bg-red-950/30 px-5 py-5">
+                          <p className="font-semibold text-red-100">Could not load vessels</p>
+                          <p className="mt-2 text-sm text-red-100/85">{boatsError}</p>
+                          <button
+                            type="button"
+                            onClick={() => void loadBoats()}
+                            className="mt-4 rounded-lg border border-red-400/40 bg-red-950/50 px-4 py-2 text-sm font-semibold text-red-50 hover:bg-red-950/70"
                           >
-                            {env.contactPhone}
-                          </a>
-                        ) : (
-                          <span className="font-semibold text-slate-200">803-542-1761</span>
-                        )}{' '}
-                        and we&apos;ll help you book.
-                      </p>
-                    </div>
-                  ) : (
-                    boats.map((boat) => {
+                            Try again
+                          </button>
+                        </div>
+                      ) : boats.length === 0 ? (
+                        <div className="col-span-full rounded-2xl border border-amber-400/30 bg-amber-950/20 px-5 py-8 text-center">
+                          <p className="text-base font-semibold text-amber-50">No vessels available to book online</p>
+                          <p className="mt-2 text-sm text-slate-300">
+                            Our fleet list may be updating, or bookings are paused. Call{' '}
+                            {env.contactPhone ? (
+                              <a
+                                href={`tel:${env.contactPhone.replace(/\D/g, '')}`}
+                                className="font-semibold text-cyan-300 underline decoration-cyan-500/40"
+                              >
+                                {env.contactPhone}
+                              </a>
+                            ) : (
+                              <span className="font-semibold text-slate-200">803-542-1761</span>
+                            )}{' '}
+                            and we&apos;ll help you book.
+                          </p>
+                        </div>
+                      ) : (
+                        boats.map((boat) => {
                       const isSelected = selectedBoat?.id === boat.id;
-                      const showDateUnavailable =
-                        bookingMode === 'charter' &&
-                        Boolean(bookingData.date) &&
-                        isSelected &&
-                        dateMarkedUnavailable;
                       return (
                         <article
                           key={boat.id}
@@ -1819,11 +1706,6 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                                 Selected
                               </span>
                             )}
-                            {showDateUnavailable && (
-                              <span className="absolute bottom-3 left-3 right-3 rounded-lg border border-amber-400/40 bg-black/70 px-3 py-2 text-center text-xs font-semibold text-amber-100 backdrop-blur-sm">
-                                Unavailable for selected date
-                              </span>
-                            )}
                           </div>
                           <div className="border-t border-white/[0.06] p-5 md:p-6">
                             <h3 className="text-2xl font-bold text-white">{boat.name}</h3>
@@ -1852,9 +1734,11 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                           </div>
                         </article>
                       );
-                    })
-                  )}
-                </div>
+                        })
+                      )}
+                    </div>
+                  </>
+                )}
 
                 {bookingMode === 'charter' ? (
                   <>
@@ -1936,9 +1820,36 @@ export default function BookNow({ onNavigate }: BookNowProps) {
 
                       <div>
                         <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-400">
-                          Select a start time
+                          Choose your time
                         </label>
-                        {!apiAvailEnabled && (
+                        <div className="flex flex-wrap gap-3">
+                          {['17:00', '18:00', '19:00', '20:00', '21:00'].map((time) => {
+                            const [hh, mm] = time.split(':').map(Number);
+                            const label = new Date(2000, 0, 1, hh, mm).toLocaleTimeString(undefined, {
+                              hour: 'numeric',
+                              minute: '2-digit',
+                            });
+                            const active = bookingData.time === time && !bookingData.slotStartIso;
+                            return (
+                              <button
+                                key={time}
+                                type="button"
+                                onClick={() => {
+                                  const t0 = performance.now();
+                                  setBookingData({ ...bookingData, time, slotStartIso: '' });
+                                  measurePaintAfterSync('booknow_charter_time_slot', t0, performance.now());
+                                }}
+                                className={`min-h-[48px] min-w-[5.5rem] rounded-xl border px-4 py-3 text-sm font-semibold transition ${
+                                  active ? bookingSlotChipActive : `border ${bookingChoiceIdle}`
+                                }`}
+                              >
+                                {label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <div className="mt-3 max-w-xs">
+                          <label className="mb-1 block text-xs text-slate-500">Custom time</label>
                           <input
                             type="time"
                             required
@@ -1948,80 +1859,29 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                             }
                             className={fieldClass}
                           />
-                        )}
-                        {apiAvailEnabled && availTimesLoading && (
-                          <p className="text-xs text-slate-500">Loading open times…</p>
-                        )}
-                        {apiAvailEnabled && !availTimesLoading && timeSlots.length > 0 && (
-                          <div className="flex flex-wrap gap-3">
-                            {timeSlots.map((s, i) => {
-                              const recommended =
-                                timeSlots.length > 2 && i === Math.floor(timeSlots.length / 2);
-                              const active = bookingData.slotStartIso === s.start;
-                              return (
-                                <button
-                                  key={s.start}
-                                  type="button"
-                                  onClick={() => {
-                                    const t0 = performance.now();
-                                    setBookingData({
-                                      ...bookingData,
-                                      slotStartIso: s.start,
-                                      time: s.startHHMM ?? bookingData.time,
-                                    });
-                                    measurePaintAfterSync('booknow_charter_time_slot', t0, performance.now());
-                                  }}
-                                  className={`min-h-[48px] min-w-[5.5rem] rounded-xl border px-4 py-3 text-sm font-semibold transition ${
-                                    active
-                                      ? bookingSlotChipActive
-                                      : recommended
-                                        ? `${bookingSlotChipRecommended} border`
-                                        : `border ${bookingChoiceIdle}`
-                                  }`}
-                                >
-                                  {s.label}
-                                  {recommended && !active && (
-                                    <span className="ml-1 text-[10px] font-normal text-cyan-300/90">
-                                      Popular
-                                    </span>
-                                  )}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        )}
-                        {isBookingToday && (
-                          <p className="mt-2 text-xs text-slate-400">
-                            Same-day bookings require at least {sameDayMinLeadHours} hours notice.
-                          </p>
-                        )}
-                        {apiAvailEnabled && !availTimesLoading && timesManualFallback && (
-                          <>
-                            <p className="mb-2 text-xs text-amber-200/90">
-                              Live times unavailable — enter a start time; checkout confirms availability.
-                            </p>
-                            <input
-                              type="time"
-                              required
-                              value={bookingData.time}
-                              onChange={(e) =>
-                                setBookingData({ ...bookingData, time: e.target.value, slotStartIso: '' })
-                              }
-                              className={fieldClass}
-                            />
-                          </>
-                        )}
-                        {apiAvailEnabled &&
-                          !availTimesLoading &&
-                          !timesManualFallback &&
-                          timeSlots.length === 0 &&
-                          bookingData.date && (
-                            <p className="text-sm text-amber-200">
-                              {isBookingToday
-                                ? 'No more booking times are available today. Please choose another date.'
-                                : 'No open start times that day for this duration. Try another date.'}
-                            </p>
-                          )}
+                        </div>
+                      </div>
+                      <div>
+                        <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-400">
+                          Select number of guests
+                        </label>
+                        <div className="flex flex-wrap gap-2">
+                          {[1, 2, 3, 4, 5, 6].map((count) => (
+                            <button
+                              key={count}
+                              type="button"
+                              onClick={() => setBookingData({ ...bookingData, passengerCount: count })}
+                              className={`min-h-[48px] min-w-[3.5rem] rounded-xl border px-4 py-3 text-sm font-semibold transition ${
+                                bookingData.passengerCount === count ? bookingSlotChipActive : `border ${bookingChoiceIdle}`
+                              }`}
+                            >
+                              {count}
+                            </button>
+                          ))}
+                        </div>
+                        <p className="mt-2 text-xs text-slate-400">
+                          ${sharedTourPerPerson.toFixed(2)} per ticket · max 6 guests.
+                        </p>
                       </div>
                     </div>
                   </>
@@ -2272,14 +2132,28 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                   id="booking-step1-continue"
                   type="button"
                   onClick={wrapSyncClick('booknow_step1_continue', () => {
-                    if (selectedBoat && bookingData.date && !scheduleContinueBlocked) {
-                      setStep(bookingMode === 'charter' && !charterUsesPrivateSharedStep ? 3 : 2);
+                    const canContinueCharter =
+                      bookingMode === 'charter' &&
+                      bookingData.date &&
+                      bookingData.time &&
+                      bookingData.passengerCount >= 1 &&
+                      bookingData.passengerCount <= BIO_SHARED_MAX_GUESTS;
+                    const canContinueRental = bookingMode === 'rental' && selectedBoat && bookingData.date && !scheduleContinueBlocked;
+                    if (canContinueCharter || canContinueRental) {
+                      setStep(bookingMode === 'charter' ? 3 : 2);
                     }
                   })}
-                  disabled={!selectedBoat || !bookingData.date || scheduleContinueBlocked}
+                  disabled={
+                    bookingMode === 'charter'
+                      ? !bookingData.date ||
+                        !bookingData.time ||
+                        bookingData.passengerCount < 1 ||
+                        bookingData.passengerCount > BIO_SHARED_MAX_GUESTS
+                      : !selectedBoat || !bookingData.date || scheduleContinueBlocked
+                  }
                   className={`${bookingPrimaryCta} mt-8 md:mt-10`}
                 >
-                  Continue
+                  {bookingMode === 'charter' ? 'Continue to checkout' : 'Continue'}
                 </button>
               </div>
             )}
@@ -2680,10 +2554,12 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                 <div className="mb-6 rounded-[var(--lz-radius)] border border-cyan-400/20 bg-slate-950/80 p-6 text-slate-100 shadow-[0_0_28px_rgba(0,207,255,0.08)]">
                   <h3 className="mb-4 text-lg font-bold uppercase tracking-wide text-white">Booking summary</h3>
                   <div className="space-y-3">
-                    <div className="flex justify-between">
-                      <span>Boat:</span>
-                      <span className="font-semibold">{selectedBoat?.name}</span>
-                    </div>
+                    {bookingMode === 'rental' && (
+                      <div className="flex justify-between">
+                        <span>Boat:</span>
+                        <span className="font-semibold">{selectedBoat?.name}</span>
+                      </div>
+                    )}
                     {bookingMode === 'charter' && (
                       <div className="flex justify-between text-slate-300">
                         <span>Experience:</span>
@@ -2711,62 +2587,19 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                       <span className="font-semibold">{bookingData.hours} hours</span>
                     </div>
                     <div className="my-3 border-t border-white/10"></div>
-                    {isSharedTour ? (
+                    {bookingMode === 'charter' ? (
                       <div className="flex justify-between text-slate-300">
                         <span>
-                          Shared rate: ${sharedTourPerPerson} × {bookingData.passengerCount} guests
+                          ${sharedTourPerPerson} × {bookingData.passengerCount} guests/tickets
                         </span>
                         <span>${pricing.total.toFixed(2)}</span>
                       </div>
                     ) : (
                       <>
                         <div className="flex justify-between">
-                          <span>{bookingMode === 'charter' ? 'Charter base:' : 'Base rental:'}</span>
+                          <span>Base rental:</span>
                           <span>${pricing.basePrice.toFixed(2)}</span>
                         </div>
-                        {bookingMode === 'charter' && pricing.weekendSurcharge > 0 && (
-                          <div className="flex justify-between text-slate-300">
-                            <span>Weekend:</span>
-                            <span>+${pricing.weekendSurcharge.toFixed(2)}</span>
-                          </div>
-                        )}
-                        {bookingMode === 'charter' && pricing.rocketLaunchSurcharge > 0 && (
-                          <div className="flex justify-between text-slate-300">
-                            <span>Rocket Launch:</span>
-                            <span>+${pricing.rocketLaunchSurcharge.toFixed(2)}</span>
-                          </div>
-                        )}
-                        {bookingMode === 'charter' && pricing.bioTourSurcharge > 0 && (
-                          <div>
-                            <div className="flex justify-between text-slate-300">
-                              <span>Bioluminescence:</span>
-                              <span>+${pricing.bioTourSurcharge.toFixed(2)}</span>
-                            </div>
-                            {pricing.peakSeasonSurcharge > 0 && (
-                              <p className="mt-1 text-xs text-cyan-200/90">
-                                ✨ Peak glow season — best viewing conditions
-                              </p>
-                            )}
-                          </div>
-                        )}
-                        {bookingMode === 'charter' && pricing.sunsetExperienceSurcharge > 0 && (
-                          <div className="flex justify-between text-slate-300">
-                            <span>Sunset experience:</span>
-                            <span>+${pricing.sunsetExperienceSurcharge.toFixed(2)}</span>
-                          </div>
-                        )}
-                        {bookingMode === 'charter' && pricing.nightExperienceSurcharge > 0 && (
-                          <div className="flex justify-between text-slate-300">
-                            <span>Night Experience:</span>
-                            <span>+${pricing.nightExperienceSurcharge.toFixed(2)}</span>
-                          </div>
-                        )}
-                        {bookingMode === 'charter' && pricing.peakSeasonSurcharge > 0 && (
-                          <div className="flex justify-between text-slate-300">
-                            <span>Peak Season:</span>
-                            <span>+${pricing.peakSeasonSurcharge.toFixed(2)}</span>
-                          </div>
-                        )}
                       </>
                     )}
                     {bookingMode === 'rental' && pricing.captainFee > 0 && (
@@ -2950,7 +2783,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                     ) : (
                       <>
                         <DollarSign className="h-5 w-5 shrink-0" aria-hidden />
-                        <span>Book now</span>
+                        <span>{bookingMode === 'charter' ? 'Continue to checkout' : 'Book now'}</span>
                       </>
                     )}
                   </button>

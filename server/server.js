@@ -45,8 +45,8 @@ if (stripeSecret) {
 const app = express();
 const PORT = process.env.PORT || 3001;
 const BIO_SHARED_MIN_GUESTS = 1;
-const BIO_SHARED_MAX_GUESTS = 2;
-const BIO_SHARED_PER_PERSON = 75;
+const BIO_SHARED_MAX_GUESTS = 6;
+const BIO_SHARED_PER_PERSON = 150;
 const ROCKET_SHARED_PER_PERSON = 85;
 const SUNSET_SHARED_PER_PERSON = 75;
 const SECURITY_DEPOSIT = 300;
@@ -116,54 +116,21 @@ function computeExpectedBookingTotals({
   const fullDay = Number(boat?.full_day_rate || 0);
 
   if (bookingMode === 'charter') {
-    if (charterVariant === 'shared') {
-      const guests = Math.min(BIO_SHARED_MAX_GUESTS, Math.max(1, Number(passengerCount) || 1));
-      if (charterType === 'bio') {
-        const total = roundMoney(guests * BIO_SHARED_PER_PERSON);
-        return {
-          mode: 'charter',
-          basePrice: total,
-          totalPrice: total,
-          amountDueToday: total,
-        };
-      }
-      if (charterType === 'rocket') {
-        const total = roundMoney(guests * ROCKET_SHARED_PER_PERSON);
-        return {
-          mode: 'charter',
-          basePrice: total,
-          totalPrice: total,
-          amountDueToday: total,
-        };
-      }
-      if (charterType === 'sunset') {
-        const total = roundMoney(guests * SUNSET_SHARED_PER_PERSON);
-        return {
-          mode: 'charter',
-          basePrice: total,
-          totalPrice: total,
-          amountDueToday: total,
-        };
-      }
-    }
-
-    const basePrice = roundMoney(hourly * hours);
-    const s = computeCharterSurcharges({ charterType, date });
-    const totalPrice = roundMoney(
-      basePrice +
-        s.weekendSurcharge +
-        s.rocketLaunchSurcharge +
-        s.bioTourSurcharge +
-        s.sunsetExperienceSurcharge +
-        s.nightExperienceSurcharge +
-        s.peakSeasonSurcharge
-    );
+    const guests = Math.min(BIO_SHARED_MAX_GUESTS, Math.max(BIO_SHARED_MIN_GUESTS, Number(passengerCount) || 1));
+    const ticketPrice =
+      charterType === 'bio'
+        ? BIO_SHARED_PER_PERSON
+        : charterType === 'rocket'
+          ? ROCKET_SHARED_PER_PERSON
+          : SUNSET_SHARED_PER_PERSON;
+    const totalPrice = roundMoney(guests * ticketPrice);
     return {
       mode: 'charter',
-      basePrice,
+      basePrice: totalPrice,
+      ticketPrice,
+      guestCount: guests,
       totalPrice,
       amountDueToday: totalPrice,
-      surcharges: s,
     };
   }
 
@@ -809,27 +776,32 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
     throw err;
   }
 
-  const { data: boatRow, error: boatErr } = await supabase
-    .from('boats')
-    .select('id, name, hourly_rate, half_day_rate, full_day_rate, type')
-    .eq('id', String(booking.boat_id))
-    .maybeSingle();
-  if (boatErr) {
-    console.warn('[finalizeBookingFromSession] boat lookup:', boatErr.message);
-  }
-  if (!boatRow) {
-    await refundStripeCheckoutSession(session);
-    const err = new Error('Boat not found; payment was refunded.');
-    err.statusCode = 400;
-    throw err;
-  }
-
   const bookingMode = typeof booking.bookingMode === 'string' ? booking.bookingMode.trim().toLowerCase() : '';
   const charterType = typeof booking.charterType === 'string' ? booking.charterType.trim().toLowerCase() : '';
   const charterVariant =
     typeof booking.charterVariant === 'string' ? booking.charterVariant.trim().toLowerCase() : '';
   const passengerCountRaw = Number(booking.passengerCount);
   const passengerCount = Number.isFinite(passengerCountRaw) ? Math.max(1, Math.round(passengerCountRaw)) : 1;
+  const isCharterBooking = bookingMode === 'charter';
+
+  let boatRow = null;
+  if (!isCharterBooking) {
+    const { data, error: boatErr } = await supabase
+      .from('boats')
+      .select('id, name, hourly_rate, half_day_rate, full_day_rate, type')
+      .eq('id', String(booking.boat_id))
+      .maybeSingle();
+    if (boatErr) {
+      console.warn('[finalizeBookingFromSession] boat lookup:', boatErr.message);
+    }
+    if (!data) {
+      await refundStripeCheckoutSession(session);
+      const err = new Error('Boat not found; payment was refunded.');
+      err.statusCode = 400;
+      throw err;
+    }
+    boatRow = data;
+  }
 
   let expected = computeExpectedBookingTotals({
     bookingMode: bookingMode === 'charter' ? 'charter' : 'rental',
@@ -864,10 +836,8 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
       : Number(booking.deposit_amount || 0);
   const paymentStatus = paidDeposit >= expected.totalPrice ? 'paid' : 'deposit_paid';
 
-  const isCharterBooking = bookingMode === 'charter';
   const sharedGuestOutOfRange =
     ['bio', 'rocket', 'sunset'].includes(charterType) &&
-    charterVariant === 'shared' &&
     (passengerCount < BIO_SHARED_MIN_GUESTS || passengerCount > BIO_SHARED_MAX_GUESTS);
 
   const adminNotesParts = [];
@@ -890,7 +860,11 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
 
   const bookingInsert = {
     customer_id: customerRow.id,
-    boat_id: String(booking.boat_id),
+    boat_id: isCharterBooking ? null : String(booking.boat_id),
+    booking_type: isCharterBooking ? 'charter' : 'rental',
+    charter_type: isCharterBooking ? charterType || null : null,
+    guest_count: isCharterBooking ? passengerCount : 1,
+    total_amount: expected.totalPrice,
     start_time: booking.start_time,
     end_time: booking.end_time,
     duration_hours: Number(booking.duration_hours || 0),
@@ -927,8 +901,17 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
   };
 
   try {
-    assertBookingLeadTime(booking.start_time);
-    await assertSlotAvailable(booking.boat_id, booking.start_time, booking.end_time, holdRow?.id || null);
+    if (isCharterBooking) {
+      const startMs = new Date(String(booking.start_time || '')).getTime();
+      if (!Number.isFinite(startMs) || startMs < Date.now()) {
+        const err = new Error('This charter time is in the past. Please choose another time.');
+        err.statusCode = 409;
+        throw err;
+      }
+    } else {
+      assertBookingLeadTime(booking.start_time);
+      await assertSlotAvailable(booking.boat_id, booking.start_time, booking.end_time, holdRow?.id || null);
+    }
   } catch (slotErr) {
     await refundStripeCheckoutSession(session);
     const fallbackMessage =
@@ -1536,7 +1519,9 @@ app.post('/api/create-checkout-session', async (req, res) => {
     const damageFeeAcknowledged = Boolean(legal?.damageFeeAcknowledged);
     const legalAcceptedAt = new Date().toISOString();
 
-    if (!customer.full_name || !customer.email || !customer.phone || !booking.boat_id) {
+    const bookingMode = String(booking.bookingMode || '').trim().toLowerCase();
+    const isCharterBooking = bookingMode === 'charter';
+    if (!customer.full_name || !customer.email || !customer.phone || (!isCharterBooking && !booking.boat_id)) {
       return res.status(400).json({ error: 'Missing required customer/booking fields' });
     }
     if (!termsAccepted) {
@@ -1555,10 +1540,8 @@ app.post('/api/create-checkout-session', async (req, res) => {
       });
     }
 
-    const bookingMode = String(booking.bookingMode || '').trim().toLowerCase();
     const charterType = String(booking.charterType || '').trim().toLowerCase();
     const charterVariant = String(booking.charterVariant || '').trim().toLowerCase();
-    const isSharedCharter = bookingMode === 'charter' && charterVariant === 'shared';
     const rentalType = String(booking.rental_type || '').trim().toLowerCase();
     const startTime = new Date(String(booking.start_time || ''));
     const endTime = new Date(String(booking.end_time || ''));
@@ -1568,10 +1551,12 @@ app.post('/api/create-checkout-session', async (req, res) => {
     if (!Number.isFinite(startTime.getTime()) || !Number.isFinite(endTime.getTime())) {
       return res.status(400).json({ error: 'Invalid start or end time.' });
     }
-    try {
-      assertBookingLeadTime(startTime.toISOString());
-    } catch (leadErr) {
-      return res.status(leadErr.statusCode || 409).json({ error: leadErr.message || SLOT_TOO_SOON_USER_MESSAGE });
+    if (!isCharterBooking) {
+      try {
+        assertBookingLeadTime(startTime.toISOString());
+      } catch (leadErr) {
+        return res.status(leadErr.statusCode || 409).json({ error: leadErr.message || SLOT_TOO_SOON_USER_MESSAGE });
+      }
     }
     if (endTime.getTime() <= startTime.getTime()) {
       return res.status(400).json({ error: 'End time must be after start time.' });
@@ -1595,40 +1580,30 @@ app.post('/api/create-checkout-session', async (req, res) => {
     const passengerCountRaw = Number(booking.passengerCount);
     const passengerCount = Number.isFinite(passengerCountRaw) ? Math.max(1, Math.round(passengerCountRaw)) : 1;
     if (
-      bookingMode === 'charter' &&
+      isCharterBooking &&
       ['bio', 'rocket', 'sunset'].includes(charterType) &&
-      charterVariant === 'shared' &&
       (passengerCount < BIO_SHARED_MIN_GUESTS || passengerCount > BIO_SHARED_MAX_GUESTS)
     ) {
       return res.status(400).json({
-        error: `Shared bookings require ${BIO_SHARED_MIN_GUESTS}-${BIO_SHARED_MAX_GUESTS} guests.`,
+        error: `Select ${BIO_SHARED_MIN_GUESTS}-${BIO_SHARED_MAX_GUESTS} guests.`,
       });
-    }
-    if (isSharedCharter) {
-      const tripDate = new Date(String(booking.start_time || ''));
-      if (!Number.isFinite(tripDate.getTime())) {
-        return res.status(400).json({ error: 'Invalid trip date for shared charter booking.' });
-      }
-      const now = new Date();
-      const hoursUntilTrip = (tripDate.getTime() - now.getTime()) / (1000 * 60 * 60);
-      if (hoursUntilTrip > 48) {
-        return res.status(400).json({
-          error: 'Shared charter seats are only available within 48 hours of departure.',
-        });
-      }
     }
 
     // Server-authoritative pricing: compute expected totals server-side.
-    const { data: boatRow, error: boatErr } = await supabase
-      .from('boats')
-    .select('id, name, hourly_rate, half_day_rate, full_day_rate, type')
-      .eq('id', String(booking.boat_id))
-      .maybeSingle();
-    if (boatErr) {
-      console.warn('[pricing-authoritative] boat lookup error', boatErr.message);
-    }
-    if (!boatRow) {
-      return res.status(400).json({ error: 'Boat not found for pricing validation' });
+    let boatRow = null;
+    if (!isCharterBooking) {
+      const { data, error: boatErr } = await supabase
+        .from('boats')
+        .select('id, name, hourly_rate, half_day_rate, full_day_rate, type')
+        .eq('id', String(booking.boat_id))
+        .maybeSingle();
+      if (boatErr) {
+        console.warn('[pricing-authoritative] boat lookup error', boatErr.message);
+      }
+      if (!data) {
+        return res.status(400).json({ error: 'Boat not found for pricing validation' });
+      }
+      boatRow = data;
     }
 
     let expected = computeExpectedBookingTotals({
@@ -1736,7 +1711,17 @@ app.post('/api/create-checkout-session', async (req, res) => {
     }
 
     try {
-      await assertSlotAvailable(booking.boat_id, booking.start_time, booking.end_time, null);
+      if (isCharterBooking) {
+        const startMs = startTime.getTime();
+        if (!Number.isFinite(startMs) || startMs < Date.now()) {
+          const err = new Error('This charter time is in the past. Please choose another time.');
+          err.statusCode = 409;
+          throw err;
+        }
+      } else {
+        assertBookingLeadTime(startTime.toISOString());
+        await assertSlotAvailable(booking.boat_id, booking.start_time, booking.end_time, null);
+      }
     } catch (slotErr) {
       const code = slotErr.statusCode || 409;
       return res.status(code).json({ error: slotErr.message || SLOT_TAKEN_USER_MESSAGE });
@@ -1794,7 +1779,6 @@ app.post('/api/create-checkout-session', async (req, res) => {
       finalTotal: promoFields?.final_total ?? expected.totalPrice,
     };
 
-    const isCharterBooking = bookingMode === 'charter';
     const captainFeeStored =
       bookingMode === 'rental' ? roundMoney(expected.captainFee || 0) : Number(booking.captain_fee || 0);
     const basePriceStored = roundMoney(
@@ -1804,7 +1788,11 @@ app.post('/api/create-checkout-session', async (req, res) => {
 
     const holdInsert = {
       customer_id: customerRow.id,
-      boat_id: String(authoritativeBooking.boat_id),
+      boat_id: isCharterBooking ? null : String(authoritativeBooking.boat_id),
+      booking_type: isCharterBooking ? 'charter' : 'rental',
+      charter_type: isCharterBooking ? charterType || null : null,
+      guest_count: isCharterBooking ? passengerCount : 1,
+      total_amount: expected.totalPrice,
       start_time: authoritativeBooking.start_time,
       end_time: authoritativeBooking.end_time,
       duration_hours: Number(authoritativeBooking.duration_hours || 0),

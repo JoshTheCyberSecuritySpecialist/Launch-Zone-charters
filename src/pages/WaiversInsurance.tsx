@@ -5,9 +5,11 @@ import WaiverBlock, { waiverFormComplete, type WaiverFormData } from '../compone
 import PreTripStatusPanel from '../components/booking/PreTripStatusPanel';
 import ManualPreTripSubmission from '../components/booking/ManualPreTripSubmission';
 import {
+  confirmWaiversAccess,
   fetchPreTripStatus,
   fetchWaiversBookingById,
   findPublicBooking,
+  markInsuranceProof,
   signBookingWaiver,
   type PublicBookingMatch,
   type PreTripStatusPayload,
@@ -20,8 +22,7 @@ import {
   deriveSubmissionOverallStatus,
 } from '../lib/preTripStatus';
 import { getInsuranceConfigForBooking } from '../config/buoyInsurance';
-import { uploadDocumentToDocumentsBucket } from '../lib/storageUpload';
-import { supabase } from '../lib/supabase';
+import { uploadBookingDocument } from '../lib/storageUpload';
 import { env } from '../config/env.js';
 import { wrapSyncClick } from '../lib/clickPerf';
 
@@ -30,10 +31,6 @@ interface WaiversInsuranceProps {
 }
 
 const FILE_ACCEPT = 'image/jpeg,image/png,image/webp,image/gif,application/pdf';
-
-function safeFileSegment(name: string) {
-  return name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120) || 'document';
-}
 
 function formatTripDate(iso: string) {
   try {
@@ -145,8 +142,9 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
       }
 
       setBooking(result.booking);
-      setContactEmail(result.booking.email);
-      setFindEmail(result.booking.email);
+      setFindEmail(result.booking.email_masked || result.booking.email || '');
+      setContactEmail('');
+      setContactPhone('');
       setEntryMode('booking');
       setMagicLinkMode(true);
       setPhoneConfirmNeeded(true);
@@ -252,7 +250,13 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
 
     setLicenseBusy(true);
     setLicenseMessage(null);
-    const { url, error } = await uploadDocumentToDocumentsBucket(file, 'licenses', booking.id);
+    const { url, error } = await uploadBookingDocument({
+      file,
+      folder: 'licenses',
+      bookingId: booking.id,
+      email: contactEmail,
+      phone: contactPhone,
+    });
     if (error || !url) {
       setLicenseMessage(error?.message || 'Upload failed.');
       setLicenseBusy(false);
@@ -268,7 +272,7 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
     const res = await fetch(`${env.apiUrl}/api/booking-mark-license-submitted`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ bookingId: booking.id, email: contactEmail, licenseUrl: url }),
+      body: JSON.stringify({ bookingId: booking.id, email: contactEmail, phone: contactPhone, licenseUrl: url }),
     });
     const payload = (await res.json().catch(() => ({}))) as { error?: string };
     setLicenseBusy(false);
@@ -288,49 +292,33 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
     setProofBusy(true);
     setProofMessage(null);
 
-    const path = `${booking.id}/buoy-${Date.now()}-${safeFileSegment(file.name)}`;
-    const { error: upErr } = await supabase.storage.from('licenses').upload(path, file, {
-      cacheControl: '3600',
-      upsert: true,
-      contentType: file.type || 'application/octet-stream',
+    const { url, error: upErr } = await uploadBookingDocument({
+      file,
+      folder: 'insurance',
+      bookingId: booking.id,
+      email: contactEmail,
+      phone: contactPhone,
     });
 
-    if (upErr) {
-      setProofMessage(upErr.message || 'Upload failed.');
+    if (upErr || !url) {
+      setProofMessage(upErr?.message || 'Upload failed.');
       setProofBusy(false);
       return;
     }
 
-    const {
-      data: { publicUrl },
-    } = supabase.storage.from('licenses').getPublicUrl(path);
-
-    const stamp = new Date().toISOString();
-    const { error: rowErr } = await supabase.from('user_verifications').upsert(
-      {
-        booking_id: booking.id,
-        buoy_status: 'pending',
-        buoy_proof_url: publicUrl,
-        updated_at: stamp,
-      },
-      { onConflict: 'booking_id' }
-    );
-
-    if (rowErr) {
-      setProofMessage(rowErr.message || 'Could not save proof.');
-      setProofBusy(false);
-      return;
-    }
-
-    if (env.apiUrlConfigured && env.apiUrl) {
-      await fetch(`${env.apiUrl}/api/booking-mark-insurance-submitted`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ bookingId: booking.id, email: contactEmail }),
-      }).catch(() => {});
-    }
+    const out = await markInsuranceProof({
+      bookingId: booking.id,
+      email: contactEmail,
+      phone: contactPhone,
+      proofUrl: url,
+    });
 
     setProofBusy(false);
+    if (!out.ok) {
+      setProofMessage(out.error || 'Could not save proof.');
+      return;
+    }
+
     setProofMessage('Insurance proof uploaded.');
     await refreshBooking();
   };
@@ -654,7 +642,21 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
                 <button
                   type="button"
                   onClick={wrapSyncClick('waivers_phone_confirm', () => {
-                    if (contactPhone.trim()) setPhoneConfirmNeeded(false);
+                    void (async () => {
+                      if (!contactPhone.trim() || !booking) return;
+                      const result = await confirmWaiversAccess({
+                        bookingId: booking.id,
+                        phone: contactPhone.trim(),
+                      });
+                      if (!result.ok) {
+                        setWaiverMessage(result.message);
+                        return;
+                      }
+                      setBooking(result.booking);
+                      setContactEmail(result.booking.email || '');
+                      setPhoneConfirmNeeded(false);
+                      setWaiverMessage(null);
+                    })();
                   })}
                   className="lz-btn-primary mt-4 w-full justify-center py-4 text-base !normal-case !tracking-wide"
                 >

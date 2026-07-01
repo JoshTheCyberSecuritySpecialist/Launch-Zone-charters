@@ -3,7 +3,8 @@ import { env } from '../config/env.js';
 export type PublicBookingMatch = {
   id: string;
   customer_name: string;
-  email: string;
+  email?: string;
+  email_masked?: string;
   phone_last4: string;
   start_time: string;
   end_time: string;
@@ -87,6 +88,146 @@ export async function fetchWaiversBookingById(
   }
 
   return { ok: true, booking: payload.booking };
+}
+
+export async function confirmWaiversAccess(input: {
+  bookingId: string;
+  phone: string;
+}): Promise<FindBookingResult> {
+  if (!env.apiUrlConfigured || !env.apiUrl) {
+    return { ok: false, message: 'API is not configured.' };
+  }
+
+  const res = await fetch(`${env.apiUrl}/api/public/confirm-waivers-access`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  const payload = (await res.json().catch(() => ({}))) as {
+    booking?: PublicBookingMatch;
+    error?: string;
+  };
+
+  if (!res.ok || !payload.booking?.email) {
+    return {
+      ok: false,
+      message: payload.error || 'Phone does not match this booking.',
+    };
+  }
+
+  return { ok: true, booking: payload.booking };
+}
+
+export async function verifyBookingGate(
+  bookingId: string,
+  email: string
+): Promise<{ ok: boolean; error?: string }> {
+  if (!env.apiUrlConfigured || !env.apiUrl) {
+    return { ok: false, error: 'API is not configured.' };
+  }
+
+  const res = await fetch(`${env.apiUrl}/api/public/verify-booking-gate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ bookingId, email }),
+  });
+  const payload = (await res.json().catch(() => ({}))) as { error?: string };
+  if (!res.ok) return { ok: false, error: payload.error || 'Email does not match.' };
+  return { ok: true };
+}
+
+export type VerifyBookingShell = {
+  id: string;
+  status: string;
+  boat_id: string;
+  boat_name: string | null;
+  boat_type: string | null;
+  license_status: string;
+  has_license_url: boolean;
+  insurance_verification: { buoy_status: string; has_proof: boolean };
+};
+
+export async function fetchVerifyBookingShell(
+  bookingId: string
+): Promise<{ ok: true; booking: VerifyBookingShell } | { ok: false; error: string; status?: string }> {
+  if (!env.apiUrlConfigured || !env.apiUrl) {
+    return { ok: false, error: 'API is not configured.' };
+  }
+
+  const res = await fetch(
+    `${env.apiUrl}/api/public/verify-booking?bookingId=${encodeURIComponent(bookingId)}`
+  );
+  const payload = (await res.json().catch(() => ({}))) as {
+    booking?: VerifyBookingShell;
+    error?: string;
+    status?: string;
+  };
+
+  if (!res.ok || !payload.booking) {
+    return { ok: false, error: payload.error || 'Could not load booking.', status: payload.status };
+  }
+
+  return { ok: true, booking: payload.booking };
+}
+
+export async function requestBookingUploadUrl(input: {
+  bookingId: string;
+  email: string;
+  phone?: string;
+  folder: 'licenses' | 'insurance';
+  fileName: string;
+}): Promise<
+  | { ok: true; signedUrl: string; publicUrl: string | null; path: string; bucket: string }
+  | { ok: false; error: string }
+> {
+  if (!env.apiUrlConfigured || !env.apiUrl) {
+    return { ok: false, error: 'API is not configured.' };
+  }
+
+  const res = await fetch(`${env.apiUrl}/api/public/booking-upload-url`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  const payload = (await res.json().catch(() => ({}))) as {
+    signedUrl?: string;
+    publicUrl?: string | null;
+    path?: string;
+    bucket?: string;
+    error?: string;
+  };
+
+  if (!res.ok || !payload.signedUrl || !payload.path || !payload.bucket) {
+    return { ok: false, error: payload.error || 'Could not prepare upload.' };
+  }
+
+  return {
+    ok: true,
+    signedUrl: payload.signedUrl,
+    publicUrl: payload.publicUrl ?? null,
+    path: payload.path,
+    bucket: payload.bucket,
+  };
+}
+
+export async function markInsuranceProof(input: {
+  bookingId: string;
+  email: string;
+  phone?: string;
+  proofUrl: string;
+}): Promise<{ ok: boolean; error?: string }> {
+  if (!env.apiUrlConfigured || !env.apiUrl) {
+    return { ok: false, error: 'API is not configured.' };
+  }
+
+  const res = await fetch(`${env.apiUrl}/api/booking-mark-insurance-proof`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  const payload = (await res.json().catch(() => ({}))) as { error?: string };
+  if (!res.ok) return { ok: false, error: payload.error || 'Could not save proof.' };
+  return { ok: true };
 }
 
 export type PreTripStatusPayload = {

@@ -2,17 +2,19 @@ import { useCallback, useEffect, useState } from 'react';
 import BookingFlowStepIndicator from '../components/BookingFlowStepIndicator';
 import { useSearchParams } from 'react-router-dom';
 import { ExternalLink, Shield, Upload, Loader2 } from 'lucide-react';
-import { supabase } from '../lib/supabase';
-import { logSupabaseError } from '../lib/supabaseErrors';
-import { beginAsyncInteraction, wrapNavigateClick, wrapSyncClick } from '../lib/clickPerf';
+import { beginAsyncInteraction, wrapNavigateClick } from '../lib/clickPerf';
 import { env } from '../config/env.js';
 import {
   PONTOON_INSURANCE,
   getInsuranceConfigForBooking,
   type BuoyInsuranceConfig,
 } from '../config/buoyInsurance';
-import type { UserVerificationsRow } from '../lib/supabase';
-import { uploadDocumentToDocumentsBucket } from '../lib/storageUpload';
+import {
+  fetchVerifyBookingShell,
+  markInsuranceProof,
+  verifyBookingGate,
+} from '../lib/publicBooking';
+import { uploadBookingDocument } from '../lib/storageUpload';
 
 interface VerifyBookingProps {
   onNavigate: (page: string) => void;
@@ -20,37 +22,40 @@ interface VerifyBookingProps {
 const FILE_ACCEPT = 'image/jpeg,image/png,image/webp,image/gif,application/pdf';
 const ALLOWED_MIME = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'application/pdf'];
 
-function safeFileSegment(name: string) {
-  return name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120) || 'document';
-}
-
 export default function VerifyBooking({ onNavigate }: VerifyBookingProps) {
   const [searchParams] = useSearchParams();
   const bookingId = (searchParams.get('bookingId') || '').trim();
 
   const [emailInput, setEmailInput] = useState('');
   const [emailGatePassed, setEmailGatePassed] = useState(false);
-  const [bookingStatus, setBookingStatus] = useState<string | null>(null);
   const [customerEmailNorm, setCustomerEmailNorm] = useState<string | null>(null);
+  const [bookingStatus, setBookingStatus] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [licenseUploading, setLicenseUploading] = useState(false);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
   const [licenseMessage, setLicenseMessage] = useState<string | null>(null);
-  const [licenseUrl, setLicenseUrl] = useState<string | null>(null);
-  const [uv, setUv] = useState<UserVerificationsRow | null>(null);
+  const [hasLicenseUrl, setHasLicenseUrl] = useState(false);
+  const [uvStatus, setUvStatus] = useState<{ buoy_status: string; has_proof: boolean }>({
+    buoy_status: 'pending',
+    has_proof: false,
+  });
   const [insuranceConfig, setInsuranceConfig] = useState<BuoyInsuranceConfig>(PONTOON_INSURANCE);
 
-  const refreshVerification = useCallback(async (bid: string) => {
-    const { data, error } = await supabase
-      .from('user_verifications')
-      .select('*')
-      .eq('booking_id', bid)
-      .maybeSingle();
-    logSupabaseError('VerifyBooking.loadUserVerifications', error);
-    if (data) setUv(data as UserVerificationsRow);
-    else setUv(null);
+  const reloadShell = useCallback(async (bid: string) => {
+    const result = await fetchVerifyBookingShell(bid);
+    if (!result.ok) return result;
+    setUvStatus(result.booking.insurance_verification);
+    setHasLicenseUrl(result.booking.has_license_url);
+    setBookingStatus(result.booking.status);
+    setInsuranceConfig(
+      getInsuranceConfigForBooking({
+        boat_id: result.booking.boat_id,
+        boats: { id: result.booking.boat_id, name: result.booking.boat_name, type: result.booking.boat_type },
+      })
+    );
+    return result;
   }, []);
 
   useEffect(() => {
@@ -61,8 +66,6 @@ export default function VerifyBooking({ onNavigate }: VerifyBookingProps) {
       setLoadError(null);
       setEmailGatePassed(false);
       setCustomerEmailNorm(null);
-      setBookingStatus(null);
-      setUv(null);
 
       if (!bookingId) {
         setLoadError('This link is missing a booking reference. Use the link from your email or SMS.');
@@ -70,54 +73,25 @@ export default function VerifyBooking({ onNavigate }: VerifyBookingProps) {
         return;
       }
 
-      const { data: booking, error: bErr } = await supabase
-        .from('bookings')
-        .select('id, status, customer_id, boat_id, license_url, license_status, boats(id, name, type)')
-        .eq('id', bookingId)
-        .maybeSingle();
-
+      const result = await fetchVerifyBookingShell(bookingId);
       if (cancelled) return;
 
-      if (bErr || !booking) {
-        logSupabaseError('VerifyBooking.loadBooking', bErr);
-        setLoadError('We could not find that booking, or it is no longer available for verification.');
+      if (!result.ok) {
+        setLoadError(result.error);
+        if (result.status) setBookingStatus(result.status);
         setLoading(false);
         return;
       }
 
-      if (!['pending', 'pending_verification'].includes(booking.status)) {
-        setLoadError('This booking is not awaiting verification.');
-        setBookingStatus(booking.status);
-        setLoading(false);
-        return;
-      }
-
-      setBookingStatus(booking.status);
-      setLicenseUrl(booking.license_url?.trim() || null);
+      setBookingStatus(result.booking.status);
+      setHasLicenseUrl(result.booking.has_license_url);
+      setUvStatus(result.booking.insurance_verification);
       setInsuranceConfig(
         getInsuranceConfigForBooking({
-          boat_id: booking.boat_id,
-          boats: booking.boats,
+          boat_id: result.booking.boat_id,
+          boats: { id: result.booking.boat_id, name: result.booking.boat_name, type: result.booking.boat_type },
         })
       );
-
-      const { data: customer, error: cErr } = await supabase
-        .from('customers')
-        .select('email')
-        .eq('id', booking.customer_id)
-        .maybeSingle();
-
-      if (cancelled) return;
-
-      if (cErr || !customer?.email) {
-        logSupabaseError('VerifyBooking.loadCustomer', cErr);
-        setLoadError('Could not load customer details for this booking.');
-        setLoading(false);
-        return;
-      }
-
-      setCustomerEmailNorm(customer.email.trim().toLowerCase());
-      await refreshVerification(bookingId);
       setLoading(false);
     }
 
@@ -125,37 +99,44 @@ export default function VerifyBooking({ onNavigate }: VerifyBookingProps) {
     return () => {
       cancelled = true;
     };
-  }, [bookingId, refreshVerification]);
+  }, [bookingId]);
 
-  const handleConfirmEmail = (e: React.FormEvent) => {
+  const handleConfirmEmail = async (e: React.FormEvent) => {
     e.preventDefault();
-    wrapSyncClick('verify_booking_email_gate', () => {
-      setUploadMessage(null);
-      if (!customerEmailNorm) return;
-      if (emailInput.trim().toLowerCase() !== customerEmailNorm) {
-        window.alert('That email does not match this booking. Use the same email you used when booking.');
-        return;
-      }
-      setEmailGatePassed(true);
-    })();
+    setUploadMessage(null);
+    const emailNorm = emailInput.trim().toLowerCase();
+    if (!bookingId || !emailNorm) return;
+
+    const gate = await verifyBookingGate(bookingId, emailNorm);
+    if (!gate.ok) {
+      window.alert(gate.error || 'That email does not match this booking.');
+      return;
+    }
+    setCustomerEmailNorm(emailNorm);
+    setEmailGatePassed(true);
   };
 
   const handleLicenseFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
-    if (!file || !bookingId || !emailGatePassed) return;
+    if (!file || !bookingId || !emailGatePassed || !customerEmailNorm) return;
 
     setLicenseUploading(true);
     setLicenseMessage(null);
 
-    const { url, error } = await uploadDocumentToDocumentsBucket(file, 'licenses', bookingId);
+    const { url, error } = await uploadBookingDocument({
+      file,
+      folder: 'licenses',
+      bookingId,
+      email: customerEmailNorm,
+    });
     if (error || !url) {
       setLicenseMessage(error?.message || 'Could not upload license file.');
       setLicenseUploading(false);
       return;
     }
 
-    if (env.apiUrlConfigured && env.apiUrl && customerEmailNorm) {
+    if (env.apiUrlConfigured && env.apiUrl) {
       const res = await fetch(`${env.apiUrl}/api/booking-mark-license-submitted`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -173,7 +154,7 @@ export default function VerifyBooking({ onNavigate }: VerifyBookingProps) {
       return;
     }
 
-    setLicenseUrl(url);
+    setHasLicenseUrl(true);
     setLicenseMessage('License uploaded. Our team will review it shortly.');
     setLicenseUploading(false);
   };
@@ -181,7 +162,7 @@ export default function VerifyBooking({ onNavigate }: VerifyBookingProps) {
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
-    if (!file || !bookingId || !emailGatePassed) return;
+    if (!file || !bookingId || !emailGatePassed || !customerEmailNorm) return;
 
     const isPdfByName = file.name.toLowerCase().endsWith('.pdf');
     const mimeOk =
@@ -191,11 +172,6 @@ export default function VerifyBooking({ onNavigate }: VerifyBookingProps) {
       setUploadMessage('Please upload an image (JPEG, PNG, WebP, GIF) or a PDF.');
       return;
     }
-    const contentType = ALLOWED_MIME.includes(file.type)
-      ? file.type
-      : isPdfByName
-        ? 'application/pdf'
-        : file.type || 'application/octet-stream';
     if (file.size > 5 * 1024 * 1024) {
       setUploadMessage('File must be 5 MB or smaller.');
       return;
@@ -207,56 +183,36 @@ export default function VerifyBooking({ onNavigate }: VerifyBookingProps) {
     setUploading(true);
     setUploadMessage(null);
 
-    const path = `${bookingId}/buoy-${Date.now()}-${safeFileSegment(file.name)}`;
-
     try {
       perf.markNetworkStart();
-      const { error: upErr } = await supabase.storage.from('licenses').upload(path, file, {
-        cacheControl: '3600',
-        upsert: true,
-        contentType,
+      const { url, error: upErr } = await uploadBookingDocument({
+        file,
+        folder: 'insurance',
+        bookingId,
+        email: customerEmailNorm,
       });
 
-      if (upErr) {
-        console.error('[VerifyBooking.storageUpload]', upErr.message);
-        setUploadMessage(upErr.message || 'Upload failed. Try again or contact us.');
+      if (upErr || !url) {
+        setUploadMessage(upErr?.message || 'Upload failed. Try again or contact us.');
         outcome = 'upload_error';
         return;
       }
 
-      const {
-        data: { publicUrl },
-      } = supabase.storage.from('licenses').getPublicUrl(path);
+      const out = await markInsuranceProof({
+        bookingId,
+        email: customerEmailNorm,
+        proofUrl: url,
+      });
 
-      const stamp = new Date().toISOString();
-      const { error: rowErr } = await supabase.from('user_verifications').upsert(
-        {
-          booking_id: bookingId,
-          buoy_status: 'pending',
-          buoy_proof_url: publicUrl,
-          updated_at: stamp,
-        },
-        { onConflict: 'booking_id' }
-      );
-
-      if (rowErr) {
-        logSupabaseError('VerifyBooking.upsertUserVerification', rowErr);
-        setUploadMessage(rowErr.message || 'Could not save proof. Try again.');
+      if (!out.ok) {
+        setUploadMessage(out.error || 'Could not save proof. Try again.');
         outcome = 'row_error';
         return;
       }
 
-      await refreshVerification(bookingId);
+      await reloadShell(bookingId);
       setUploadMessage('Proof uploaded. Our team will review it shortly.');
       outcome = 'success';
-
-      if (env.apiUrlConfigured && env.apiUrl && customerEmailNorm) {
-        void fetch(`${env.apiUrl}/api/booking-mark-insurance-submitted`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ bookingId, email: customerEmailNorm }),
-        }).catch(() => {});
-      }
     } catch (err) {
       console.error('[VerifyBooking.upload]', err);
       setUploadMessage('Something went wrong. Try again.');
@@ -310,10 +266,10 @@ export default function VerifyBooking({ onNavigate }: VerifyBookingProps) {
             </div>
           )}
 
-          {!loading && !loadError && customerEmailNorm && (
+          {!loading && !loadError && (
             <>
               {!emailGatePassed ? (
-                <form onSubmit={handleConfirmEmail} className="space-y-4">
+                <form onSubmit={(e) => void handleConfirmEmail(e)} className="space-y-4">
                   <p className="text-slate-400">
                     Enter the email address you used when booking so we can verify it&apos;s you.
                   </p>
@@ -345,7 +301,7 @@ export default function VerifyBooking({ onNavigate }: VerifyBookingProps) {
                     <p className="mt-1 text-sm text-slate-400">
                       Upload a photo of your boating license or government ID. Images or PDF, max 10 MB.
                     </p>
-                    {licenseUrl ? (
+                    {hasLicenseUrl ? (
                       <p className="mt-4 rounded-lg border border-emerald-400/30 bg-emerald-950/40 px-4 py-3 font-medium text-emerald-100">
                         License on file — upload again to replace.
                       </p>
@@ -361,7 +317,7 @@ export default function VerifyBooking({ onNavigate }: VerifyBookingProps) {
                         accept={FILE_ACCEPT}
                         className="sr-only"
                         disabled={licenseUploading}
-                        onChange={handleLicenseFileChange}
+                        onChange={(e) => void handleLicenseFileChange(e)}
                       />
                     </label>
                     {licenseMessage ? (
@@ -382,56 +338,47 @@ export default function VerifyBooking({ onNavigate }: VerifyBookingProps) {
                       href={insuranceConfig.checkoutUrl}
                       target="_blank"
                       rel="noopener noreferrer"
-                      onClick={wrapSyncClick('verify_booking_external_buoy', () => {
-                        /* open via href */
-                      })}
                       className="mt-4 inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800"
                     >
                       Get Insurance
                       <ExternalLink className="h-4 w-4" aria-hidden />
                     </a>
-                    <p className="mt-3 text-xs text-slate-500">
-                      Opens Buoy insurance checkout in a new tab. We do not collect Buoy credentials here, only your
-                      proof of coverage.
-                    </p>
                   </section>
 
                   <section>
                     <h2 className="text-lg font-bold text-white">Upload proof</h2>
                     <p className="mt-1 text-sm text-slate-400">
-                      Upload a screenshot or PDF of your Buoy policy or certificate. Images or PDF,
-                      max 5 MB.
+                      Upload a screenshot or PDF of your Buoy policy or certificate. Max 5 MB.
                     </p>
 
-                    {uv?.buoy_proof_url && uv.buoy_status === 'pending' && (
+                    {uvStatus.has_proof && uvStatus.buoy_status === 'pending' && (
                       <p className="mt-4 rounded-lg border border-emerald-400/30 bg-emerald-950/40 px-4 py-3 font-medium text-emerald-100">
                         Insurance submitted for review
                       </p>
                     )}
-                    {uv?.buoy_proof_url && uv.buoy_status === 'verified' && (
+                    {uvStatus.has_proof && uvStatus.buoy_status === 'verified' && (
                       <p className="mt-4 rounded-lg border border-emerald-400/30 bg-emerald-950/40 px-4 py-3 font-medium text-emerald-100">
                         Buoy insurance approved. Thank you.
                       </p>
                     )}
-                    {uv?.buoy_status === 'rejected' && (
-                      <p className="mt-4 rounded-lg border border-red-400/35 bg-red-950/40 px-4 py-3 text-red-100">
+                    {uvStatus.buoy_status === 'rejected' && (
+                      <p className="mt-4 rounded-lg border border-amber-400/35 bg-amber-950/40 px-4 py-3 text-amber-100">
                         Your previous proof could not be approved. Please upload a new document.
                       </p>
                     )}
 
-                    {(!uv?.buoy_proof_url || uv.buoy_status === 'rejected') && (
+                    {(!uvStatus.has_proof || uvStatus.buoy_status === 'rejected') && (
                       <label className="mt-4 flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-white/20 bg-slate-950/30 px-4 py-8 transition hover:border-cyan-400/40 hover:bg-cyan-500/5">
                         <Upload className="mb-2 h-8 w-8 text-slate-500" aria-hidden />
                         <span className="text-sm font-semibold text-slate-200">
                           {uploading ? 'Uploading…' : 'Choose file'}
                         </span>
-                        <span className="mt-1 text-xs text-slate-500">JPEG, PNG, WebP, GIF, or PDF</span>
                         <input
                           type="file"
                           accept={FILE_ACCEPT}
                           className="sr-only"
                           disabled={uploading}
-                          onChange={handleFileChange}
+                          onChange={(e) => void handleFileChange(e)}
                         />
                       </label>
                     )}

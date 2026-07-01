@@ -1,4 +1,6 @@
 import { supabase } from './supabase';
+import { env } from '../config/env.js';
+import { requestBookingUploadUrl } from './publicBooking';
 
 const MAX_BYTES = 10 * 1024 * 1024;
 const ALLOWED = new Set([
@@ -11,6 +13,62 @@ const ALLOWED = new Set([
 
 export function safeFileSegment(name: string): string {
   return name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120);
+}
+
+async function uploadViaSignedUrl(signedUrl: string, file: File): Promise<Error | null> {
+  const res = await fetch(signedUrl, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': file.type || 'application/octet-stream',
+    },
+    body: file,
+  });
+  if (!res.ok) {
+    return new Error('Upload to storage failed.');
+  }
+  return null;
+}
+
+/**
+ * Upload via server-minted signed URL when booking context is available; otherwise direct anon upload (legacy).
+ */
+export async function uploadBookingDocument(input: {
+  file: File;
+  folder: 'licenses' | 'insurance';
+  bookingId: string;
+  email: string;
+  phone?: string;
+  sessionKey?: string;
+}): Promise<{ url: string | null; error: Error | null }> {
+  const { file, folder, bookingId, email, phone, sessionKey } = input;
+
+  if (!file.size || file.size > MAX_BYTES) {
+    return { url: null, error: new Error('File must be under 10 MB.') };
+  }
+  if (!ALLOWED.has(file.type)) {
+    return {
+      url: null,
+      error: new Error('Allowed types: JPEG, PNG, WebP, GIF, PDF.'),
+    };
+  }
+
+  if (env.apiUrlConfigured && env.apiUrl && email) {
+    const prep = await requestBookingUploadUrl({
+      bookingId,
+      email,
+      phone,
+      folder,
+      fileName: file.name,
+    });
+    if (prep.ok) {
+      const upErr = await uploadViaSignedUrl(prep.signedUrl, file);
+      if (upErr) return { url: null, error: upErr };
+      if (prep.publicUrl) return { url: prep.publicUrl, error: null };
+      return { url: null, error: new Error('Upload succeeded but URL is unavailable.') };
+    }
+  }
+
+  return uploadDocumentToDocumentsBucket(file, folder, sessionKey || bookingId);
 }
 
 /**

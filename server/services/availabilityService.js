@@ -13,11 +13,16 @@ const DEFAULT_RANGE_DAYS = Number(process.env.AVAILABILITY_CALENDAR_DAYS || 60);
 const MIN_LEAD_HOURS = Math.max(0, Number(process.env.BOOKING_MIN_LEAD_HOURS || 2));
 
 const BLOCKING_BOOKING_STATUSES = new Set([
+  'hold',
   'pending',
   'pending_verification',
   'confirmed',
+  'ready_for_departure',
   'completed',
 ]);
+
+const SLOT_TAKEN_USER_MESSAGE =
+  'This time slot was just booked. Please select another time.';
 
 function bookingRowBlocksSlot(row) {
   if (!row || !BLOCKING_BOOKING_STATUSES.has(String(row.status || ''))) {
@@ -37,7 +42,7 @@ function intervalsOverlap(aStartMs, aEndMs, bStartMs, bEndMs) {
 async function fetchBlockingBookings(boatId, rangeStartIso, rangeEndIso) {
   const { data, error } = await supabase
     .from('bookings')
-    .select('id, start_time, end_time, status, expires_at')
+    .select('id, start_time, end_time, status, expires_at, customer_id, boat_id, customers(full_name, email, phone), boats(name)')
     .eq('boat_id', String(boatId))
     .lt('start_time', rangeEndIso)
     .gt('end_time', rangeStartIso);
@@ -93,6 +98,95 @@ function toIntervals(rows, keyStart, keyEnd) {
 
 function slotConflicts(startMs, endMs, intervals) {
   return intervals.some((iv) => intervalsOverlap(startMs, endMs, iv.startMs, iv.endMs));
+}
+
+function parseSlotRange(startIso, endIso) {
+  const start = new Date(String(startIso || ''));
+  const end = new Date(String(endIso || ''));
+  if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime())) {
+    const err = new Error('Invalid start or end time.');
+    err.statusCode = 400;
+    throw err;
+  }
+  if (end.getTime() <= start.getTime()) {
+    const err = new Error('End time must be after start time.');
+    err.statusCode = 400;
+    throw err;
+  }
+  return {
+    startIso: start.toISOString(),
+    endIso: end.toISOString(),
+    startMs: start.getTime(),
+    endMs: end.getTime(),
+  };
+}
+
+async function checkBookingSlotAvailability({
+  boatId,
+  startTime,
+  endTime,
+  location = null,
+  excludeBookingId = null,
+} = {}) {
+  const boat = String(boatId || '').trim();
+  if (!boat) {
+    const err = new Error('Boat id required for availability check');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const slot = parseSlotRange(startTime, endTime);
+  const [bookings, blockedDates] = await Promise.all([
+    fetchBlockingBookings(boat, slot.startIso, slot.endIso),
+    fetchBlockedDateRanges(boat, slot.startIso, slot.endIso),
+  ]);
+
+  const bookingConflict = bookings.find((row) => {
+    if (excludeBookingId && String(row.id) === String(excludeBookingId)) return false;
+    return intervalsOverlap(
+      slot.startMs,
+      slot.endMs,
+      new Date(String(row.start_time)).getTime(),
+      new Date(String(row.end_time)).getTime()
+    );
+  });
+
+  if (bookingConflict) {
+    return {
+      available: false,
+      reason: 'booking_conflict',
+      conflict: bookingConflict,
+      location,
+    };
+  }
+
+  const blockedIntervals = toIntervals(blockedDates, 'start_time', 'end_time');
+  if (slotConflicts(slot.startMs, slot.endMs, blockedIntervals)) {
+    return {
+      available: false,
+      reason: 'blocked_date',
+      conflict: null,
+      location,
+    };
+  }
+
+  return {
+    available: true,
+    reason: null,
+    conflict: null,
+    location,
+  };
+}
+
+async function assertBookingSlotAvailable(input) {
+  const result = await checkBookingSlotAvailability(input);
+  if (result.available) return result;
+
+  const err = new Error(SLOT_TAKEN_USER_MESSAGE);
+  err.statusCode = 409;
+  err.code = result.reason || 'slot_unavailable';
+  err.availability = result;
+  throw err;
 }
 
 /**
@@ -272,7 +366,10 @@ module.exports = {
   DEFAULT_STEP_MINUTES,
   DEFAULT_RANGE_DAYS,
   MIN_LEAD_HOURS,
+  BLOCKING_BOOKING_STATUSES,
   defaultFromTo,
+  assertBookingSlotAvailable,
+  checkBookingSlotAvailability,
   isStartTimeAllowed,
   listDatesAvailability,
   listSlotsForDay,

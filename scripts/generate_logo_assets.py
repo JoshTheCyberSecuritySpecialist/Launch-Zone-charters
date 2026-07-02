@@ -1,5 +1,5 @@
 """
-Generate favicons from the canonical transparent logo.
+Normalize the canonical site favicon.
 Run from repo root: python scripts/generate_logo_assets.py
 """
 from __future__ import annotations
@@ -9,12 +9,7 @@ from pathlib import Path
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
-SRC = (
-    ROOT
-    / "public"
-    / "images"
-    / "rocket-launch-boat-rentals-titusville-florida-launch-zone-charters-logo-indian-river-lagoon.png"
-)
+FAVICON = ROOT / "public" / "images" / "favicon_launch_Zone_Charters.png"
 
 
 def fit_rgba_square(src: Image.Image, out_size: int, fill_ratio: float = 0.88) -> Image.Image:
@@ -30,30 +25,12 @@ def fit_rgba_square(src: Image.Image, out_size: int, fill_ratio: float = 0.88) -
 
 
 def main() -> None:
-    if not SRC.is_file():
-        raise SystemExit(f"Missing source logo: {SRC}")
+    if not FAVICON.is_file():
+        raise SystemExit(f"Missing favicon: {FAVICON}")
 
-    base = Image.open(SRC)
-    im32 = fit_rgba_square(base, 32)
-    im16 = fit_rgba_square(base, 16)
-    im32.save(ROOT / "public" / "favicon-32x32.png", "PNG", optimize=True)
-    im16.save(ROOT / "public" / "favicon-16x16.png", "PNG", optimize=True)
-    fit_rgba_square(base, 180).save(ROOT / "public" / "apple-touch-icon.png", "PNG", optimize=True)
-
-    im32.save(
-        ROOT / "public" / "favicon.ico",
-        format="ICO",
-        sizes=[(32, 32), (16, 16)],
-        append_images=[im16],
-    )
-
-    # Legacy single PNG some hosts expect
-    im32.save(ROOT / "public" / "favicon.png", "PNG", optimize=True)
-
-    print(
-        "Wrote public/favicon.ico, favicon-32x32.png, favicon-16x16.png, "
-        "apple-touch-icon.png, favicon.png"
-    )
+    base = Image.open(FAVICON)
+    fit_rgba_square(base, 512, fill_ratio=1).save(FAVICON, "PNG", optimize=True)
+    print(f"Wrote {FAVICON.relative_to(ROOT)}")
 
 
 if __name__ == "__main__":

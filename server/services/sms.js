@@ -42,12 +42,12 @@ async function sendSMS(phone, message) {
   }
 
   try {
-    await client.messages.create({
+    const sentMessage = await client.messages.create({
       body: String(message).trim(),
       from,
       to,
     });
-    return { ok: true };
+    return { ok: true, sid: sentMessage?.sid || null };
   } catch (err) {
     console.warn('[sms] Twilio send failed:', err && err.message ? err.message : err);
     return { ok: false };

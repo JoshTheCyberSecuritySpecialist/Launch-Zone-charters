@@ -19,6 +19,9 @@ const ROUTES = {
   refundPolicy: '/refund-policy',
   adminLogin: '/admin-login',
   admin: '/admin',
+  adminBookings: '/admin/bookings',
+  adminStaffBooking: '/admin/staff-booking',
+  adminCalendar: '/admin/calendar',
   verify: '/verify',
   bioluminescentTours: '/bioluminescent-tours',
   insuranceRequired: '/insurance-required',
@@ -59,6 +62,9 @@ const PAGE_TO_PATH: Record<string, string> = {
   'refund-policy': ROUTES.refundPolicy,
   'admin-login': ROUTES.adminLogin,
   admin: ROUTES.admin,
+  'admin-bookings': ROUTES.adminBookings,
+  'admin-staff-booking': ROUTES.adminStaffBooking,
+  'admin-calendar': ROUTES.adminCalendar,
   verify: ROUTES.verify,
   'bioluminescent-tours': ROUTES.bioluminescentTours,
   'insurance-required': ROUTES.insuranceRequired,
@@ -79,7 +85,11 @@ export function pageKeyFromPath(pathname: string): string {
   if (path.startsWith('/log/')) return 'log-article';
   if (path === '/insurance-required') return 'insurance-required';
   if (path === '/waivers-insurance') return 'waivers-insurance';
+  if (path === '/admin/bookings') return 'admin';
   if (path === '/admin/boats') return 'admin';
+  if (path === '/admin/staff-booking') return 'admin';
+  if (path === '/admin/calendar') return 'admin';
+  if (path.startsWith('/admin/bookings/')) return 'admin';
   if (path === '/boats' || path === '/boat-rentals-daytona-beach') return 'fleet-daytona';
   return PATH_TO_PAGE[path] ?? 'home';
 }

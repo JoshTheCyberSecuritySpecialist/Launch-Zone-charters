@@ -7,6 +7,7 @@ require('dotenv').config({ path: path.join(__dirname, '.env') });
 const { spawn, execFile } = require('child_process');
 const express = require('express');
 const cors = require('cors');
+const { DateTime } = require('luxon');
 const { Resend } = require('resend');
 const supabase = require('./supabaseClient');
 const contactSubmission = require('./services/contactSubmission');
@@ -18,6 +19,7 @@ const waiversDocsReminders = require('./services/waiversDocsReminders');
 const bookingAccess = require('./services/bookingAccess');
 const documentUrlValidation = require('./services/documentUrlValidation');
 const bookingReliability = require('./services/bookingReliability');
+const bookingCommunications = require('./services/bookingCommunications');
 const { getBioConditions } = require('./services/bioluminescenceService');
 const { getRocketConditions } = require('./services/rocketService');
 const { getLaunchSchedulePreview } = require('./services/rocketScheduleService');
@@ -158,25 +160,6 @@ const SLOT_TAKEN_USER_MESSAGE =
 const SLOT_TOO_SOON_USER_MESSAGE =
   'This time is no longer available. Please choose a later time.';
 
-const BLOCKING_BOOKING_STATUSES = new Set([
-  'pending',
-  'pending_verification',
-  'confirmed',
-  'ready_for_departure',
-  'completed',
-]);
-
-function bookingRowBlocksSlot(row) {
-  if (!row || !BLOCKING_BOOKING_STATUSES.has(String(row.status || ''))) {
-    return false;
-  }
-  const exp = row.expires_at ? new Date(String(row.expires_at)).getTime() : NaN;
-  if (String(row.status) === 'pending' && Number.isFinite(exp) && exp < Date.now()) {
-    return false;
-  }
-  return true;
-}
-
 function isOverlapConstraintError(err) {
   if (!err) return false;
   if (String(err.code || '') === '23P01') return true;
@@ -220,38 +203,6 @@ async function cleanupExpiredBookingHolds() {
     console.log('[booking-hold-cleanup] removed', n, 'expired pending hold(s)');
   }
   return { deleted: n };
-}
-
-async function assertSlotAvailable(boatId, startIso, endIso, excludeBookingId) {
-  const boat = String(boatId || '').trim();
-  if (!boat) {
-    const err = new Error('Boat id required for availability check');
-    err.statusCode = 400;
-    throw err;
-  }
-  const start = String(startIso || '');
-  const end = String(endIso || '');
-  const { data: rows, error } = await supabase
-    .from('bookings')
-    .select('id, status, expires_at')
-    .eq('boat_id', boat)
-    .lt('start_time', end)
-    .gt('end_time', start);
-  if (error) {
-    const err = new Error(error.message || 'Availability check failed');
-    err.statusCode = 500;
-    throw err;
-  }
-  const conflict = (rows || []).find((row) => {
-    if (excludeBookingId && String(row.id) === String(excludeBookingId)) return false;
-    return bookingRowBlocksSlot(row);
-  });
-  if (conflict) {
-    const err = new Error(SLOT_TAKEN_USER_MESSAGE);
-    err.statusCode = 409;
-    err.code = 'slot_unavailable';
-    throw err;
-  }
 }
 
 async function refundStripeCheckoutSession(session) {
@@ -967,7 +918,13 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
       }
     } else {
       assertBookingLeadTime(booking.start_time);
-      await assertSlotAvailable(booking.boat_id, booking.start_time, booking.end_time, holdRow?.id || null);
+      await availabilityService.assertBookingSlotAvailable({
+        boatId: booking.boat_id,
+        startTime: booking.start_time,
+        endTime: booking.end_time,
+        location: booking.rentalLocation || booking.rental_location || null,
+        excludeBookingId: holdRow?.id || null,
+      });
     }
   } catch (slotErr) {
     const refund = await refundStripeCheckoutSession(session);
@@ -1420,6 +1377,1071 @@ app.get('/api/boats', async (req, res) => {
   } catch (err) {
     console.error('[api/boats]', err?.stack || err);
     return res.status(500).json({ error: err?.message || 'Could not load boats' });
+  }
+});
+
+function cleanText(value, maxLen = 500) {
+  const text = String(value || '').trim();
+  return text ? text.slice(0, maxLen) : '';
+}
+
+function normalizeStaffPaymentMethod(value) {
+  const method = cleanText(value, 40).toLowerCase();
+  return ['stripe', 'cash', 'venmo', 'zelle', 'paypal', 'groupon', 'comp', 'other'].includes(method)
+    ? method
+    : null;
+}
+
+function normalizeStaffPaymentStatus(value, fallback = 'pending') {
+  const status = cleanText(value, 40).toLowerCase();
+  return ['pending', 'deposit_paid', 'paid'].includes(status) ? status : fallback;
+}
+
+function parseStaffMoney(value, fallback = 0) {
+  const n = Number(value);
+  return Number.isFinite(n) ? roundMoney(Math.max(0, n)) : fallback;
+}
+
+function parseStaffDuration(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.round(n * 100) / 100;
+}
+
+function rentalTypeForHours(hours) {
+  if (Math.abs(Number(hours) - 4) < 0.01) return 'half_day';
+  if (Math.abs(Number(hours) - 8) < 0.01) return 'full_day';
+  return 'hourly';
+}
+
+function staffBookingTimes(body) {
+  const startRaw = cleanText(body.start_time || body.startTime, 80);
+  const endRaw = cleanText(body.end_time || body.endTime, 80);
+  if (startRaw && endRaw) {
+    const start = new Date(startRaw);
+    const end = new Date(endRaw);
+    if (Number.isFinite(start.getTime()) && Number.isFinite(end.getTime()) && end.getTime() > start.getTime()) {
+      return { startIso: start.toISOString(), endIso: end.toISOString() };
+    }
+  }
+
+  const date = cleanText(body.date, 20);
+  const time = cleanText(body.start_time_local || body.startTimeLocal || body.startTime || body.time, 20);
+  const duration = parseStaffDuration(body.duration_hours ?? body.durationHours);
+  if (!date || !time || duration == null) return null;
+
+  const start = DateTime.fromISO(`${date}T${time}`, { zone: availabilityService.BUSINESS_TZ });
+  if (!start.isValid) return null;
+  const end = start.plus({ minutes: Math.round(duration * 60) });
+  return { startIso: start.toUTC().toISO(), endIso: end.toUTC().toISO() };
+}
+
+function staffAvailabilityConflictPayload(result) {
+  const conflict = result?.conflict || null;
+  const customer = Array.isArray(conflict?.customers) ? conflict.customers[0] : conflict?.customers;
+  const boat = Array.isArray(conflict?.boats) ? conflict.boats[0] : conflict?.boats;
+  return {
+    available: Boolean(result?.available),
+    reason: result?.reason || null,
+    conflict: conflict
+      ? {
+          id: conflict.id,
+          customer_name: customer?.full_name || customer?.email || customer?.phone || 'Existing booking',
+          boat_name: boat?.name || 'Selected boat',
+          start_time: conflict.start_time,
+          end_time: conflict.end_time,
+          status: conflict.status,
+        }
+      : null,
+  };
+}
+
+async function findOrCreateStaffCustomer({ fullName, email, phone }) {
+  const normalizedEmail = email ? email.toLowerCase() : '';
+  if (normalizedEmail) {
+    const { data: existing, error } = await supabase
+      .from('customers')
+      .select('id, full_name, email, phone')
+      .ilike('email', normalizedEmail)
+      .maybeSingle();
+    if (error) throw error;
+    if (existing?.id) {
+      const { data: updated, error: updateError } = await supabase
+        .from('customers')
+        .update({
+          full_name: fullName,
+          phone,
+          email: normalizedEmail,
+        })
+        .eq('id', existing.id)
+        .select('id, full_name, email, phone')
+        .single();
+      if (updateError) throw updateError;
+      return updated || existing;
+    }
+  }
+
+  if (phone) {
+    const { data: existingByPhone, error } = await supabase
+      .from('customers')
+      .select('id, full_name, email, phone')
+      .eq('phone', phone)
+      .limit(1)
+      .maybeSingle();
+    if (error) throw error;
+    if (existingByPhone?.id) return existingByPhone;
+  }
+
+  const { data, error } = await supabase
+    .from('customers')
+    .insert({
+      full_name: fullName,
+      email: normalizedEmail || null,
+      phone,
+      sms_opt_in: false,
+    })
+    .select('id, full_name, email, phone')
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+app.post('/api/admin/staff-bookings/check', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const boatId = cleanText(req.body?.boat_id || req.body?.boatId, 80);
+    const times = staffBookingTimes(req.body || {});
+    if (!boatId || !times) {
+      return res.status(400).json({ error: 'Boat, date, start time, and duration are required.' });
+    }
+
+    const result = await availabilityService.checkBookingSlotAvailability({
+      boatId,
+      startTime: times.startIso,
+      endTime: times.endIso,
+      location: cleanText(req.body?.rental_location || req.body?.location, 80) || null,
+      excludeBookingId: cleanText(req.body?.exclude_booking_id || req.body?.excludeBookingId, 80) || null,
+    });
+    return res.json(staffAvailabilityConflictPayload(result));
+  } catch (err) {
+    console.error('[admin-staff-bookings:check]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not check availability.' });
+  }
+});
+
+app.get('/api/admin/staff-bookings/today', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const today = DateTime.now().setZone(availabilityService.BUSINESS_TZ).startOf('day');
+    const { data, error } = await supabase
+      .from('bookings')
+      .select('id, start_time, end_time, status, payment_status, booking_source, rental_location, customers(full_name, phone, email), boats(name)')
+      .gte('start_time', today.toUTC().toISO())
+      .lt('start_time', today.plus({ days: 1 }).toUTC().toISO())
+      .or('staff_created.eq.true,booking_source.eq.admin')
+      .order('start_time', { ascending: true });
+    if (error) throw error;
+    return res.json({ bookings: Array.isArray(data) ? data : [] });
+  } catch (err) {
+    console.error('[admin-staff-bookings:today]', err);
+    return res.status(500).json({ error: err.message || 'Could not load staff bookings.' });
+  }
+});
+
+app.post('/api/admin/staff-bookings', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const body = req.body || {};
+    const action = cleanText(body.action, 20) === 'hold' ? 'hold' : 'booking';
+    const customerName = cleanText(body.customer_name || body.customerName, 160);
+    const phone = cleanText(body.phone, 40);
+    const email = cleanText(body.email, 160);
+    const boatId = cleanText(body.boat_id || body.boatId, 80);
+    const bookingType = cleanText(body.booking_type || body.bookingType, 40) === 'captain_charter'
+      ? 'captain_charter'
+      : 'rental';
+    const location = cleanText(body.rental_location || body.location, 80);
+    const passengerCount = Math.max(1, Math.floor(Number(body.passenger_count || body.passengerCount || 1) || 1));
+    const durationHours = parseStaffDuration(body.duration_hours ?? body.durationHours);
+    const times = staffBookingTimes(body);
+
+    if (!customerName) return res.status(400).json({ error: 'Customer name is required.' });
+    if (!boatId) return res.status(400).json({ error: 'Boat is required.' });
+    if (!times || durationHours == null) return res.status(400).json({ error: 'Date, start time, and duration are required.' });
+
+    const availability = await availabilityService.checkBookingSlotAvailability({
+      boatId,
+      startTime: times.startIso,
+      endTime: times.endIso,
+      location: location || null,
+    });
+    if (!availability.available) {
+      return res.status(409).json({
+        error: SLOT_TAKEN_USER_MESSAGE,
+        availability: staffAvailabilityConflictPayload(availability),
+      });
+    }
+
+    const { data: boat, error: boatError } = await supabase
+      .from('boats')
+      .select('id, name, hourly_rate, half_day_rate, full_day_rate, type')
+      .eq('id', boatId)
+      .maybeSingle();
+    if (boatError) throw boatError;
+    if (!boat?.id) return res.status(400).json({ error: 'Boat not found.' });
+
+    const customer = await findOrCreateStaffCustomer({ fullName: customerName, email, phone });
+    const originalPrice = parseStaffMoney(body.original_price ?? body.originalPrice, 0);
+    const discount = parseStaffMoney(body.discount, 0);
+    const finalPrice = parseStaffMoney(body.final_price ?? body.finalPrice, Math.max(0, originalPrice - discount));
+    const paymentStatus = action === 'hold'
+      ? 'pending'
+      : normalizeStaffPaymentStatus(body.payment_status || body.paymentStatus);
+    const paymentMethod = normalizeStaffPaymentMethod(body.payment_method || body.paymentMethod);
+    const amountCollected = action === 'hold'
+      ? 0
+      : parseStaffMoney(body.amount_collected ?? body.amountCollected, paymentStatus === 'pending' ? 0 : finalPrice);
+    const status = action === 'hold' ? 'hold' : 'confirmed';
+    const captainIncluded = bookingType === 'captain_charter';
+
+    const insert = {
+      customer_id: customer.id,
+      boat_id: boat.id,
+      booking_type: bookingType === 'captain_charter' ? 'charter' : 'rental',
+      charter_type: bookingType === 'captain_charter' ? 'captain_charter' : null,
+      guest_count: passengerCount,
+      rental_location: location || null,
+      start_time: times.startIso,
+      end_time: times.endIso,
+      duration_hours: durationHours,
+      rental_type: rentalTypeForHours(durationHours),
+      captain_included: captainIncluded,
+      captain_fee: captainIncluded ? roundMoney(CAPTAIN_HOURLY * durationHours) : 0,
+      base_price: originalPrice,
+      peak_surcharge: 0,
+      security_deposit: 0,
+      total_price: finalPrice,
+      total_amount: finalPrice,
+      deposit_amount: amountCollected,
+      deposit_paid: amountCollected,
+      balance_due: roundMoney(Math.max(0, finalPrice - amountCollected)),
+      payment_status: paymentStatus,
+      status,
+      is_night_tour: false,
+      is_rocket_tour: false,
+      license_status: 'pending',
+      insurance_status: bookingType === 'captain_charter' ? 'verified' : 'pending',
+      waiver_signed: false,
+      staff_created: true,
+      staff_created_by: adminUser.id,
+      booking_source: 'admin',
+      payment_method: paymentMethod,
+      payment_note: cleanText(body.payment_note || body.paymentNote, 500) || null,
+      amount_collected: amountCollected,
+      manual_discount_reason: cleanText(body.manual_discount_reason || body.manualDiscountReason, 500) || null,
+      hold_expires_at: action === 'hold' ? DateTime.now().plus({ hours: 2 }).toUTC().toISO() : null,
+      staff_notes: cleanText(body.staff_notes || body.staffNotes, 1000) || null,
+      admin_notes: cleanText(body.staff_notes || body.staffNotes, 1000) || null,
+      original_total: originalPrice,
+      discount_amount: discount,
+      final_total: finalPrice,
+    };
+
+    const { data: booking, error } = await supabase
+      .from('bookings')
+      .insert(insert)
+      .select('id, status')
+      .single();
+    if (error) {
+      if (isOverlapConstraintError(error)) {
+        return res.status(409).json({ error: SLOT_TAKEN_USER_MESSAGE });
+      }
+      throw error;
+    }
+
+    return res.status(201).json({ booking, customer });
+  } catch (err) {
+    console.error('[admin-staff-bookings:create]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not create staff booking.' });
+  }
+});
+
+function calendarRangeFromQuery(query) {
+  const fromRaw = cleanText(query.from, 80);
+  const toRaw = cleanText(query.to, 80);
+  const now = DateTime.now().setZone(availabilityService.BUSINESS_TZ).startOf('week');
+  const from = fromRaw ? new Date(fromRaw) : now.toJSDate();
+  const to = toRaw ? new Date(toRaw) : now.plus({ days: 7 }).toJSDate();
+  if (!Number.isFinite(from.getTime()) || !Number.isFinite(to.getTime()) || to.getTime() <= from.getTime()) {
+    const err = new Error('Valid from and to range is required.');
+    err.statusCode = 400;
+    throw err;
+  }
+  return { fromIso: from.toISOString(), toIso: to.toISOString() };
+}
+
+function normalizeCalendarBooking(row) {
+  const customer = Array.isArray(row.customers) ? row.customers[0] : row.customers;
+  const boat = Array.isArray(row.boats) ? row.boats[0] : row.boats;
+  return {
+    ...row,
+    customer_name: customer?.full_name || row.name || 'Unknown customer',
+    customer_phone: customer?.phone || row.phone || null,
+    customer_email: customer?.email || row.email || null,
+    boat_name: boat?.name || 'Unassigned boat',
+    boat_type: boat?.type || null,
+  };
+}
+
+function bookingMatchesCalendarSearch(row, needle) {
+  if (!needle) return true;
+  const hay = [
+    row.id,
+    row.customer_name,
+    row.customer_phone,
+    row.customer_email,
+    row.boat_name,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+  return hay.includes(needle);
+}
+
+async function loadCalendarBlockedDates({ fromIso, toIso, boatId }) {
+  const boat = cleanText(boatId, 80);
+  let query = supabase
+    .from('blocked_dates')
+    .select('id, boat_id, start_time, end_time')
+    .lt('start_time', toIso)
+    .gt('end_time', fromIso);
+  if (boat) query = query.or(`boat_id.eq.${boat},boat_id.is.null`);
+  const { data, error } = await query;
+  if (!error) return Array.isArray(data) ? data : [];
+
+  const rangeStartDate = fromIso.slice(0, 10);
+  const rangeEndDateExclusive = toIso.slice(0, 10);
+  let fallback = supabase
+    .from('blocked_dates')
+    .select('id, boat_id, start_date, end_date')
+    .lt('start_date', rangeEndDateExclusive)
+    .gte('end_date', rangeStartDate);
+  if (boat) fallback = fallback.or(`boat_id.eq.${boat},boat_id.is.null`);
+  const { data: dateRows, error: dateError } = await fallback;
+  if (dateError) throw error;
+  return (dateRows || []).map((row) => {
+    const start = DateTime.fromISO(String(row.start_date), { zone: availabilityService.BUSINESS_TZ }).startOf('day');
+    const end = DateTime.fromISO(String(row.end_date), { zone: availabilityService.BUSINESS_TZ }).startOf('day');
+    return {
+      id: row.id,
+      boat_id: row.boat_id || null,
+      start_time: start.toUTC().toISO(),
+      end_time: end.plus({ days: 1 }).toUTC().toISO(),
+    };
+  });
+}
+
+app.get('/api/admin/calendar-bookings', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const { fromIso, toIso } = calendarRangeFromQuery(req.query || {});
+    const location = cleanText(req.query.location, 80);
+    const boatId = cleanText(req.query.boatId || req.query.boat_id, 80);
+    const bookingType = cleanText(req.query.bookingType || req.query.booking_type, 40);
+    const status = cleanText(req.query.status, 40);
+    const source = cleanText(req.query.source, 40).toLowerCase();
+    const search = cleanText(req.query.search, 160).toLowerCase();
+
+    let query = supabase
+      .from('bookings')
+      .select(
+        'id, customer_id, boat_id, start_time, end_time, duration_hours, status, payment_status, booking_source, staff_created, rental_location, booking_type, charter_type, guest_count, total_price, total_amount, staff_notes, admin_notes, customers(full_name, email, phone), boats(id, name, type)'
+      )
+      .lt('start_time', toIso)
+      .gt('end_time', fromIso)
+      .order('start_time', { ascending: true });
+
+    if (location) query = query.eq('rental_location', location);
+    if (boatId) query = query.eq('boat_id', boatId);
+    if (bookingType === 'rental') query = query.eq('booking_type', 'rental');
+    if (bookingType === 'captain_charter') query = query.eq('booking_type', 'charter');
+    if (status) query = query.eq('status', status);
+    if (source === 'staff') query = query.eq('staff_created', true);
+    if (source === 'website') query = query.not('booking_source', 'eq', 'admin');
+    if (source === 'admin') query = query.eq('booking_source', 'admin');
+
+    const [{ data, error }, blockedDates] = await Promise.all([
+      query,
+      loadCalendarBlockedDates({ fromIso, toIso, boatId }),
+    ]);
+    if (error) throw error;
+    const bookings = (Array.isArray(data) ? data : [])
+      .map(normalizeCalendarBooking)
+      .filter((row) => bookingMatchesCalendarSearch(row, search));
+    return res.json({ bookings, blockedDates, from: fromIso, to: toIso });
+  } catch (err) {
+    console.error('[admin-calendar-bookings:list]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not load calendar bookings.' });
+  }
+});
+
+app.patch('/api/admin/calendar-bookings/:id', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const id = cleanText(req.params.id, 80);
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid booking id.' });
+
+    const { data: existing, error: existingError } = await supabase
+      .from('bookings')
+      .select('id, boat_id, start_time, end_time, status, captain_included')
+      .eq('id', id)
+      .maybeSingle();
+    if (existingError) throw existingError;
+    if (!existing?.id) return res.status(404).json({ error: 'Booking not found.' });
+
+    const body = req.body || {};
+    const action = cleanText(body.action, 40);
+    const update = {};
+
+    if (action === 'cancel') update.status = 'cancelled';
+    if (action === 'complete') update.status = 'completed';
+    if (action === 'confirm_hold') update.status = 'confirmed';
+
+    const requestedStatus = cleanText(body.status, 40);
+    if (requestedStatus) {
+      const allowed = ['hold', 'pending', 'pending_verification', 'confirmed', 'ready_for_departure', 'cancelled', 'completed'];
+      if (!allowed.includes(requestedStatus)) return res.status(400).json({ error: 'Invalid status.' });
+      update.status = requestedStatus;
+    }
+
+    const nextBoatId = cleanText(body.boat_id || body.boatId, 80) || existing.boat_id;
+    const nextStart = cleanText(body.start_time || body.startTime, 80) || existing.start_time;
+    const nextEnd = cleanText(body.end_time || body.endTime, 80) || existing.end_time;
+    const nextLocation = cleanText(body.rental_location || body.location, 80);
+
+    if (body.boat_id || body.boatId) update.boat_id = nextBoatId;
+    if (body.start_time || body.startTime) update.start_time = new Date(nextStart).toISOString();
+    if (body.end_time || body.endTime) update.end_time = new Date(nextEnd).toISOString();
+    if (body.rental_location || body.location) update.rental_location = nextLocation || null;
+    if (body.payment_status || body.paymentStatus) {
+      update.payment_status = normalizeStaffPaymentStatus(body.payment_status || body.paymentStatus, existing.payment_status || 'pending');
+    }
+
+    const scheduleChanged = Boolean(body.boat_id || body.boatId || body.start_time || body.startTime || body.end_time || body.endTime);
+    const blocksAfterUpdate = !['cancelled'].includes(String(update.status || existing.status || ''));
+    if (scheduleChanged && blocksAfterUpdate) {
+      await availabilityService.assertBookingSlotAvailable({
+        boatId: nextBoatId,
+        startTime: nextStart,
+        endTime: nextEnd,
+        location: nextLocation || null,
+        excludeBookingId: id,
+      });
+      update.duration_hours = roundMoney((new Date(nextEnd).getTime() - new Date(nextStart).getTime()) / (1000 * 60 * 60));
+      update.rental_type = rentalTypeForHours(update.duration_hours);
+      update.captain_fee = existing.captain_included ? roundMoney(CAPTAIN_HOURLY * update.duration_hours) : 0;
+    }
+
+    if (Object.keys(update).length === 0) return res.status(400).json({ error: 'No changes supplied.' });
+
+    const { data, error } = await supabase
+      .from('bookings')
+      .update(update)
+      .eq('id', id)
+      .select(
+        'id, customer_id, boat_id, start_time, end_time, duration_hours, status, payment_status, booking_source, staff_created, rental_location, booking_type, charter_type, guest_count, total_price, total_amount, staff_notes, admin_notes, customers(full_name, email, phone), boats(id, name, type)'
+      )
+      .single();
+    if (error) {
+      if (isOverlapConstraintError(error)) return res.status(409).json({ error: SLOT_TAKEN_USER_MESSAGE });
+      throw error;
+    }
+    return res.json({ booking: normalizeCalendarBooking(data) });
+  } catch (err) {
+    console.error('[admin-calendar-bookings:update]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not update booking.' });
+  }
+});
+
+async function loadAdminBookingDetail(id) {
+  const { data: booking, error } = await supabase
+    .from('bookings')
+    .select(
+      '*, customers(id, full_name, email, phone), boats(id, name, type, hourly_rate, half_day_rate, full_day_rate), waivers(id), user_verifications(*)'
+    )
+    .eq('id', id)
+    .maybeSingle();
+  if (error) throw error;
+  if (!booking?.id) return null;
+
+  const [{ count: lifetimeBookings }, { data: activity }, { data: communications }] = await Promise.all([
+    booking.customer_id
+      ? supabase
+          .from('bookings')
+          .select('id', { count: 'exact', head: true })
+          .eq('customer_id', booking.customer_id)
+      : Promise.resolve({ count: 0 }),
+    supabase
+      .from('booking_activity_events')
+      .select('id, event_type, actor_type, message, payload, created_at')
+      .eq('booking_id', id)
+      .order('created_at', { ascending: false })
+      .limit(100),
+    supabase
+      .from('booking_communications')
+      .select('id, channel, message_type, recipient, subject, sent_by, sent_at, status, provider_message_id, error_message, created_at')
+      .eq('booking_id', id)
+      .order('created_at', { ascending: false })
+      .limit(100),
+  ]);
+
+  const events = Array.isArray(activity) ? activity : [];
+  if (events.length === 0) {
+    events.push({
+      id: `created-${booking.id}`,
+      event_type: 'booking_created',
+      actor_type: booking.staff_created ? 'admin' : 'system',
+      message: booking.staff_created ? 'Created by Admin' : 'Created by Website',
+      payload: {},
+      created_at: booking.created_at,
+    });
+  }
+
+  return {
+    booking,
+    lifetimeBookings: Number(lifetimeBookings || 0),
+    timeline: events,
+    communications: Array.isArray(communications) ? communications : [],
+  };
+}
+
+function bookingDetailUpdateFromBody(body) {
+  const out = {};
+  const setText = (column, keys, max = 500) => {
+    for (const key of keys) {
+      if (Object.prototype.hasOwnProperty.call(body, key)) {
+        out[column] = cleanText(body[key], max) || null;
+        return;
+      }
+    }
+  };
+  const setMoney = (column, keys) => {
+    for (const key of keys) {
+      if (Object.prototype.hasOwnProperty.call(body, key)) {
+        out[column] = parseStaffMoney(body[key], 0);
+        return;
+      }
+    }
+  };
+  setText('rental_location', ['rental_location', 'location'], 80);
+  setText('booking_source', ['booking_source', 'bookingSource'], 80);
+  setText('payment_method', ['payment_method', 'paymentMethod'], 40);
+  setText('payment_note', ['payment_note', 'paymentNote'], 500);
+  setText('manual_discount_reason', ['manual_discount_reason', 'manualDiscountReason'], 500);
+  setText('staff_notes', ['staff_notes', 'staffNotes'], 2000);
+  setText('admin_notes', ['internal_notes', 'internalNotes'], 2000);
+  setMoney('base_price', ['base_price', 'originalPrice']);
+  setMoney('discount_amount', ['discount_amount', 'discount']);
+  setMoney('total_price', ['total_price', 'finalPrice']);
+  setMoney('final_total', ['final_total', 'finalPrice']);
+  setMoney('deposit_paid', ['deposit_paid', 'depositPaid']);
+  setMoney('amount_collected', ['amount_collected', 'amountCollected']);
+  setMoney('balance_due', ['balance_due', 'remainingBalance']);
+  const paymentStatus = cleanText(body.payment_status || body.paymentStatus, 40);
+  if (paymentStatus) out.payment_status = normalizeStaffPaymentStatus(paymentStatus);
+  const status = cleanText(body.status, 40);
+  if (status && ['hold', 'pending', 'pending_verification', 'confirmed', 'ready_for_departure', 'cancelled', 'completed'].includes(status)) {
+    out.status = status;
+  }
+  const bookingType = cleanText(body.booking_type || body.bookingType, 40);
+  if (bookingType) {
+    out.booking_type = bookingType === 'captain_charter' ? 'charter' : 'rental';
+    out.charter_type = bookingType === 'captain_charter' ? 'captain_charter' : null;
+    out.captain_included = bookingType === 'captain_charter';
+  }
+  const guestCount = Number(body.guest_count ?? body.passengerCount);
+  if (Number.isFinite(guestCount) && guestCount > 0) out.guest_count = Math.floor(guestCount);
+  return out;
+}
+
+app.get('/api/admin/bookings/:id', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const id = cleanText(req.params.id, 80);
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid booking id.' });
+    const detail = await loadAdminBookingDetail(id);
+    if (!detail) return res.status(404).json({ error: 'Booking not found.' });
+    return res.json(detail);
+  } catch (err) {
+    console.error('[admin-booking-detail:get]', err);
+    return res.status(500).json({ error: err.message || 'Could not load booking.' });
+  }
+});
+
+app.patch('/api/admin/bookings/:id', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const id = cleanText(req.params.id, 80);
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid booking id.' });
+    const { data: existing, error: existingError } = await supabase
+      .from('bookings')
+      .select('id, customer_id, boat_id, start_time, end_time, status')
+      .eq('id', id)
+      .maybeSingle();
+    if (existingError) throw existingError;
+    if (!existing?.id) return res.status(404).json({ error: 'Booking not found.' });
+
+    const body = req.body || {};
+    const customer = body.customer || {};
+    if (existing.customer_id && Object.keys(customer).length > 0) {
+      const customerUpdate = {};
+      if (Object.prototype.hasOwnProperty.call(customer, 'full_name')) customerUpdate.full_name = cleanText(customer.full_name, 160);
+      if (Object.prototype.hasOwnProperty.call(customer, 'email')) customerUpdate.email = cleanText(customer.email, 160) || null;
+      if (Object.prototype.hasOwnProperty.call(customer, 'phone')) customerUpdate.phone = cleanText(customer.phone, 40);
+      if (Object.keys(customerUpdate).length > 0) {
+        const { error: customerErr } = await supabase.from('customers').update(customerUpdate).eq('id', existing.customer_id);
+        if (customerErr) throw customerErr;
+      }
+    }
+
+    const update = bookingDetailUpdateFromBody(body.booking || body);
+    const nextBoatId = cleanText(body.boat_id || body.boatId || body.booking?.boat_id || body.booking?.boatId, 80) || existing.boat_id;
+    const nextStart = cleanText(body.start_time || body.startTime || body.booking?.start_time || body.booking?.startTime, 80) || existing.start_time;
+    const nextEnd = cleanText(body.end_time || body.endTime || body.booking?.end_time || body.booking?.endTime, 80) || existing.end_time;
+
+    if (nextBoatId !== existing.boat_id) update.boat_id = nextBoatId;
+    if (nextStart !== existing.start_time) update.start_time = new Date(nextStart).toISOString();
+    if (nextEnd !== existing.end_time) update.end_time = new Date(nextEnd).toISOString();
+
+    const scheduleChanged = Boolean(update.boat_id || update.start_time || update.end_time);
+    if (scheduleChanged && String(update.status || existing.status) !== 'cancelled') {
+      await availabilityService.assertBookingSlotAvailable({
+        boatId: nextBoatId,
+        startTime: nextStart,
+        endTime: nextEnd,
+        location: update.rental_location || null,
+        excludeBookingId: id,
+      });
+      update.duration_hours = roundMoney((new Date(nextEnd).getTime() - new Date(nextStart).getTime()) / (1000 * 60 * 60));
+    }
+
+    if (Object.keys(update).length > 0) {
+      const { error } = await supabase.from('bookings').update(update).eq('id', id);
+      if (error) {
+        if (isOverlapConstraintError(error)) return res.status(409).json({ error: SLOT_TAKEN_USER_MESSAGE });
+        throw error;
+      }
+      await bookingReliability.insertActivity(supabase, {
+        booking_id: id,
+        event_type: 'booking_modified',
+        actor_type: 'admin',
+        actor_id: adminUser.id,
+        message: 'Booking modified by admin.',
+        payload: { fields: Object.keys(update) },
+      });
+    }
+
+    const detail = await loadAdminBookingDetail(id);
+    return res.json(detail);
+  } catch (err) {
+    console.error('[admin-booking-detail:update]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not update booking.' });
+  }
+});
+
+app.post('/api/admin/bookings/:id/actions', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const id = cleanText(req.params.id, 80);
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid booking id.' });
+    const action = cleanText(req.body?.action, 60);
+    const statusByAction = {
+      confirm_hold: 'confirmed',
+      cancel: 'cancelled',
+      ready: 'ready_for_departure',
+      complete: 'completed',
+    };
+
+    if (action === 'send_confirmation') {
+      const detail = await loadAdminBookingDetail(id);
+      const email = detail?.booking?.customers?.email || detail?.booking?.email || '';
+      if (!email) return res.status(400).json({ error: 'Booking has no customer email.' });
+      await sendBookingConfirmationInternal({ bookingId: id, email, source: 'admin' });
+      return res.json({ ok: true });
+    }
+
+    if (action === 'delete_hold') {
+      const { data: existing, error: existingError } = await supabase
+        .from('bookings')
+        .select('id, status')
+        .eq('id', id)
+        .maybeSingle();
+      if (existingError) throw existingError;
+      if (!existing?.id) return res.status(404).json({ error: 'Booking not found.' });
+      if (existing.status !== 'hold') return res.status(400).json({ error: 'Only hold bookings can be deleted from the quick menu.' });
+      await bookingReliability.insertActivity(supabase, {
+        booking_id: id,
+        event_type: 'delete_hold',
+        actor_type: 'admin',
+        actor_id: adminUser.id,
+        message: 'Hold deleted by admin.',
+      });
+      const { error: deleteError } = await supabase.from('bookings').delete().eq('id', id);
+      if (deleteError) throw deleteError;
+      return res.json({ ok: true, deleted: true });
+    }
+
+    const nextStatus = statusByAction[action];
+    if (!nextStatus) return res.status(400).json({ error: 'Unknown action.' });
+    const { error } = await supabase.from('bookings').update({ status: nextStatus }).eq('id', id);
+    if (error) throw error;
+    await bookingReliability.insertActivity(supabase, {
+      booking_id: id,
+      event_type: action,
+      actor_type: 'admin',
+      actor_id: adminUser.id,
+      message: action.replace(/_/g, ' '),
+    });
+    return res.json({ ok: true, status: nextStatus });
+  } catch (err) {
+    console.error('[admin-booking-detail:action]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not run booking action.' });
+  }
+});
+
+app.post('/api/admin/bookings/:id/communications/preview', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const id = cleanText(req.params.id, 80);
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid booking id.' });
+    const messageType = cleanText(req.body?.message_type || req.body?.messageType, 80);
+    const detail = await loadAdminBookingDetail(id);
+    if (!detail) return res.status(404).json({ error: 'Booking not found.' });
+    const preview = bookingCommunications.templateFor(messageType, detail);
+    const [emailDuplicate, smsDuplicate] = await Promise.all([
+      bookingCommunications.recentSuccessfulCommunication(supabase, id, messageType, 'email'),
+      bookingCommunications.recentSuccessfulCommunication(supabase, id, messageType, 'sms'),
+    ]);
+    return res.json({
+      preview,
+      smsAvailable: bookingCommunications.smsConfigured(),
+      duplicates: {
+        email: emailDuplicate,
+        sms: smsDuplicate,
+      },
+    });
+  } catch (err) {
+    console.error('[admin-communications:preview]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not preview communication.' });
+  }
+});
+
+app.post('/api/admin/bookings/:id/communications/send', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const id = cleanText(req.params.id, 80);
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid booking id.' });
+    const messageType = cleanText(req.body?.message_type || req.body?.messageType, 80);
+    const channels = Array.isArray(req.body?.channels)
+      ? req.body.channels.map((channel) => cleanText(channel, 20)).filter((channel) => ['email', 'sms'].includes(channel))
+      : [];
+    const confirmDuplicate = Boolean(req.body?.confirmDuplicate || req.body?.confirm_duplicate);
+    if (channels.length === 0) return res.status(400).json({ error: 'Choose email, SMS, or both.' });
+
+    const detail = await loadAdminBookingDetail(id);
+    if (!detail) return res.status(404).json({ error: 'Booking not found.' });
+    const preview = bookingCommunications.templateFor(messageType, detail);
+
+    const duplicateChecks = await Promise.all(
+      channels.map(async (channel) => ({
+        channel,
+        duplicate: await bookingCommunications.recentSuccessfulCommunication(supabase, id, messageType, channel),
+      }))
+    );
+    const duplicates = duplicateChecks.filter((row) => row.duplicate);
+    if (duplicates.length > 0 && !confirmDuplicate) {
+      return res.status(409).json({
+        error: 'This message was already sent. Confirm duplicate send to continue.',
+        duplicates,
+        preview,
+      });
+    }
+
+    const results = [];
+    if (channels.includes('email')) {
+      results.push(await bookingCommunications.sendEmail({
+        supabase,
+        resend,
+        resendFrom,
+        bookingId: id,
+        adminUserId: adminUser.id,
+        preview,
+      }));
+    }
+    if (channels.includes('sms')) {
+      results.push(await bookingCommunications.sendSms({
+        supabase,
+        bookingId: id,
+        adminUserId: adminUser.id,
+        preview,
+      }));
+    }
+
+    await bookingReliability.insertActivity(supabase, {
+      booking_id: id,
+      event_type: 'communication_sent',
+      actor_type: 'admin',
+      actor_id: adminUser.id,
+      message: `Admin sent ${messageType.replace(/_/g, ' ')} communication.`,
+      payload: { channels, result_ids: results.map((row) => row.id) },
+    });
+
+    return res.json({ ok: true, results, smsAvailable: bookingCommunications.smsConfigured() });
+  } catch (err) {
+    console.error('[admin-communications:send]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not send communication.' });
+  }
+});
+
+function moneyNumber(value) {
+  const n = Number(value || 0);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function normalizeOpsBooking(row) {
+  const customer = Array.isArray(row.customers) ? row.customers[0] : row.customers;
+  const boat = Array.isArray(row.boats) ? row.boats[0] : row.boats;
+  const total = moneyNumber(row.final_total ?? row.total_price ?? row.total_amount);
+  const deposits = moneyNumber(row.deposit_paid ?? row.deposit_amount) + moneyNumber(row.amount_collected);
+  const outstanding = moneyNumber(row.balance_due ?? Math.max(0, total - deposits));
+  return {
+    id: row.id,
+    customer_name: customer?.full_name || row.name || 'Unknown customer',
+    customer_phone: customer?.phone || row.phone || null,
+    customer_email: customer?.email || row.email || null,
+    boat_id: row.boat_id,
+    boat_name: boat?.name || 'Unassigned boat',
+    boat_type: boat?.type || null,
+    location: row.rental_location || null,
+    start_time: row.start_time,
+    end_time: row.end_time,
+    passenger_count: row.guest_count || row.passenger_count || 1,
+    payment_status: row.payment_status || 'pending',
+    status: row.status,
+    booking_source: row.booking_source || (row.staff_created ? 'admin' : 'website'),
+    booking_type: row.booking_type,
+    charter_type: row.charter_type,
+    waiver_done: Boolean(row.waiver_signed || (Array.isArray(row.waivers) && row.waivers.length > 0)),
+    insurance_done: ['submitted', 'verified'].includes(String(row.insurance_status || '')),
+    license_done: String(row.license_status || '') === 'verified' || Boolean(row.license_url),
+    ready_for_departure: row.status === 'ready_for_departure' || row.status === 'completed',
+    hold_expires_at: row.hold_expires_at || null,
+    total,
+    deposits,
+    outstanding,
+  };
+}
+
+function revenueForRows(rows) {
+  const bookings = rows.filter((row) => row.status !== 'cancelled');
+  const revenue = bookings.reduce((sum, row) => sum + moneyNumber(row.final_total ?? row.total_price ?? row.total_amount), 0);
+  const deposits = bookings.reduce((sum, row) => sum + moneyNumber(row.deposit_paid ?? row.deposit_amount) + moneyNumber(row.amount_collected), 0);
+  const outstanding = bookings.reduce((sum, row) => {
+    const total = moneyNumber(row.final_total ?? row.total_price ?? row.total_amount);
+    const collected = moneyNumber(row.deposit_paid ?? row.deposit_amount) + moneyNumber(row.amount_collected);
+    return sum + moneyNumber(row.balance_due ?? Math.max(0, total - collected));
+  }, 0);
+  return {
+    bookings: bookings.length,
+    revenue: roundMoney(revenue),
+    deposits: roundMoney(deposits),
+    outstandingBalance: roundMoney(outstanding),
+    averageBookingValue: bookings.length ? roundMoney(revenue / bookings.length) : 0,
+  };
+}
+
+function actionItemsForBookings(bookings) {
+  const items = [];
+  const now = Date.now();
+  const endOfToday = DateTime.now().setZone(availabilityService.BUSINESS_TZ).endOf('day').toMillis();
+  for (const booking of bookings) {
+    if (booking.status === 'cancelled' || booking.status === 'completed') continue;
+    const startMs = new Date(booking.start_time).getTime();
+    const base = {
+      booking_id: booking.id,
+      customer_name: booking.customer_name,
+      boat_name: booking.boat_name,
+      start_time: booking.start_time,
+    };
+    if (!booking.waiver_done) items.push({ ...base, type: 'missing_waiver', label: 'Missing waiver', urgency: 10 });
+    if (!booking.insurance_done && booking.booking_type !== 'charter') items.push({ ...base, type: 'missing_insurance', label: 'Missing insurance', urgency: 9 });
+    if (!booking.license_done) items.push({ ...base, type: 'missing_license', label: 'Missing license/documents', urgency: 8 });
+    if (booking.outstanding > 0) items.push({ ...base, type: 'outstanding_balance', label: `Owes $${booking.outstanding.toFixed(2)}`, urgency: 7 });
+    if (booking.status === 'pending_verification') items.push({ ...base, type: 'pending_verification', label: 'Pending verification', urgency: 8 });
+    if (booking.status === 'hold' && booking.hold_expires_at) {
+      const exp = new Date(booking.hold_expires_at).getTime();
+      if (Number.isFinite(exp) && exp >= now && exp <= endOfToday) {
+        items.push({ ...base, type: 'hold_expires_today', label: 'Hold expires today', urgency: 11, expires_at: booking.hold_expires_at });
+      }
+    }
+    if (Number.isFinite(startMs) && startMs >= now && startMs <= now + 2 * 60 * 60 * 1000) {
+      items.push({ ...base, type: 'upcoming_departure', label: 'Departure within 2 hours', urgency: 12 });
+    }
+  }
+  return items.sort((a, b) => b.urgency - a.urgency || new Date(a.start_time).getTime() - new Date(b.start_time).getTime()).slice(0, 50);
+}
+
+app.get('/api/admin/operations-dashboard', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const now = DateTime.now().setZone(availabilityService.BUSINESS_TZ);
+    const todayStart = now.startOf('day');
+    const todayEnd = todayStart.plus({ days: 1 });
+    const weekStart = now.startOf('week');
+    const weekEnd = weekStart.plus({ weeks: 1 });
+    const monthStart = now.startOf('month');
+    const monthEnd = monthStart.plus({ months: 1 });
+    const upcomingEnd = todayStart.plus({ days: 14 });
+
+    const bookingSelect =
+      'id, customer_id, boat_id, start_time, end_time, status, payment_status, booking_source, staff_created, rental_location, booking_type, charter_type, guest_count, waiver_signed, license_status, insurance_status, license_url, insurance_url, hold_expires_at, final_total, total_price, total_amount, deposit_paid, deposit_amount, amount_collected, balance_due, customers(full_name, email, phone), boats(id, name, type), waivers(id)';
+
+    const [
+      boatsResult,
+      todayResult,
+      upcomingResult,
+      weekRevenueResult,
+      monthRevenueResult,
+      blockedResult,
+      activityResult,
+      commsResult,
+      weatherResult,
+    ] = await Promise.allSettled([
+      supabase.from('boats').select('id, name, type, is_active').order('name'),
+      supabase
+        .from('bookings')
+        .select(bookingSelect)
+        .lt('start_time', todayEnd.toUTC().toISO())
+        .gt('end_time', todayStart.toUTC().toISO())
+        .order('start_time', { ascending: true }),
+      supabase
+        .from('bookings')
+        .select(bookingSelect)
+        .gte('start_time', todayStart.toUTC().toISO())
+        .lt('start_time', upcomingEnd.toUTC().toISO())
+        .order('start_time', { ascending: true }),
+      supabase
+        .from('bookings')
+        .select('id, start_time, status, final_total, total_price, total_amount, deposit_paid, deposit_amount, amount_collected, balance_due')
+        .gte('start_time', weekStart.toUTC().toISO())
+        .lt('start_time', weekEnd.toUTC().toISO()),
+      supabase
+        .from('bookings')
+        .select('id, start_time, status, final_total, total_price, total_amount, deposit_paid, deposit_amount, amount_collected, balance_due')
+        .gte('start_time', monthStart.toUTC().toISO())
+        .lt('start_time', monthEnd.toUTC().toISO()),
+      loadCalendarBlockedDates({ fromIso: todayStart.toUTC().toISO(), toIso: todayEnd.toUTC().toISO(), boatId: null }),
+      supabase
+        .from('booking_activity_events')
+        .select('id, booking_id, event_type, message, actor_type, created_at')
+        .order('created_at', { ascending: false })
+        .limit(40),
+      supabase
+        .from('booking_communications')
+        .select('id, booking_id, channel, message_type, recipient, status, created_at')
+        .order('created_at', { ascending: false })
+        .limit(20),
+      getMarineConditions({ locationKey: 'daytona' }),
+    ]);
+
+    const boats = boatsResult.status === 'fulfilled' && !boatsResult.value.error ? boatsResult.value.data || [] : [];
+    const todayRows = todayResult.status === 'fulfilled' && !todayResult.value.error ? todayResult.value.data || [] : [];
+    const upcomingRows = upcomingResult.status === 'fulfilled' && !upcomingResult.value.error ? upcomingResult.value.data || [] : [];
+    const blockedDates = blockedResult.status === 'fulfilled' ? blockedResult.value || [] : [];
+    const todayTrips = todayRows.map(normalizeOpsBooking);
+    const upcomingBookings = upcomingRows.map(normalizeOpsBooking);
+
+    const todayActive = todayTrips.filter((trip) => !['cancelled', 'completed'].includes(String(trip.status)));
+    const blockedBoatIds = new Set((blockedDates || []).map((row) => row.boat_id).filter(Boolean));
+    const boatStatus = boats.map((boat) => {
+      const trips = todayActive.filter((trip) => trip.boat_id === boat.id);
+      const inUse = trips.some((trip) => {
+        const s = new Date(trip.start_time).getTime();
+        const e = new Date(trip.end_time).getTime();
+        return Number.isFinite(s + e) && s <= Date.now() && e >= Date.now();
+      });
+      let status = 'Available';
+      if (boat.is_active === false) status = 'Out of Service';
+      else if (blockedBoatIds.has(boat.id)) status = 'Blocked';
+      else if (inUse) status = 'In Use';
+      else if (trips.length > 0) status = 'Booked';
+      return { ...boat, status, bookings: trips };
+    });
+
+    const sourceCounts = {};
+    for (const row of upcomingBookings) {
+      const key = String(row.booking_source || 'website').toLowerCase();
+      sourceCounts[key] = (sourceCounts[key] || 0) + 1;
+    }
+
+    const activity =
+      activityResult.status === 'fulfilled' && !activityResult.value.error ? activityResult.value.data || [] : [];
+    const comms =
+      commsResult.status === 'fulfilled' && !commsResult.value.error ? commsResult.value.data || [] : [];
+
+    const alerts = actionItemsForBookings(upcomingBookings).filter((item) =>
+      ['hold_expires_today', 'upcoming_departure', 'missing_waiver', 'missing_insurance', 'missing_license'].includes(item.type)
+    );
+
+    return res.json({
+      today: todayStart.toISODate(),
+      todayTrips,
+      actionRequired: actionItemsForBookings(upcomingBookings),
+      schedule: {
+        boats: boatStatus,
+        bookings: todayTrips,
+        blockedDates,
+      },
+      boatStatus,
+      revenue: {
+        today: revenueForRows(todayRows),
+        week: revenueForRows(weekRevenueResult.status === 'fulfilled' && !weekRevenueResult.value.error ? weekRevenueResult.value.data || [] : []),
+        month: revenueForRows(monthRevenueResult.status === 'fulfilled' && !monthRevenueResult.value.error ? monthRevenueResult.value.data || [] : []),
+      },
+      bookingSources: sourceCounts,
+      recentActivity: [
+        ...activity.map((row) => ({ ...row, kind: 'activity' })),
+        ...comms.map((row) => ({
+          id: row.id,
+          booking_id: row.booking_id,
+          event_type: `communication_${row.message_type}`,
+          message: `${row.channel?.toUpperCase()} ${row.message_type?.replace(/_/g, ' ')} ${row.status}`,
+          created_at: row.created_at,
+          kind: 'communication',
+        })),
+      ]
+        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+        .slice(0, 40),
+      weather:
+        weatherResult.status === 'fulfilled'
+          ? weatherResult.value
+          : { success: false, error: weatherResult.reason?.message || 'Weather unavailable' },
+      alerts,
+    });
+  } catch (err) {
+    console.error('[admin-operations-dashboard]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not load operations dashboard.' });
   }
 });
 
@@ -2086,7 +3108,12 @@ app.post('/api/create-checkout-session', async (req, res) => {
         }
       } else {
         assertBookingLeadTime(startTime.toISOString());
-        await assertSlotAvailable(booking.boat_id, booking.start_time, booking.end_time, null);
+        await availabilityService.assertBookingSlotAvailable({
+          boatId: booking.boat_id,
+          startTime: booking.start_time,
+          endTime: booking.end_time,
+          location: booking.rentalLocation || booking.rental_location || null,
+        });
       }
     } catch (slotErr) {
       const code = slotErr.statusCode || 409;

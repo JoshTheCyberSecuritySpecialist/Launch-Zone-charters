@@ -1793,11 +1793,35 @@ export default function Admin({ onNavigate }: AdminProps) {
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
               <Logo variant="admin" className="self-start sm:self-center" />
               <div>
-                <h1 className="text-3xl font-bold">Admin Dashboard</h1>
+                <h1 className="text-3xl font-bold">Admin Bookings</h1>
                 <p className="mt-1 text-slate-400">Welcome back, {user?.email}</p>
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+              <Link
+                to="/admin"
+                className="rounded-lg bg-slate-800 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-slate-700"
+              >
+                Dashboard
+              </Link>
+              <Link
+                to="/admin/bookings"
+                className="rounded-lg bg-slate-700 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-slate-600"
+              >
+                Bookings
+              </Link>
+              <Link
+                to="/admin/staff-booking"
+                className="rounded-lg bg-green-700 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-green-600"
+              >
+                Staff Booking
+              </Link>
+              <Link
+                to="/admin/calendar"
+                className="rounded-lg bg-purple-700 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-purple-600"
+              >
+                Calendar
+              </Link>
               <Link
                 to="/admin/boats"
                 className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-amber-500"
@@ -3335,6 +3359,12 @@ export default function Admin({ onNavigate }: AdminProps) {
                     </td>
                     <td className="px-6 py-4">
                       <div className="flex flex-wrap items-center gap-2">
+                        <Link
+                          to={`/admin/bookings/${booking.id}`}
+                          className="rounded bg-slate-900 px-3 py-1 text-sm font-semibold text-white transition-colors hover:bg-slate-800"
+                        >
+                          Details
+                        </Link>
                         <button
                           type="button"
                           disabled={!canApproveReject || tableLoading}

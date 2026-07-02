@@ -205,6 +205,27 @@ export default function Header({ onNavigate, currentPage }: HeaderProps) {
                 >
                   Dashboard
                 </button>
+                <button
+                  type="button"
+                  onClick={() => handleNavigation('admin-bookings')}
+                  className="lz-nav-drawer__link lz-nav-drawer__link--admin"
+                >
+                  Bookings
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleNavigation('admin-staff-booking')}
+                  className="lz-nav-drawer__link lz-nav-drawer__link--admin"
+                >
+                  Staff Booking
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleNavigation('admin-calendar')}
+                  className="lz-nav-drawer__link lz-nav-drawer__link--admin"
+                >
+                  Calendar
+                </button>
               </div>
             )}
           </nav>

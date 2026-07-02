@@ -1,4 +1,5 @@
 import { useCallback } from 'react';
+import { Helmet } from 'react-helmet-async';
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import Header from './components/Header';
 import Footer from './components/Footer';
@@ -20,13 +21,18 @@ import WaiversInsurance from './pages/WaiversInsurance';
 import BookingDepositCancel from './pages/BookingDepositCancel';
 import VerifyBooking from './pages/VerifyBooking';
 import Admin from './pages/Admin';
+import AdminOperationsDashboard from './pages/AdminOperationsDashboard';
 import AdminBoats from './pages/AdminBoats';
+import AdminStaffBooking from './pages/AdminStaffBooking';
+import AdminCalendar from './pages/AdminCalendar';
+import AdminBookingDetails from './pages/AdminBookingDetails';
 import AdminLogin from './pages/AdminLogin';
 import CaptainsLog from './pages/CaptainsLog';
 import LogArticle from './pages/LogArticle';
 import BioluminescentTours from './pages/BioluminescentTours';
 import { pageKeyFromPath, pathFromPageKey } from './navigation';
 import ScrollToTop from './components/ScrollToTop';
+import { SITE_FAVICON_PATH } from './constants/branding';
 
 function AppLayout() {
   const navigate = useNavigate();
@@ -44,6 +50,11 @@ function AppLayout() {
 
   return (
     <div className="min-h-screen flex flex-col">
+      <Helmet>
+        <link rel="icon" type="image/png" href={SITE_FAVICON_PATH} />
+        <link rel="apple-touch-icon" href={SITE_FAVICON_PATH} />
+        <link rel="shortcut icon" href={SITE_FAVICON_PATH} />
+      </Helmet>
       <ScrollToTop />
       {showHeaderFooter && <Header onNavigate={onNavigate} currentPage={currentPage} />}
       <main
@@ -83,7 +94,11 @@ function AppLayout() {
           <Route path="/terms" element={<Terms />} />
           <Route path="/refund-policy" element={<RefundPolicy />} />
           <Route path="/admin-login" element={<AdminLogin onNavigate={onNavigate} />} />
-          <Route path="/admin" element={<Admin onNavigate={onNavigate} />} />
+          <Route path="/admin" element={<AdminOperationsDashboard />} />
+          <Route path="/admin/bookings" element={<Admin onNavigate={onNavigate} />} />
+          <Route path="/admin/staff-booking" element={<AdminStaffBooking />} />
+          <Route path="/admin/calendar" element={<AdminCalendar />} />
+          <Route path="/admin/bookings/:id" element={<AdminBookingDetails />} />
           <Route path="/admin/boats" element={<AdminBoats onNavigate={onNavigate} />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

@@ -17,6 +17,7 @@ const preTripNotifications = require('./services/preTripNotifications');
 const waiversDocsReminders = require('./services/waiversDocsReminders');
 const bookingAccess = require('./services/bookingAccess');
 const documentUrlValidation = require('./services/documentUrlValidation');
+const bookingReliability = require('./services/bookingReliability');
 const { getBioConditions } = require('./services/bioluminescenceService');
 const { getRocketConditions } = require('./services/rocketService');
 const { getLaunchSchedulePreview } = require('./services/rocketScheduleService');
@@ -150,8 +151,8 @@ function computeExpectedBookingTotals({
   };
 }
 
-/** Unpaid Checkout holds expire after this TTL (server-side). */
-const BOOKING_HOLD_TTL_MS = 10 * 60 * 1000;
+/** Unpaid Checkout holds expire with the Stripe Checkout Session. */
+const BOOKING_HOLD_TTL_MS = 30 * 60 * 1000;
 const SLOT_TAKEN_USER_MESSAGE =
   'This time slot was just booked. Please select another time.';
 const SLOT_TOO_SOON_USER_MESSAGE =
@@ -161,6 +162,7 @@ const BLOCKING_BOOKING_STATUSES = new Set([
   'pending',
   'pending_verification',
   'confirmed',
+  'ready_for_departure',
   'completed',
 ]);
 
@@ -180,6 +182,13 @@ function isOverlapConstraintError(err) {
   if (String(err.code || '') === '23P01') return true;
   const msg = String(err.message || '');
   return /exclusion|overlap|bookings_boat_no_time_overlap/i.test(msg);
+}
+
+function isUniqueConstraintError(err) {
+  if (!err) return false;
+  if (String(err.code || '') === '23505') return true;
+  const msg = String(err.message || '');
+  return /duplicate key|unique constraint|uidx/i.test(msg);
 }
 
 function assertBookingLeadTime(startIso) {
@@ -662,7 +671,9 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
     throw err;
   }
 
-  const session = await stripe.checkout.sessions.retrieve(sid);
+  const session = await stripe.checkout.sessions.retrieve(sid, {
+    expand: ['payment_intent.latest_charge'],
+  });
   if (!session) {
     const err = new Error('Checkout session not found');
     err.statusCode = 400;
@@ -670,12 +681,20 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
   }
 
   const stripeSessionId = String(session.id || sid);
-  const paymentIntentId = session.payment_intent ? String(session.payment_intent) : '';
+  const sessionIds = bookingReliability.extractSessionIds(session);
+  const paymentIntentId = sessionIds.paymentIntentId || '';
+  const stripeChargeId = sessionIds.chargeId || '';
 
   const { data: existingBySession } = await supabase
     .from('bookings')
     .select('id, customer_id')
-    .eq('stripe_payment_id', stripeSessionId)
+    .or(
+      [
+        `stripe_payment_id.eq.${stripeSessionId}`,
+        `stripe_checkout_session_id.eq.${stripeSessionId}`,
+        `checkout_session_id.eq.${stripeSessionId}`,
+      ].join(',')
+    )
     .maybeSingle();
   if (existingBySession?.id) {
     return {
@@ -689,7 +708,7 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
     const { data: existingByPi } = await supabase
       .from('bookings')
       .select('id, customer_id')
-      .eq('stripe_payment_id', paymentIntentId)
+      .or(`stripe_payment_id.eq.${paymentIntentId},payment_intent_id.eq.${paymentIntentId}`)
       .maybeSingle();
     if (existingByPi?.id) {
       return {
@@ -718,6 +737,11 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
   }
   const payload = draftRow?.payload;
   if (!payload || typeof payload !== 'object') {
+    await bookingReliability.enqueueRecovery(supabase, {
+      ...bookingReliability.recoveryPayloadFromSession(session),
+      reason: 'payment_received_no_booking',
+      error: 'Checkout session draft not found or expired',
+    });
     const err = new Error('Checkout session draft not found or expired');
     err.statusCode = 404;
     throw err;
@@ -730,7 +754,14 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
     .maybeSingle();
 
   if (holdRow?.expires_at && new Date(String(holdRow.expires_at)).getTime() < Date.now()) {
-    await refundStripeCheckoutSession(session);
+    const refund = await refundStripeCheckoutSession(session);
+    if (!refund.ok) {
+      await bookingReliability.enqueueRecovery(supabase, {
+        ...bookingReliability.recoveryPayloadFromSession(session),
+        reason: 'refund_failed',
+        error: refund.error || refund.reason || 'Checkout hold expired and refund failed',
+      });
+    }
     await supabase.from('bookings').delete().eq('id', holdRow.id);
     const err = new Error(
       'Your checkout reservation expired before payment cleared. Your card was refunded. Please choose another time.'
@@ -773,6 +804,11 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
     .select('id, email')
     .single();
   if (customerError || !customerRow) {
+    await bookingReliability.enqueueRecovery(supabase, {
+      ...bookingReliability.recoveryPayloadFromSession(session),
+      reason: 'booking_failed',
+      error: customerError?.message || 'Could not save customer',
+    });
     const err = new Error(customerError?.message || 'Could not save customer');
     err.statusCode = 500;
     throw err;
@@ -797,7 +833,14 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
       console.warn('[finalizeBookingFromSession] boat lookup:', boatErr.message);
     }
     if (!data) {
-      await refundStripeCheckoutSession(session);
+      const refund = await refundStripeCheckoutSession(session);
+      if (!refund.ok) {
+        await bookingReliability.enqueueRecovery(supabase, {
+          ...bookingReliability.recoveryPayloadFromSession(session),
+          reason: 'refund_failed',
+          error: refund.error || refund.reason || 'Boat not found and refund failed',
+        });
+      }
       const err = new Error('Boat not found; payment was refunded.');
       err.statusCode = 400;
       throw err;
@@ -824,7 +867,14 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
     bookingMode,
   });
   if (promoApplied.error) {
-    await refundStripeCheckoutSession(session);
+    const refund = await refundStripeCheckoutSession(session);
+    if (!refund.ok) {
+      await bookingReliability.enqueueRecovery(supabase, {
+        ...bookingReliability.recoveryPayloadFromSession(session),
+        reason: 'refund_failed',
+        error: refund.error || refund.reason || promoApplied.error,
+      });
+    }
     const err = new Error(promoApplied.error);
     err.statusCode = 400;
     throw err;
@@ -893,6 +943,9 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
     terms_accepted: true,
     damage_fee_acknowledged: true,
     stripe_payment_id: stripeSessionId,
+    payment_intent_id: paymentIntentId || null,
+    checkout_session_id: stripeSessionId,
+    stripe_charge_id: stripeChargeId || null,
     stripe_checkout_session_id: null,
     expires_at: null,
     admin_notes: adminNotesParts.length > 0 ? adminNotesParts.join('\n') : null,
@@ -917,7 +970,14 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
       await assertSlotAvailable(booking.boat_id, booking.start_time, booking.end_time, holdRow?.id || null);
     }
   } catch (slotErr) {
-    await refundStripeCheckoutSession(session);
+    const refund = await refundStripeCheckoutSession(session);
+    if (!refund.ok) {
+      await bookingReliability.enqueueRecovery(supabase, {
+        ...bookingReliability.recoveryPayloadFromSession(session),
+        reason: 'refund_failed',
+        error: refund.error || refund.reason || slotErr.message || 'Availability conflict and refund failed',
+      });
+    }
     const fallbackMessage =
       slotErr?.code === 'slot_too_soon' ? SLOT_TOO_SOON_USER_MESSAGE : SLOT_TAKEN_USER_MESSAGE;
     const err = new Error(slotErr.message || fallbackMessage);
@@ -935,13 +995,47 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
       .select('id')
       .single();
     if (updErr || !updated) {
+      if (isUniqueConstraintError(updErr)) {
+        const { data: existing } = await supabase
+          .from('bookings')
+          .select('id, customer_id')
+          .or(
+            [
+              `stripe_payment_id.eq.${stripeSessionId}`,
+              `checkout_session_id.eq.${stripeSessionId}`,
+              paymentIntentId ? `payment_intent_id.eq.${paymentIntentId}` : '',
+            ]
+              .filter(Boolean)
+              .join(',')
+          )
+          .maybeSingle();
+        if (existing?.id) {
+          return {
+            bookingId: existing.id,
+            email: await resolveCustomerEmail(existing.customer_id),
+            alreadyFinalized: true,
+          };
+        }
+      }
       if (isOverlapConstraintError(updErr)) {
-        await refundStripeCheckoutSession(session);
+        const refund = await refundStripeCheckoutSession(session);
+        if (!refund.ok) {
+          await bookingReliability.enqueueRecovery(supabase, {
+            ...bookingReliability.recoveryPayloadFromSession(session),
+            reason: 'refund_failed',
+            error: refund.error || refund.reason || SLOT_TAKEN_USER_MESSAGE,
+          });
+        }
         const err = new Error(SLOT_TAKEN_USER_MESSAGE);
         err.statusCode = 409;
         throw err;
       }
-      await refundStripeCheckoutSession(session);
+      const refund = await refundStripeCheckoutSession(session);
+      await bookingReliability.enqueueRecovery(supabase, {
+        ...bookingReliability.recoveryPayloadFromSession(session),
+        reason: refund.ok ? 'booking_failed' : 'refund_failed',
+        error: updErr?.message || refund.error || refund.reason || 'Could not confirm booking',
+      });
       const err = new Error(updErr?.message || 'Could not confirm booking');
       err.statusCode = 500;
       throw err;
@@ -954,13 +1048,47 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
       .select('id')
       .single();
     if (bookingError || !inserted) {
+      if (isUniqueConstraintError(bookingError)) {
+        const { data: existing } = await supabase
+          .from('bookings')
+          .select('id, customer_id')
+          .or(
+            [
+              `stripe_payment_id.eq.${stripeSessionId}`,
+              `checkout_session_id.eq.${stripeSessionId}`,
+              paymentIntentId ? `payment_intent_id.eq.${paymentIntentId}` : '',
+            ]
+              .filter(Boolean)
+              .join(',')
+          )
+          .maybeSingle();
+        if (existing?.id) {
+          return {
+            bookingId: existing.id,
+            email: await resolveCustomerEmail(existing.customer_id),
+            alreadyFinalized: true,
+          };
+        }
+      }
       if (isOverlapConstraintError(bookingError)) {
-        await refundStripeCheckoutSession(session);
+        const refund = await refundStripeCheckoutSession(session);
+        if (!refund.ok) {
+          await bookingReliability.enqueueRecovery(supabase, {
+            ...bookingReliability.recoveryPayloadFromSession(session),
+            reason: 'refund_failed',
+            error: refund.error || refund.reason || SLOT_TAKEN_USER_MESSAGE,
+          });
+        }
         const err = new Error(SLOT_TAKEN_USER_MESSAGE);
         err.statusCode = 409;
         throw err;
       }
-      await refundStripeCheckoutSession(session);
+      const refund = await refundStripeCheckoutSession(session);
+      await bookingReliability.enqueueRecovery(supabase, {
+        ...bookingReliability.recoveryPayloadFromSession(session),
+        reason: refund.ok ? 'booking_failed' : 'refund_failed',
+        error: bookingError?.message || refund.error || refund.reason || 'Could not save booking',
+      });
       const err = new Error(bookingError?.message || 'Could not save booking');
       err.statusCode = 500;
       throw err;
@@ -983,12 +1111,65 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
     });
     if (waiverErr) {
       console.warn('[finalize-checkout-session] waiver insert:', waiverErr.message);
+      await bookingReliability.insertActivity(supabase, {
+        booking_id: bookingRow.id,
+        checkout_session_id: stripeSessionId,
+        payment_intent_id: paymentIntentId || null,
+        event_type: 'waiver_insert_failed',
+        message: waiverErr.message,
+      });
     }
   }
 
   if (promoFields?.promo_code) {
     await incrementPromoUsage(supabase, promoFields.promo_code);
   }
+
+  await bookingReliability.upsertBookingPayment(supabase, {
+    booking_id: bookingRow.id,
+    checkout_session_id: stripeSessionId,
+    payment_intent_id: paymentIntentId || null,
+    charge_id: stripeChargeId || null,
+    amount: paidDeposit,
+    currency: session.currency || 'usd',
+    status: paymentStatus,
+    payload: session,
+  });
+
+  await bookingReliability.resolveRecovery(
+    supabase,
+    {
+      checkout_session_id: stripeSessionId,
+      payment_intent_id: paymentIntentId || null,
+    },
+    { booking_id: bookingRow.id }
+  );
+
+  await bookingReliability.createOrUpdateBookingDraft(supabase, {
+    checkout_session_id: stripeSessionId,
+    payment_intent_id: paymentIntentId || null,
+    customer_email: customerRow.email,
+    customer_name: String(customer.full_name || ''),
+    customer_phone: String(customer.phone || ''),
+    booking_payload: payload,
+    status: 'completed',
+    amount_due: paidDeposit,
+    currency: session.currency || 'usd',
+    booking_id: bookingRow.id,
+  });
+
+  await bookingReliability.insertActivity(supabase, {
+    booking_id: bookingRow.id,
+    checkout_session_id: stripeSessionId,
+    payment_intent_id: paymentIntentId || null,
+    event_type: 'booking_created',
+    message: 'Paid Stripe Checkout finalized into booking.',
+    payload: {
+      payment_status: paymentStatus,
+      amount_paid: paidDeposit,
+      alreadyFinalized: false,
+    },
+  });
 
   const { error: delDraftErr } = await supabase
     .from('checkout_drafts')
@@ -997,7 +1178,183 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
   if (delDraftErr) {
     console.warn('[finalizeBookingFromSession] draft delete:', delDraftErr.message);
   }
+
+  await sendBookingConfirmationInternal({
+    bookingId: bookingRow.id,
+    email: customerRow.email,
+    source: options.source || 'finalize',
+  }).catch(async (emailErr) => {
+    console.error('[finalizeBookingFromSession] confirmation email:', emailErr?.message || emailErr);
+    await bookingReliability.enqueueRecovery(supabase, {
+      ...bookingReliability.recoveryPayloadFromSession(session),
+      booking_id: bookingRow.id,
+      customer_email: customerRow.email,
+      reason: 'email_failed',
+      error: emailErr?.message || 'Booking confirmation email failed',
+    });
+  });
+
   return { bookingId: bookingRow.id, email: customerRow.email, alreadyFinalized: false };
+}
+
+async function processStripeWebhookEvent(event) {
+  const eventId = String(event.id || '');
+  const eventType = String(event.type || '');
+  const ids = bookingReliability.extractEventIds(event);
+
+  await bookingReliability.updateWebhookEventStatus(supabase, eventId, 'processing');
+  await bookingReliability.insertActivity(supabase, {
+    checkout_session_id: ids.checkoutSessionId || null,
+    payment_intent_id: ids.paymentIntentId || null,
+    event_type: 'webhook_received',
+    message: `Stripe webhook received: ${eventType}`,
+    payload: { event_id: eventId, event_type: eventType },
+  });
+
+  if (eventType === 'checkout.session.completed' || eventType === 'checkout.session.async_payment_succeeded') {
+    const session = event.data.object;
+    try {
+      const out = await finalizeBookingFromSession(session.id, { requestIp: null, source: 'stripe_webhook' });
+      await bookingReliability.updateWebhookEventStatus(supabase, eventId, 'processed', {
+        booking_id: out.bookingId,
+        error: null,
+      });
+      await bookingReliability.insertActivity(supabase, {
+        booking_id: out.bookingId,
+        checkout_session_id: session.id,
+        payment_intent_id: ids.paymentIntentId || null,
+        event_type: 'payment_succeeded',
+        message: 'Stripe payment succeeded and booking finalization completed.',
+        payload: { event_id: eventId, alreadyFinalized: out.alreadyFinalized },
+      });
+      console.log('[stripe-webhook] finalized booking', out.bookingId, out.alreadyFinalized ? '(idempotent)' : '');
+      return { ok: true, bookingId: out.bookingId };
+    } catch (err) {
+      console.error('[stripe-webhook] finalize:', err.message || err);
+      const recovery = await bookingReliability.enqueueRecovery(supabase, {
+        ...bookingReliability.recoveryPayloadFromSession(session, {
+          stripe_event_id: eventId,
+          payment_intent_id: ids.paymentIntentId || null,
+        }),
+        reason: 'webhook_failed',
+        error: err.message || 'Webhook finalization failed',
+      });
+      await bookingReliability.updateWebhookEventStatus(supabase, eventId, recovery.error ? 'failed' : 'queued', {
+        error: err.message || 'Webhook finalization failed',
+      });
+      return { ok: !recovery.error, queued: !recovery.error, error: err };
+    }
+  }
+
+  if (eventType === 'payment_intent.succeeded') {
+    let session = null;
+    if (!ids.checkoutSessionId && ids.paymentIntentId) {
+      session = await bookingReliability.findCheckoutSessionForPaymentIntent(stripe, ids.paymentIntentId).catch((err) => {
+        console.warn('[stripe-webhook] find session by PI:', err.message);
+        return null;
+      });
+    }
+    const checkoutSessionId = ids.checkoutSessionId || session?.id || null;
+    const { data: booking } = await supabase
+      .from('bookings')
+      .select('id')
+      .or(
+        [
+          ids.paymentIntentId ? `payment_intent_id.eq.${ids.paymentIntentId}` : '',
+          checkoutSessionId ? `checkout_session_id.eq.${checkoutSessionId}` : '',
+          checkoutSessionId ? `stripe_payment_id.eq.${checkoutSessionId}` : '',
+        ]
+          .filter(Boolean)
+          .join(',')
+      )
+      .maybeSingle();
+    if (!booking?.id) {
+      await bookingReliability.enqueueRecovery(supabase, {
+        ...(session ? bookingReliability.recoveryPayloadFromSession(session) : {}),
+        payment_intent_id: ids.paymentIntentId || null,
+        checkout_session_id: checkoutSessionId,
+        stripe_event_id: eventId,
+        amount: ids.amount ?? null,
+        currency: ids.currency || 'usd',
+        customer_email: ids.customerEmail || null,
+        reason: 'payment_received_no_booking',
+        error: 'PaymentIntent succeeded without a matching booking.',
+      });
+      await bookingReliability.updateWebhookEventStatus(supabase, eventId, 'queued', {
+        error: 'PaymentIntent succeeded without a matching booking.',
+      });
+      return { ok: true, queued: true };
+    }
+    await bookingReliability.updateWebhookEventStatus(supabase, eventId, 'processed', {
+      booking_id: booking.id,
+      error: null,
+    });
+    return { ok: true, bookingId: booking.id };
+  }
+
+  if (eventType === 'payment_intent.payment_failed' || eventType === 'checkout.session.async_payment_failed') {
+    await bookingReliability.enqueueRecovery(supabase, {
+      checkout_session_id: ids.checkoutSessionId || null,
+      payment_intent_id: ids.paymentIntentId || null,
+      stripe_event_id: eventId,
+      amount: ids.amount ?? null,
+      currency: ids.currency || 'usd',
+      customer_email: ids.customerEmail || null,
+      reason: 'booking_failed',
+      error: 'Stripe payment failed.',
+      status: 'ignored',
+    });
+    await bookingReliability.updateWebhookEventStatus(supabase, eventId, 'processed');
+    return { ok: true };
+  }
+
+  if (eventType === 'checkout.session.expired') {
+    const session = event.data.object;
+    await bookingReliability.createOrUpdateBookingDraft(supabase, {
+      checkout_session_id: session.id,
+      payment_intent_id: ids.paymentIntentId || null,
+      customer_email: ids.customerEmail || null,
+      customer_name: ids.customerName || null,
+      customer_phone: ids.customerPhone || null,
+      booking_payload: { stripe_session: session },
+      status: 'expired',
+      amount_due: ids.amount ?? null,
+      currency: ids.currency || 'usd',
+    });
+    await bookingReliability.updateWebhookEventStatus(supabase, eventId, 'processed');
+    return { ok: true };
+  }
+
+  if (eventType === 'charge.refunded' || eventType.startsWith('refund.')) {
+    const { data: booking } = await supabase
+      .from('bookings')
+      .select('id')
+      .or(
+        [
+          ids.paymentIntentId ? `payment_intent_id.eq.${ids.paymentIntentId}` : '',
+          ids.chargeId ? `stripe_charge_id.eq.${ids.chargeId}` : '',
+        ]
+          .filter(Boolean)
+          .join(',')
+      )
+      .maybeSingle();
+    if (booking?.id) {
+      await bookingReliability.insertActivity(supabase, {
+        booking_id: booking.id,
+        payment_intent_id: ids.paymentIntentId || null,
+        event_type: 'refunded',
+        message: 'Stripe refund event received.',
+        payload: { event_id: eventId, event_type: eventType, amount: ids.amount },
+      });
+    }
+    await bookingReliability.updateWebhookEventStatus(supabase, eventId, 'processed', {
+      booking_id: booking?.id || null,
+    });
+    return { ok: true };
+  }
+
+  await bookingReliability.updateWebhookEventStatus(supabase, eventId, 'ignored');
+  return { ok: true, ignored: true };
 }
 
 /** Stripe webhook — raw body required for signature verification (must be before express.json). */
@@ -1016,21 +1373,26 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
     return res.sendStatus(400);
   }
 
-  if (event.type === 'checkout.session.completed') {
-    const session = event.data.object;
-    try {
-      const out = await finalizeBookingFromSession(session.id, { requestIp: null });
-      console.log(
-        '[stripe-webhook] finalized booking',
-        out.bookingId,
-        out.alreadyFinalized ? '(idempotent)' : ''
-      );
-    } catch (err) {
-      console.error('[stripe-webhook] finalize:', err.message || err);
-    }
+  const recorded = await bookingReliability.recordWebhookEvent(supabase, event);
+  if (recorded.error) {
+    return res.status(500).json({ error: 'Could not record Stripe webhook' });
+  }
+  if (
+    recorded.duplicate &&
+    ['processed', 'ignored', 'queued'].includes(String(recorded.data?.processing_status || ''))
+  ) {
+    return res.json({
+      received: true,
+      duplicate: true,
+      status: recorded.data.processing_status,
+    });
   }
 
-  return res.json({ received: true });
+  const out = await processStripeWebhookEvent(event);
+  if (!out.ok && !out.queued) {
+    return res.status(500).json({ received: true, queued: false });
+  }
+  return res.json({ received: true, queued: Boolean(out.queued), ignored: Boolean(out.ignored) });
 });
 
 app.use(express.json());
@@ -1752,6 +2114,7 @@ app.post('/api/create-checkout-session', async (req, res) => {
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
       mode: 'payment',
+      expires_at: Math.floor((Date.now() + BOOKING_HOLD_TTL_MS) / 1000),
       line_items: [
         {
           price_data: {
@@ -1766,6 +2129,14 @@ app.post('/api/create-checkout-session', async (req, res) => {
       ],
       success_url: `${domain}/booking-success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${domain}/booking`,
+      metadata: {
+        booking_mode: bookingMode || 'rental',
+        booking_type: bookingMode || 'rental',
+        boat_id: isCharterBooking ? '' : String(booking.boat_id || ''),
+        start_time: startTime.toISOString(),
+        end_time: endTime.toISOString(),
+        customer_email: String(customer.email || '').trim().toLowerCase(),
+      },
     });
 
     if (!session?.id || !session?.url) {
@@ -1866,7 +2237,41 @@ app.post('/api/create-checkout-session', async (req, res) => {
       return res.status(500).json({ error: 'Could not save checkout session. Try again.' });
     }
 
-    return res.json({ url: session.url });
+    await bookingReliability.createOrUpdateBookingDraft(supabase, {
+      checkout_session_id: session.id,
+      customer_email: String(customer.email || '').trim().toLowerCase(),
+      customer_name: String(customer.full_name || ''),
+      customer_phone: String(customer.phone || ''),
+      booking_payload: {
+        customer,
+        booking: authoritativeBooking,
+        waiver,
+        legal: {
+          termsAccepted: true,
+          waiverAccepted: true,
+          damageFeeAcknowledged: true,
+          signaturePresent: true,
+          legalAcceptedAt,
+        },
+      },
+      status: 'checkout_created',
+      amount_due: expected.amountDueToday,
+      currency: 'usd',
+      expires_at: expiresAt,
+    });
+
+    await bookingReliability.insertActivity(supabase, {
+      checkout_session_id: session.id,
+      event_type: 'checkout_created',
+      message: 'Stripe Checkout Session created and inventory hold saved.',
+      payload: {
+        amount_due: expected.amountDueToday,
+        expires_at: expiresAt,
+        booking_mode: bookingMode,
+      },
+    });
+
+    return res.json({ url: session.url, sessionId: session.id });
   } catch (err) {
     console.error('[create-checkout-session]', err);
     return res.status(500).json({ error: err.message || 'Failed to create checkout session' });
@@ -1877,11 +2282,315 @@ app.post('/api/create-checkout-session', async (req, res) => {
 app.post('/api/finalize-checkout-session', async (req, res) => {
   try {
     const sessionId = req.body && req.body.sessionId ? String(req.body.sessionId).trim() : '';
-    const out = await finalizeBookingFromSession(sessionId, { requestIp: requestIpBestEffort(req) });
+    const out = await finalizeBookingFromSession(sessionId, { requestIp: requestIpBestEffort(req), source: 'success_page' });
     return res.json({ bookingId: out.bookingId, email: out.email, alreadyFinalized: out.alreadyFinalized });
   } catch (err) {
     console.error('[finalize-checkout-session]', err);
     return res.status(err.statusCode || 500).json({ error: err.message || 'Failed to finalize booking' });
+  }
+});
+
+app.get('/api/checkout-status', async (req, res) => {
+  try {
+    if (!supabaseConfigured) {
+      return res.status(503).json({ status: 'error', error: 'Server not configured' });
+    }
+    const sessionId = String(req.query.sessionId || req.query.session_id || '').trim();
+    if (!sessionId) return res.status(400).json({ status: 'error', error: 'sessionId is required' });
+
+    const { data: booking } = await supabase
+      .from('bookings')
+      .select('id, status, payment_status, booking_confirmation_sent_at')
+      .or(
+        [
+          `checkout_session_id.eq.${sessionId}`,
+          `stripe_checkout_session_id.eq.${sessionId}`,
+          `stripe_payment_id.eq.${sessionId}`,
+        ].join(',')
+      )
+      .maybeSingle();
+    if (booking?.id) {
+      return res.json({
+        status: 'confirmed',
+        bookingId: booking.id,
+        bookingStatus: booking.status,
+        paymentStatus: booking.payment_status,
+        confirmationEmailSent: Boolean(booking.booking_confirmation_sent_at),
+      });
+    }
+
+    const { data: recovery } = await supabase
+      .from('payment_recovery_queue')
+      .select('id, status, reason, error, retry_count, next_retry_at')
+      .eq('checkout_session_id', sessionId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (recovery?.id) {
+      return res.json({
+        status: recovery.status === 'resolved' ? 'confirmed' : 'needs_staff',
+        recovery,
+      });
+    }
+
+    const { data: draft } = await supabase
+      .from('booking_drafts')
+      .select('id, status, expires_at, reminder_count')
+      .eq('checkout_session_id', sessionId)
+      .maybeSingle();
+    if (draft?.id) {
+      return res.json({ status: draft.status === 'completed' ? 'confirmed' : 'pending', draft });
+    }
+
+    return res.json({ status: 'pending' });
+  } catch (err) {
+    console.error('[checkout-status]', err);
+    return res.status(500).json({ status: 'error', error: 'Could not load checkout status' });
+  }
+});
+
+app.get('/api/booking-drafts/resume/:token', async (req, res) => {
+  try {
+    if (!supabaseConfigured) return res.status(503).json({ error: 'Server not configured' });
+    const token = String(req.params.token || '').trim();
+    if (!/^[a-f0-9]{32,80}$/i.test(token)) return res.status(400).json({ error: 'Invalid resume token.' });
+    const { data, error } = await supabase
+      .from('booking_drafts')
+      .select('id, status, booking_payload, checkout_session_id, expires_at, created_at')
+      .eq('resume_token', token)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'Booking draft not found.' });
+    if (data.status === 'completed') return res.status(409).json({ error: 'This booking was already completed.' });
+    return res.json({
+      draft: {
+        id: data.id,
+        status: data.status,
+        booking_payload: data.booking_payload || {},
+        checkout_session_id: data.checkout_session_id || null,
+        expires_at: data.expires_at || null,
+      },
+    });
+  } catch (err) {
+    console.error('[booking-drafts/resume]', err);
+    return res.status(500).json({ error: 'Could not load booking draft.' });
+  }
+});
+
+async function retryPaymentRecoveryById(recoveryId, actorId = null) {
+  const { data: row, error } = await supabase
+    .from('payment_recovery_queue')
+    .select('*')
+    .eq('id', recoveryId)
+    .maybeSingle();
+  if (error || !row) {
+    const err = new Error(error?.message || 'Recovery item not found');
+    err.statusCode = 404;
+    throw err;
+  }
+  if (!stripe) {
+    const err = new Error('Stripe not configured');
+    err.statusCode = 503;
+    throw err;
+  }
+  const checkoutSessionId = String(row.checkout_session_id || '').trim();
+  let sessionId = checkoutSessionId;
+  if (!sessionId && row.payment_intent_id) {
+    const found = await bookingReliability.findCheckoutSessionForPaymentIntent(stripe, row.payment_intent_id);
+    sessionId = found?.id || '';
+  }
+  if (!sessionId) {
+    const err = new Error('Recovery item does not have a Checkout Session ID');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  await supabase
+    .from('payment_recovery_queue')
+    .update({
+      status: 'retrying',
+      retry_count: Number(row.retry_count || 0) + 1,
+      last_retry_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', row.id);
+
+  try {
+    const out = await finalizeBookingFromSession(sessionId, { requestIp: null, source: 'admin_retry' });
+    await bookingReliability.resolveRecovery(supabase, { id: row.id }, { booking_id: out.bookingId });
+    await bookingReliability.insertActivity(supabase, {
+      booking_id: out.bookingId,
+      checkout_session_id: sessionId,
+      payment_intent_id: row.payment_intent_id || null,
+      event_type: 'admin_retry_booking',
+      actor_type: 'admin',
+      actor_id: actorId,
+      message: 'Admin retried payment recovery and finalized booking.',
+    });
+    return out;
+  } catch (err) {
+    await bookingReliability.enqueueRecovery(supabase, {
+      ...row,
+      status: 'open',
+      retry_count: Number(row.retry_count || 0) + 1,
+      error: err.message || 'Recovery retry failed',
+      reason: row.reason || 'booking_failed',
+    });
+    throw err;
+  }
+}
+
+app.get('/api/admin/payment-recovery', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const { data, error } = await supabase
+      .from('payment_recovery_queue')
+      .select('*, boats(id, name), bookings(id, status, payment_status)')
+      .order('created_at', { ascending: false })
+      .limit(100);
+    if (error) throw error;
+    return res.json({ items: data || [] });
+  } catch (err) {
+    console.error('[admin/payment-recovery:list]', err);
+    return res.status(500).json({ error: 'Could not load payment recovery queue.' });
+  }
+});
+
+app.post('/api/admin/payment-recovery/:id/retry', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const id = String(req.params.id || '').trim();
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid recovery id.' });
+    const out = await retryPaymentRecoveryById(id, adminUser.id);
+    return res.json({ ok: true, ...out });
+  } catch (err) {
+    console.error('[admin/payment-recovery:retry]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not retry recovery.' });
+  }
+});
+
+app.post('/api/admin/payment-recovery/:id/resolve', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const id = String(req.params.id || '').trim();
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid recovery id.' });
+    const status = ['resolved', 'ignored'].includes(String(req.body?.status || ''))
+      ? String(req.body.status)
+      : 'resolved';
+    const { data, error } = await supabase
+      .from('payment_recovery_queue')
+      .update({
+        status,
+        resolved_at: new Date().toISOString(),
+        resolved_by: adminUser.id,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', id)
+      .select('*')
+      .single();
+    if (error) throw error;
+    return res.json({ item: data });
+  } catch (err) {
+    console.error('[admin/payment-recovery:resolve]', err);
+    return res.status(500).json({ error: 'Could not resolve recovery item.' });
+  }
+});
+
+app.post('/api/admin/payment-recovery/:id/refund', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    if (!stripe) return res.status(503).json({ error: 'Stripe not configured' });
+    const id = String(req.params.id || '').trim();
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid recovery id.' });
+    const { data: row, error } = await supabase
+      .from('payment_recovery_queue')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle();
+    if (error || !row) return res.status(404).json({ error: error?.message || 'Recovery item not found' });
+    const paymentIntent = String(row.payment_intent_id || '').trim();
+    if (!paymentIntent) return res.status(400).json({ error: 'PaymentIntent ID is required to refund.' });
+    const refund = await stripe.refunds.create({ payment_intent: paymentIntent });
+    const { data: updated, error: updErr } = await supabase
+      .from('payment_recovery_queue')
+      .update({
+        status: 'refunded',
+        resolved_at: new Date().toISOString(),
+        resolved_by: adminUser.id,
+        error: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', id)
+      .select('*')
+      .single();
+    if (updErr) throw updErr;
+    await bookingReliability.insertActivity(supabase, {
+      checkout_session_id: row.checkout_session_id || null,
+      payment_intent_id: paymentIntent,
+      event_type: 'refunded',
+      actor_type: 'admin',
+      actor_id: adminUser.id,
+      message: 'Admin refunded unmatched payment.',
+      payload: { refund_id: refund.id },
+    });
+    return res.json({ item: updated, refundId: refund.id });
+  } catch (err) {
+    console.error('[admin/payment-recovery:refund]', err);
+    return res.status(500).json({ error: err.message || 'Could not refund recovery item.' });
+  }
+});
+
+app.get('/api/admin/payment-recovery/:id/logs', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const id = String(req.params.id || '').trim();
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid recovery id.' });
+    const { data: row, error } = await supabase
+      .from('payment_recovery_queue')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle();
+    if (error || !row) return res.status(404).json({ error: error?.message || 'Recovery item not found' });
+    const webhookFilters = [
+      row.checkout_session_id ? `checkout_session_id.eq.${row.checkout_session_id}` : '',
+      row.payment_intent_id ? `payment_intent_id.eq.${row.payment_intent_id}` : '',
+    ].filter(Boolean);
+    const activityFilters = [
+      row.booking_id ? `booking_id.eq.${row.booking_id}` : '',
+      row.checkout_session_id ? `checkout_session_id.eq.${row.checkout_session_id}` : '',
+      row.payment_intent_id ? `payment_intent_id.eq.${row.payment_intent_id}` : '',
+    ].filter(Boolean);
+    const [webhooks, activity] = await Promise.all([
+      webhookFilters.length > 0
+        ? supabase
+        .from('stripe_webhook_events')
+        .select('event_id, event_type, processing_status, error, received_at, processed_at')
+        .or(webhookFilters.join(','))
+        .order('received_at', { ascending: false })
+        .limit(50)
+        : Promise.resolve({ data: [], error: null }),
+      activityFilters.length > 0
+        ? supabase
+        .from('booking_activity_events')
+        .select('*')
+        .or(activityFilters.join(','))
+        .order('created_at', { ascending: false })
+        .limit(100)
+        : Promise.resolve({ data: [], error: null }),
+    ]);
+    return res.json({
+      webhooks: webhooks.data || [],
+      activity: activity.data || [],
+      errors: [webhooks.error?.message, activity.error?.message].filter(Boolean),
+    });
+  } catch (err) {
+    console.error('[admin/payment-recovery:logs]', err);
+    return res.status(500).json({ error: 'Could not load recovery logs.' });
   }
 });
 
@@ -1916,6 +2625,135 @@ function requireCronBearer(req, res) {
     return false;
   }
   return true;
+}
+
+async function sendBookingConfirmationInternal({ bookingId, email, source = 'server' }) {
+  const bookingIdSafe = String(bookingId || '').trim();
+  if (!bookingIdSafe || !isBookingUuidParam(bookingIdSafe)) {
+    const err = new Error('Valid bookingId is required');
+    err.statusCode = 400;
+    throw err;
+  }
+  if (!supabaseConfigured) {
+    const err = new Error('Server not configured');
+    err.statusCode = 503;
+    throw err;
+  }
+
+  const loaded = await bookingAccess.loadBookingWithCustomer(supabase, bookingIdSafe);
+  if (!loaded.ok) {
+    const err = new Error(loaded.message || 'Booking not found');
+    err.statusCode = loaded.statusCode || 404;
+    throw err;
+  }
+
+  const allowedStatuses = ['pending', 'pending_verification', 'confirmed', 'ready_for_departure'];
+  if (!allowedStatuses.includes(String(loaded.booking.status || ''))) {
+    const err = new Error('Booking is not eligible for confirmation email');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  let emailSafe = email ? String(email).trim().toLowerCase() : '';
+  if (emailSafe && normalizeEmailParam(loaded.customer.email) !== emailSafe) {
+    const err = new Error('Email does not match this booking');
+    err.statusCode = 403;
+    throw err;
+  }
+  emailSafe = normalizeEmailParam(loaded.customer.email);
+  if (!emailSafe) {
+    const err = new Error('Could not resolve customer email');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  if (loaded.booking.booking_confirmation_sent_at) {
+    return { ok: true, alreadySent: true };
+  }
+
+  if (!resend) {
+    const err = new Error('Email service not configured');
+    err.statusCode = 503;
+    throw err;
+  }
+
+  const emailHtml = documentUrlValidation.escapeHtml(emailSafe);
+  const customerSend = resend.emails.send({
+    from: resendFrom,
+    to: emailSafe,
+    subject: 'Your Launch Zone Booking Confirmation',
+    html: `
+      <p>Thank you for booking with Launch Zone Rentals.</p>
+      <p><strong>Booking ID:</strong> ${documentUrlValidation.escapeHtml(bookingIdSafe)}</p>
+      <p>We will follow up with pickup details and next steps.</p>
+      <p>If you have questions, call <a href="tel:803-542-1761">803-542-1761</a>.</p>
+    `,
+  });
+
+  const adminTo = (process.env.ADMIN_EMAIL || '').trim();
+  const adminSend =
+    adminTo.length > 0
+      ? resend.emails.send({
+          from: resendFrom,
+          to: adminTo,
+          subject: 'New Booking Received',
+          html: `
+            <p>A new booking was submitted.</p>
+            <p><strong>Booking ID:</strong> ${documentUrlValidation.escapeHtml(bookingIdSafe)}</p>
+            <p><strong>Customer email:</strong> ${emailHtml}</p>
+            <p><strong>Source:</strong> ${documentUrlValidation.escapeHtml(source)}</p>
+          `,
+        })
+      : Promise.resolve({ data: null, error: null });
+
+  const [customerResult, adminResult] = await Promise.all([customerSend, adminSend]);
+  if (customerResult.error) {
+    const err = new Error(customerResult.error.message || 'Failed to send customer email');
+    err.statusCode = 500;
+    throw err;
+  }
+  if (adminResult.error) {
+    console.error('[send-booking-confirmation] admin notify Resend error:', adminResult.error);
+  }
+
+  try {
+    await verificationReminder.maybeSendVerificationReminder({
+      supabaseAdmin: supabase,
+      resend,
+      resendFrom,
+      bookingId: bookingIdSafe,
+      email: emailSafe,
+    });
+  } catch (remErr) {
+    console.error('[send-booking-confirmation] verification reminder:', remErr);
+  }
+
+  try {
+    const publicBase = verificationReminder.publicAppBase();
+    await verificationSms.maybeSendVerificationSms({
+      supabaseAdmin: supabase,
+      bookingId: bookingIdSafe,
+      email: emailSafe,
+      publicAppBase: publicBase,
+    });
+  } catch (_smsErr) {
+    /* fail silently — do not affect booking */
+  }
+
+  await supabase
+    .from('bookings')
+    .update({ booking_confirmation_sent_at: new Date().toISOString() })
+    .eq('id', bookingIdSafe)
+    .is('booking_confirmation_sent_at', null);
+
+  await bookingReliability.insertActivity(supabase, {
+    booking_id: bookingIdSafe,
+    event_type: 'emails_sent',
+    message: 'Booking confirmation email sent.',
+    payload: { source, email: emailSafe },
+  });
+
+  return { ok: true };
 }
 
 app.post('/api/send-booking-confirmation', async (req, res) => {
@@ -3190,6 +4028,123 @@ app.get('/api/cron/trip-insurance-reminders', async (req, res) => {
   }
 });
 
+async function runPaymentRecoveryRetries(limit = 10) {
+  if (!supabaseConfigured || !stripe) return { scanned: 0, retried: 0, skipped: 'not_configured' };
+  const { data: rows, error } = await supabase
+    .from('payment_recovery_queue')
+    .select('id')
+    .in('status', ['open', 'retrying'])
+    .or(`next_retry_at.is.null,next_retry_at.lte.${new Date().toISOString()}`)
+    .order('created_at', { ascending: true })
+    .limit(limit);
+  if (error) throw error;
+  let retried = 0;
+  const failures = [];
+  for (const row of rows || []) {
+    try {
+      await retryPaymentRecoveryById(row.id);
+      retried += 1;
+    } catch (err) {
+      failures.push({ id: row.id, error: err.message || 'retry failed' });
+    }
+  }
+  return { scanned: (rows || []).length, retried, failures };
+}
+
+app.get('/api/cron/payment-recovery', async (req, res) => {
+  try {
+    if (!requireCronBearer(req, res)) return;
+    const result = await runPaymentRecoveryRetries(25);
+    return res.json(result);
+  } catch (err) {
+    console.error('[cron/payment-recovery]', err);
+    return res.status(500).json({ error: err.message || 'Payment recovery failed' });
+  }
+});
+
+app.get('/api/cron/abandoned-checkouts', async (req, res) => {
+  try {
+    if (!requireCronBearer(req, res)) return;
+    const result = await bookingReliability.runAbandonedCheckoutReminders({
+      supabase,
+      resend,
+      resendFrom,
+      publicBase: String(process.env.APP_PUBLIC_URL || process.env.FRONTEND_URL || '').trim(),
+    });
+    return res.json(result);
+  } catch (err) {
+    console.error('[cron/abandoned-checkouts]', err);
+    return res.status(500).json({ error: err.message || 'Abandoned checkout reminders failed' });
+  }
+});
+
+async function bookingHealthSnapshot() {
+  const checks = {};
+  checks.supabase = { ok: false };
+  checks.stripe = { ok: false };
+  checks.webhook = { ok: false };
+  checks.email = { ok: false };
+  checks.storage = { ok: false };
+
+  try {
+    const { error } = await supabase.from('bookings').select('id', { count: 'exact', head: true });
+    checks.supabase = { ok: !error, error: error?.message || null };
+  } catch (err) {
+    checks.supabase = { ok: false, error: err.message || 'Supabase check failed' };
+  }
+
+  try {
+    if (!stripe) throw new Error('Stripe not configured');
+    const acct = await stripe.accounts.retrieve();
+    checks.stripe = { ok: Boolean(acct?.id), account: acct?.id || null };
+  } catch (err) {
+    checks.stripe = { ok: false, error: err.message || 'Stripe check failed' };
+  }
+
+  try {
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const { data, error } = await supabase
+      .from('stripe_webhook_events')
+      .select('event_id, received_at, processing_status')
+      .gte('received_at', since)
+      .order('received_at', { ascending: false })
+      .limit(1);
+    checks.webhook = {
+      ok: !error,
+      lastEventAt: data?.[0]?.received_at || null,
+      lastStatus: data?.[0]?.processing_status || null,
+      error: error?.message || null,
+    };
+  } catch (err) {
+    checks.webhook = { ok: false, error: err.message || 'Webhook check failed' };
+  }
+
+  checks.email = {
+    ok: Boolean(resend),
+    error: resend ? null : 'RESEND_API_KEY not configured',
+  };
+
+  try {
+    const { data, error } = await supabase.storage.listBuckets();
+    checks.storage = { ok: !error, buckets: Array.isArray(data) ? data.length : 0, error: error?.message || null };
+  } catch (err) {
+    checks.storage = { ok: false, error: err.message || 'Storage check failed' };
+  }
+
+  const ok = Object.values(checks).every((check) => check.ok);
+  return { ok, checkedAt: new Date().toISOString(), checks };
+}
+
+app.get('/api/admin/booking-health', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    return res.json(await bookingHealthSnapshot());
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message || 'Health check failed' });
+  }
+});
+
 /**
  * Optional server-side contact (same `contact_messages` table as the public form).
  * Use for API clients; the website submits directly to Supabase from the browser.
@@ -3873,6 +4828,40 @@ cron.schedule(
   { timezone: 'America/New_York' }
 );
 console.log('⏰ Trip insurance reminders: every 15 minutes (America/New_York)');
+
+cron.schedule(
+  '*/5 * * * *',
+  () => {
+    runPaymentRecoveryRetries(10).catch((e) => {
+      console.error('[cron] payment-recovery:', e?.message || e);
+    });
+    bookingHealthSnapshot().then((snapshot) => {
+      if (!snapshot.ok) {
+        console.error('[cron] booking-health degraded:', JSON.stringify(snapshot.checks));
+      }
+    }).catch((e) => {
+      console.error('[cron] booking-health:', e?.message || e);
+    });
+  },
+  { timezone: 'America/New_York' }
+);
+console.log('⏰ Payment recovery + booking health: every 5 minutes (America/New_York)');
+
+cron.schedule(
+  '*/30 * * * *',
+  () => {
+    bookingReliability.runAbandonedCheckoutReminders({
+      supabase,
+      resend,
+      resendFrom,
+      publicBase: String(process.env.APP_PUBLIC_URL || process.env.FRONTEND_URL || '').trim(),
+    }).catch((e) => {
+      console.error('[cron] abandoned-checkouts:', e?.message || e);
+    });
+  },
+  { timezone: 'America/New_York' }
+);
+console.log('⏰ Abandoned checkout reminders: every 30 minutes (America/New_York)');
 
 cron.schedule(
   '0 */6 * * *',

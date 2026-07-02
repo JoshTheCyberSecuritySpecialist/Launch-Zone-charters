@@ -123,6 +123,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
   const location = useLocation();
   const [searchParams] = useSearchParams();
   const bookingIdFromUrl = (searchParams.get('bookingId') || '').trim();
+  const resumeTokenFromUrl = (searchParams.get('resume') || '').trim();
   const [bookingMode, setBookingMode] = useState<BookingMode>('rental');
   const [step, setStep] = useState(0);
   const [boats, setBoats] = useState<Boat[]>([]);
@@ -187,6 +188,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
   const checkoutFormRef = useRef<HTMLFormElement | null>(null);
   const bookingFormRef = useRef<HTMLDivElement | null>(null);
   const availabilityCalendarRef = useRef<HTMLDivElement | null>(null);
+  const resumeLoadedRef = useRef(false);
   const [rentalDurationPreset, setRentalDurationPreset] = useState<RentalDurationPreset | null>(null);
   const [rentalLocation, setRentalLocation] = useState<RentalLocation>(null);
   const [promoCodeInput, setPromoCodeInput] = useState('');
@@ -236,6 +238,81 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     });
     return genericMatch || null;
   };
+
+  useEffect(() => {
+    if (!resumeTokenFromUrl || resumeLoadedRef.current) return;
+    if (!env.apiUrlConfigured || !env.apiUrl) return;
+    resumeLoadedRef.current = true;
+
+    void (async () => {
+      try {
+        const res = await fetch(`${env.apiUrl}/api/booking-drafts/resume/${encodeURIComponent(resumeTokenFromUrl)}`);
+        const payload = (await res.json().catch(() => ({}))) as {
+          draft?: {
+            booking_payload?: {
+              customer?: Record<string, unknown>;
+              booking?: Record<string, unknown>;
+              waiver?: Record<string, unknown>;
+            };
+          };
+          error?: string;
+        };
+        if (!res.ok || !payload.draft?.booking_payload) {
+          setPrefillNotice(payload.error || 'Could not resume that booking draft.');
+          return;
+        }
+        const draft = payload.draft.booking_payload;
+        const customer = draft.customer || {};
+        const booking = draft.booking || {};
+        const waiver = draft.waiver || {};
+        const mode = String(booking.bookingMode || 'rental') === 'charter' ? 'charter' : 'rental';
+        setBookingMode(mode);
+        setStep(mode === 'charter' ? 3 : 1);
+        const boatId = String(booking.boat_id || '').trim();
+        if (boatId && boats.length > 0) {
+          const boat = boats.find((b) => b.id === boatId) || null;
+          if (boat) setSelectedBoat(boat);
+        }
+        setBookingData((prev) => ({
+          ...prev,
+          rentalType:
+            booking.rental_type === 'hourly' || booking.rental_type === 'full_day'
+              ? (booking.rental_type as 'hourly' | 'full_day')
+              : 'half_day',
+          hours: Number(booking.duration_hours || prev.hours),
+          date: String(booking.start_time || '').slice(0, 10) || prev.date,
+          time: String(booking.start_time || '').slice(11, 16) || prev.time,
+          captainIncluded: Boolean(booking.captain_included),
+          charterType:
+            booking.charterType === 'night_bio' || booking.charterType === 'sunset_cruise'
+              ? (booking.charterType as CharterType)
+              : booking.charterType === 'bio'
+                ? 'night_bio'
+                : booking.charterType === 'sunset'
+                  ? 'sunset_cruise'
+                  : 'rocket_launch',
+          charterVariant: booking.charterVariant === 'shared' ? 'shared' : 'private',
+          passengerCount: Number(booking.passengerCount || prev.passengerCount),
+          fullName: String(customer.full_name || prev.fullName),
+          email: String(customer.email || prev.email),
+          phone: String(customer.phone || prev.phone),
+          specialRequests: String(booking.special_requests || prev.specialRequests),
+          slotStartIso: String(booking.start_time || prev.slotStartIso),
+        }));
+        setWaiverData((prev) => ({
+          ...prev,
+          agreed: Boolean(waiver.accepted || prev.agreed),
+          signature: String(waiver.signature || prev.signature),
+        }));
+        setTermsAccepted(true);
+        setDamageFeeAcknowledged(true);
+        setPrefillNotice('Your saved booking progress has been restored.');
+      } catch (err) {
+        if (import.meta.env.DEV) console.warn('[booking-resume]', err);
+        setPrefillNotice('Could not resume that booking draft.');
+      }
+    })();
+  }, [boats, resumeTokenFromUrl]);
 
   const handleLicenseUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];

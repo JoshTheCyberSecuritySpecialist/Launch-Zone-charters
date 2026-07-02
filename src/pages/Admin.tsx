@@ -82,6 +82,54 @@ type AdminSubscriberRow = {
   created_at: string;
 };
 
+type PaymentRecoveryRow = {
+  id: string;
+  payment_intent_id: string | null;
+  checkout_session_id: string | null;
+  booking_id: string | null;
+  customer_name: string | null;
+  customer_email: string | null;
+  customer_phone: string | null;
+  boat_id: string | null;
+  trip_type: string | null;
+  start_time: string | null;
+  end_time: string | null;
+  amount: number | string | null;
+  currency: string;
+  status: string;
+  reason: string;
+  error: string | null;
+  retry_count: number;
+  next_retry_at: string | null;
+  created_at: string;
+  boats?: { id?: string; name?: string } | null;
+  bookings?: { id?: string; status?: string; payment_status?: string } | null;
+};
+
+type PaymentRecoveryLogs = {
+  webhooks?: Array<{
+    event_id: string;
+    event_type: string;
+    processing_status: string;
+    error: string | null;
+    received_at: string;
+    processed_at: string | null;
+  }>;
+  activity?: Array<{
+    id: string;
+    event_type: string;
+    message: string | null;
+    created_at: string;
+  }>;
+  errors?: string[];
+};
+
+type BookingHealthPayload = {
+  ok: boolean;
+  checkedAt: string;
+  checks: Record<string, { ok: boolean; error?: string | null; [key: string]: unknown }>;
+};
+
 type PromoAppliesTo = 'all' | 'rentals' | 'charters' | 'groupon' | 'private';
 type PromoDiscountType = 'percent' | 'fixed';
 
@@ -309,6 +357,13 @@ export default function Admin({ onNavigate }: AdminProps) {
   const [subscribers, setSubscribers] = useState<AdminSubscriberRow[]>([]);
   const [subscribersLoading, setSubscribersLoading] = useState(false);
   const [subscribersError, setSubscribersError] = useState<string | null>(null);
+  const [paymentRecoveryItems, setPaymentRecoveryItems] = useState<PaymentRecoveryRow[]>([]);
+  const [paymentRecoveryLoading, setPaymentRecoveryLoading] = useState(false);
+  const [paymentRecoveryError, setPaymentRecoveryError] = useState<string | null>(null);
+  const [paymentRecoveryBusyId, setPaymentRecoveryBusyId] = useState<string | null>(null);
+  const [paymentRecoveryLogs, setPaymentRecoveryLogs] = useState<Record<string, PaymentRecoveryLogs>>({});
+  const [bookingHealth, setBookingHealth] = useState<BookingHealthPayload | null>(null);
+  const [bookingHealthLoading, setBookingHealthLoading] = useState(false);
   const [promoCodes, setPromoCodes] = useState<PromoCodeRow[]>([]);
   const [promoCodesLoading, setPromoCodesLoading] = useState(false);
   const [promoCodesError, setPromoCodesError] = useState<string | null>(null);
@@ -752,6 +807,64 @@ export default function Admin({ onNavigate }: AdminProps) {
       return payload as Record<string, unknown>;
     },
     [getAdminToken]
+  );
+
+  const loadPaymentRecovery = useCallback(async () => {
+    if (!isAdmin) return;
+    setPaymentRecoveryLoading(true);
+    setPaymentRecoveryError(null);
+    try {
+      const payload = await apiRequest('/api/admin/payment-recovery');
+      setPaymentRecoveryItems(Array.isArray(payload.items) ? (payload.items as PaymentRecoveryRow[]) : []);
+    } catch (err) {
+      console.error('[payment-recovery]', err);
+      setPaymentRecoveryError(err instanceof Error ? err.message : 'Could not load unmatched payments.');
+      setPaymentRecoveryItems([]);
+    } finally {
+      setPaymentRecoveryLoading(false);
+    }
+  }, [apiRequest, isAdmin]);
+
+  const loadBookingHealth = useCallback(async () => {
+    if (!isAdmin) return;
+    setBookingHealthLoading(true);
+    try {
+      const payload = await apiRequest('/api/admin/booking-health');
+      setBookingHealth(payload as BookingHealthPayload);
+    } catch (err) {
+      console.error('[booking-health]', err);
+      setBookingHealth({
+        ok: false,
+        checkedAt: new Date().toISOString(),
+        checks: {
+          api: { ok: false, error: err instanceof Error ? err.message : 'Could not load health.' },
+        },
+      });
+    } finally {
+      setBookingHealthLoading(false);
+    }
+  }, [apiRequest, isAdmin]);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    void loadPaymentRecovery();
+    void loadBookingHealth();
+  }, [isAdmin, loadPaymentRecovery, loadBookingHealth]);
+
+  const loadPaymentRecoveryLogs = useCallback(
+    async (id: string) => {
+      setPaymentRecoveryBusyId(id);
+      try {
+        const payload = await apiRequest(`/api/admin/payment-recovery/${encodeURIComponent(id)}/logs`);
+        setPaymentRecoveryLogs((prev) => ({ ...prev, [id]: payload as PaymentRecoveryLogs }));
+      } catch (err) {
+        console.error('[payment-recovery-logs]', err);
+        setNotice({ variant: 'error', text: err instanceof Error ? err.message : 'Could not load recovery logs.' });
+      } finally {
+        setPaymentRecoveryBusyId(null);
+      }
+    },
+    [apiRequest]
   );
 
   const loadPromoCodes = useCallback(async () => {
@@ -1323,6 +1436,42 @@ export default function Admin({ onNavigate }: AdminProps) {
     if (!isAdmin) return;
     void loadBookings();
   }, [isAdmin, loadBookings]);
+
+  const runPaymentRecoveryAction = useCallback(
+    async (id: string, action: 'retry' | 'refund' | 'resolve' | 'ignore') => {
+      setPaymentRecoveryBusyId(id);
+      try {
+        const body =
+          action === 'resolve' || action === 'ignore'
+            ? JSON.stringify({ status: action === 'ignore' ? 'ignored' : 'resolved' })
+            : undefined;
+        await apiRequest(
+          `/api/admin/payment-recovery/${encodeURIComponent(id)}/${action === 'ignore' ? 'resolve' : action}`,
+          {
+            method: 'POST',
+            headers: body ? { 'Content-Type': 'application/json' } : undefined,
+            body,
+          }
+        );
+        setNotice({
+          variant: 'success',
+          text:
+            action === 'retry'
+              ? 'Payment recovery retry started.'
+              : action === 'refund'
+                ? 'Refund submitted.'
+                : 'Recovery item updated.',
+        });
+        await Promise.all([loadPaymentRecovery(), loadBookings()]);
+      } catch (err) {
+        console.error('[payment-recovery-action]', err);
+        setNotice({ variant: 'error', text: err instanceof Error ? err.message : 'Recovery action failed.' });
+      } finally {
+        setPaymentRecoveryBusyId(null);
+      }
+    },
+    [apiRequest, loadBookings, loadPaymentRecovery]
+  );
 
   const handleStatusUpdate = async (
     bookingId: string,
@@ -2625,6 +2774,228 @@ export default function Admin({ onNavigate }: AdminProps) {
                       </td>
                     </tr>
                   ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="rounded-xl bg-white shadow">
+          <div className="border-b border-slate-200 p-6">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+              <div>
+                <h2 className="text-2xl font-bold text-slate-900">Unmatched Payments</h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Payments, webhook failures, abandoned checkouts, and email failures that need staff attention.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void loadPaymentRecovery()}
+                  disabled={paymentRecoveryLoading}
+                  className="rounded border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  Refresh payments
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void loadBookingHealth()}
+                  disabled={bookingHealthLoading}
+                  className="rounded border border-cyan-300 bg-cyan-50 px-3 py-2 text-sm font-semibold text-cyan-900 hover:bg-cyan-100 disabled:opacity-50"
+                >
+                  Check health
+                </button>
+              </div>
+            </div>
+
+            {bookingHealth ? (
+              <div
+                className={`mt-4 rounded-lg border px-4 py-3 text-sm ${
+                  bookingHealth.ok
+                    ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+                    : 'border-amber-200 bg-amber-50 text-amber-950'
+                }`}
+              >
+                <div className="font-semibold">
+                  Booking system health: {bookingHealth.ok ? 'Healthy' : 'Needs attention'}
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {Object.entries(bookingHealth.checks || {}).map(([name, check]) => (
+                    <span
+                      key={name}
+                      className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+                        check.ok ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-900'
+                      }`}
+                      title={String(check.error || '')}
+                    >
+                      {name}: {check.ok ? 'OK' : 'Fail'}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            {paymentRecoveryError ? (
+              <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+                {paymentRecoveryError}
+              </div>
+            ) : null}
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="bg-slate-50">
+                <tr>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-600">
+                    Customer
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-600">
+                    Payment
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-600">
+                    Trip
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-600">
+                    Reason
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-600">
+                    Actions
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200">
+                {paymentRecoveryLoading ? (
+                  <tr>
+                    <td colSpan={5} className="px-4 py-6 text-center text-sm text-slate-500">
+                      Loading unmatched payments...
+                    </td>
+                  </tr>
+                ) : paymentRecoveryItems.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="px-4 py-6 text-center text-sm text-slate-500">
+                      No unmatched payments or failed booking jobs are currently open.
+                    </td>
+                  </tr>
+                ) : (
+                  paymentRecoveryItems.map((item) => {
+                    const amount =
+                      item.amount == null
+                        ? 'Unknown'
+                        : `$${Number(item.amount).toFixed(2)} ${String(item.currency || 'usd').toUpperCase()}`;
+                    const stripeHref = item.checkout_session_id
+                      ? `https://dashboard.stripe.com/payments?query=${encodeURIComponent(item.checkout_session_id)}`
+                      : item.payment_intent_id
+                        ? `https://dashboard.stripe.com/payments/${encodeURIComponent(item.payment_intent_id)}`
+                        : '';
+                    const logs = paymentRecoveryLogs[item.id];
+                    return (
+                      <tr key={item.id} className="align-top hover:bg-slate-50">
+                        <td className="px-4 py-4">
+                          <div className="font-semibold text-slate-900">{item.customer_name || 'Unknown customer'}</div>
+                          <div className="text-sm text-slate-600">{item.customer_email || 'No email'}</div>
+                          {item.customer_phone ? <div className="text-xs text-slate-500">{item.customer_phone}</div> : null}
+                        </td>
+                        <td className="px-4 py-4">
+                          <div className="font-semibold text-slate-900">{amount}</div>
+                          <div className="mt-1 max-w-[16rem] break-all font-mono text-[11px] text-slate-500">
+                            {item.checkout_session_id || item.payment_intent_id || 'No Stripe id'}
+                          </div>
+                          <span className="mt-2 inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold capitalize text-amber-900">
+                            {item.status}
+                          </span>
+                        </td>
+                        <td className="px-4 py-4 text-sm text-slate-700">
+                          <div>{item.boats?.name || item.trip_type || 'Trip details unavailable'}</div>
+                          {item.start_time ? <div>{new Date(item.start_time).toLocaleString()}</div> : null}
+                          {item.booking_id ? <div className="mt-1 font-mono text-[11px]">{item.booking_id}</div> : null}
+                        </td>
+                        <td className="px-4 py-4">
+                          <div className="text-sm font-semibold capitalize text-slate-900">
+                            {item.reason.replace(/_/g, ' ')}
+                          </div>
+                          <div className="mt-1 max-w-sm text-xs text-slate-600">
+                            {item.error || 'No error message recorded.'}
+                          </div>
+                          <div className="mt-1 text-[11px] text-slate-500">
+                            Retries: {item.retry_count}
+                            {item.next_retry_at ? ` · Next: ${new Date(item.next_retry_at).toLocaleString()}` : ''}
+                          </div>
+                        </td>
+                        <td className="px-4 py-4">
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              disabled={paymentRecoveryBusyId === item.id}
+                              onClick={() => void runPaymentRecoveryAction(item.id, 'retry')}
+                              className="rounded bg-emerald-600 px-3 py-1 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+                            >
+                              Retry booking
+                            </button>
+                            <button
+                              type="button"
+                              disabled={paymentRecoveryBusyId === item.id || !item.payment_intent_id}
+                              onClick={() => void runPaymentRecoveryAction(item.id, 'refund')}
+                              className="rounded bg-red-600 px-3 py-1 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+                            >
+                              Refund
+                            </button>
+                            {item.customer_email ? (
+                              <a
+                                href={`mailto:${item.customer_email}?subject=${encodeURIComponent('Launch Zone booking follow-up')}`}
+                                className="rounded border border-slate-300 bg-white px-3 py-1 text-xs font-semibold text-slate-800 hover:bg-slate-50"
+                              >
+                                Contact
+                              </a>
+                            ) : null}
+                            {stripeHref ? (
+                              <a
+                                href={stripeHref}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="rounded border border-indigo-300 bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-900 hover:bg-indigo-100"
+                              >
+                                Stripe
+                              </a>
+                            ) : null}
+                            <button
+                              type="button"
+                              disabled={paymentRecoveryBusyId === item.id}
+                              onClick={() => void loadPaymentRecoveryLogs(item.id)}
+                              className="rounded border border-slate-300 bg-white px-3 py-1 text-xs font-semibold text-slate-800 hover:bg-slate-50 disabled:opacity-50"
+                            >
+                              View logs
+                            </button>
+                            <button
+                              type="button"
+                              disabled={paymentRecoveryBusyId === item.id}
+                              onClick={() => void runPaymentRecoveryAction(item.id, 'ignore')}
+                              className="rounded border border-slate-300 bg-white px-3 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                            >
+                              Ignore
+                            </button>
+                          </div>
+                          {logs ? (
+                            <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
+                              <div className="font-semibold">Recent logs</div>
+                              {(logs.webhooks || []).slice(0, 3).map((log) => (
+                                <div key={log.event_id} className="mt-1">
+                                  {log.event_type} · {log.processing_status}
+                                  {log.error ? ` · ${log.error}` : ''}
+                                </div>
+                              ))}
+                              {(logs.activity || []).slice(0, 3).map((log) => (
+                                <div key={log.id} className="mt-1">
+                                  {log.event_type}
+                                  {log.message ? ` · ${log.message}` : ''}
+                                </div>
+                              ))}
+                            </div>
+                          ) : null}
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>

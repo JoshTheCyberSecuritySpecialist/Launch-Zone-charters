@@ -25,9 +25,9 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
   const [bookingStatus, setBookingStatus] = useState<string | null>(null);
   const [insuranceConfig, setInsuranceConfig] = useState<BuoyInsuranceConfig>(PONTOON_INSURANCE);
   const [error, setError] = useState('');
+  const [statusMessage, setStatusMessage] = useState('');
   const [loading, setLoading] = useState(true);
   const finalizedRef = useRef(false);
-  const emailSentRef = useRef(false);
 
   const activeBookingId = bookingId || bookingIdParam;
 
@@ -38,6 +38,32 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
       return;
     }
     const api = env.apiUrl;
+
+    const loadCheckoutStatus = async () => {
+      const statusRes = await fetch(`${api}/api/checkout-status?sessionId=${encodeURIComponent(sessionId)}`);
+      const statusPayload = (await statusRes.json().catch(() => ({}))) as {
+        status?: string;
+        bookingId?: string;
+        error?: string;
+      };
+      if (!statusRes.ok) return false;
+      if (statusPayload.bookingId) {
+        setBookingId(statusPayload.bookingId);
+        setStatusMessage('Payment received. Your reservation is confirmed.');
+        return true;
+      }
+      if (statusPayload.status === 'pending') {
+        setStatusMessage('Payment received. We are still confirming your reservation.');
+        setError('');
+        return true;
+      }
+      if (statusPayload.status === 'needs_staff') {
+        setStatusMessage('Payment received. Our team has been alerted to finish your reservation.');
+        setError('');
+        return true;
+      }
+      return false;
+    };
 
     if (sessionId) {
       if (finalizedRef.current) return;
@@ -56,25 +82,17 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
             error?: string;
           };
           if (!res.ok || !payload.bookingId) {
+            if (await loadCheckoutStatus()) {
+              setLoading(false);
+              return;
+            }
             setError(payload.error || 'Could not finalize booking after payment.');
             setLoading(false);
             return;
           }
 
           setBookingId(payload.bookingId);
-
-          if (!emailSentRef.current) {
-            emailSentRef.current = true;
-            void fetch(`${api}/api/send-booking-confirmation`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ bookingId: payload.bookingId, email: payload.email || '' }),
-            }).catch((err) => {
-              if (import.meta.env.DEV) {
-                console.warn('[send-booking-confirmation]', err);
-              }
-            });
-          }
+          setStatusMessage('Payment confirmed. Your confirmation email is being sent by our booking system.');
 
           try {
             const insRes = await fetch(
@@ -94,6 +112,14 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
 
           setLoading(false);
         } catch (err) {
+          try {
+            if (await loadCheckoutStatus()) {
+              setLoading(false);
+              return;
+            }
+          } catch {
+            // Show the finalize error below.
+          }
           setError(err instanceof Error ? err.message : 'Could not finalize booking.');
           setLoading(false);
         }
@@ -220,6 +246,11 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
         <p className="mt-3 text-sm text-slate-400">
           {error || 'Please contact support with your payment receipt so we can complete this manually.'}
         </p>
+        {statusMessage ? (
+          <p className="mt-4 rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-50">
+            {statusMessage}
+          </p>
+        ) : null}
         <button
           type="button"
           onClick={wrapNavigateClick('booking_success', 'book', onNavigate)}
@@ -269,6 +300,7 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
           Your booking is submitted and pending approval. We&apos;ll review your reservation and documents
           shortly.
         </p>
+        {statusMessage ? <p className="mt-3 text-sm font-semibold text-emerald-100">{statusMessage}</p> : null}
       </div>
       <div className="mt-8 rounded-[var(--lz-radius)] border border-white/10 bg-slate-950/50 p-4 text-left">
         <div className="flex items-start gap-3">

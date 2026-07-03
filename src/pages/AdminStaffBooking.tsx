@@ -509,7 +509,7 @@ export default function AdminStaffBooking() {
                 <CalendarPlus className="h-5 w-5" />
                 {saving === 'booking' ? 'Creating...' : 'Create Booking'}
               </button>
-              <button type="button" onClick={reset} className="inline-flex min-h-[54px] items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-5 py-3 text-lg font-bold text-slate-800 hover:bg-slate-50">
+              <button type="button" onClick={() => reset()} className="inline-flex min-h-[54px] items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-5 py-3 text-lg font-bold text-slate-800 hover:bg-slate-50">
                 <RotateCcw className="h-5 w-5" />
                 Reset
               </button>

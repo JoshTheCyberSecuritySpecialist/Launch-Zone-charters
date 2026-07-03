@@ -560,7 +560,6 @@ export default function AdminCalendar() {
 
   const editItem = (item: CalendarItem) => {
     const start = new Date(item.start_time);
-    const end = new Date(item.end_time);
     setItemMenu(null);
     setItemConflicts(null);
     setItemForm({

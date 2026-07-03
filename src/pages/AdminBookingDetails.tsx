@@ -30,6 +30,19 @@ type CommunicationPreview = {
   recipients: { email?: string; phone?: string; rawPhone?: string };
 };
 
+type EmailConfig = {
+  resendConfigured: boolean;
+  senderEmail: string;
+  apiKeyPresent: boolean;
+};
+
+type CustomEmailPreview = {
+  from: string;
+  to: string;
+  subject: string;
+  message: string;
+};
+
 type DetailPayload = {
   booking: Record<string, any>;
   lifetimeBookings: number;
@@ -49,6 +62,39 @@ const communicationButtons = [
   ['day_before_reminder', 'Send Day-Before Reminder'],
   ['cancelled_booking', 'Send Cancellation Notice'],
 ] as const;
+
+const customEmailTemplates = {
+  general: {
+    label: 'General Message',
+    subject: 'Message from Launch Zone Charters',
+    message: 'Hi,\n\nThanks for booking with Launch Zone Charters. I wanted to follow up with you about your trip.\n\nJoshua\nLaunch Zone Charters',
+  },
+  payment: {
+    label: 'Payment Reminder',
+    subject: 'Payment reminder for your Launch Zone Charters booking',
+    message: 'Hi,\n\nThis is a friendly reminder about the remaining balance for your Launch Zone Charters booking. Please contact us if you have any questions.\n\nJoshua\nLaunch Zone Charters',
+  },
+  waiver: {
+    label: 'Waiver Reminder',
+    subject: 'Waiver reminder for your Launch Zone Charters booking',
+    message: 'Hi,\n\nPlease complete your waiver before your trip so we can keep check-in quick and easy.\n\nJoshua\nLaunch Zone Charters',
+  },
+  insurance: {
+    label: 'Insurance Reminder',
+    subject: 'Insurance reminder for your Launch Zone Charters booking',
+    message: 'Hi,\n\nPlease complete or upload your rental insurance information before your trip. Let us know if you need help.\n\nJoshua\nLaunch Zone Charters',
+  },
+  trip: {
+    label: 'Trip Reminder',
+    subject: 'Reminder for your upcoming Launch Zone Charters trip',
+    message: 'Hi,\n\nThis is a quick reminder for your upcoming Launch Zone Charters trip. Please arrive a few minutes early and bring any required ID or documents.\n\nJoshua\nLaunch Zone Charters',
+  },
+  thanks: {
+    label: 'Thank You',
+    subject: 'Thank you from Launch Zone Charters',
+    message: 'Hi,\n\nThank you for choosing Launch Zone Charters. We appreciate your business and hope to see you on the water again soon.\n\nJoshua\nLaunch Zone Charters',
+  },
+} as const;
 
 const pad = (n: number) => String(n).padStart(2, '0');
 const ymd = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -82,6 +128,11 @@ export default function AdminBookingDetails() {
     confirmDuplicate?: boolean;
   } | null>(null);
   const [communicationLoading, setCommunicationLoading] = useState<string | null>(null);
+  const [emailConfig, setEmailConfig] = useState<EmailConfig | null>(null);
+  const [emailRecipientEditable, setEmailRecipientEditable] = useState(false);
+  const [customEmail, setCustomEmail] = useState({ to: '', subject: '', message: '' });
+  const [customEmailPreview, setCustomEmailPreview] = useState<CustomEmailPreview | null>(null);
+  const [customEmailLoading, setCustomEmailLoading] = useState<'config' | 'preview' | 'send' | null>(null);
 
   const booking = detail?.booking;
 
@@ -107,15 +158,18 @@ export default function AdminBookingDetails() {
     if (!isAdmin || !id) return;
     setLoading(true);
     try {
-      const [bookingRes, boatsRes] = await Promise.all([
+      const [bookingRes, boatsRes, emailConfigRes] = await Promise.all([
         authedFetch(`/api/admin/bookings/${id}`),
         fetch(`${env.apiUrl}/api/boats`),
+        authedFetch('/api/admin/email/config-check'),
       ]);
       const bookingPayload = (await bookingRes.json().catch(() => ({}))) as DetailPayload & { error?: string };
       if (!bookingRes.ok) throw new Error(bookingPayload.error || 'Could not load booking.');
       const boatsPayload = (await boatsRes.json().catch(() => ({}))) as { boats?: BoatRow[] };
+      const emailConfigPayload = (await emailConfigRes.json().catch(() => ({}))) as EmailConfig;
       setDetail(bookingPayload);
       setBoats(Array.isArray(boatsPayload.boats) ? boatsPayload.boats : []);
+      if (emailConfigRes.ok) setEmailConfig(emailConfigPayload);
       const b = bookingPayload.booking;
       const start = new Date(String(b.start_time || ''));
       const end = new Date(String(b.end_time || ''));
@@ -148,6 +202,8 @@ export default function AdminBookingDetails() {
         internalNotes: b.staff_notes || b.admin_notes || '',
         status: b.status || 'pending',
       });
+      const customerEmail = String(b.customers?.email || b.email || '').trim().toLowerCase();
+      setCustomEmail((prev) => ({ ...prev, to: customerEmail || prev.to }));
       setDirty(false);
       setAvailability('idle');
     } catch (err) {
@@ -345,6 +401,81 @@ export default function AdminBookingDetails() {
     }
   };
 
+  const applyCustomEmailTemplate = (templateKey: keyof typeof customEmailTemplates) => {
+    const template = customEmailTemplates[templateKey];
+    setCustomEmail((prev) => ({
+      ...prev,
+      subject: template.subject,
+      message: template.message,
+    }));
+  };
+
+  const clearCustomEmail = () => {
+    const customerEmail = String(booking?.customers?.email || booking?.email || '').trim().toLowerCase();
+    setCustomEmail({ to: customerEmail, subject: '', message: '' });
+    setEmailRecipientEditable(false);
+    setCustomEmailPreview(null);
+  };
+
+  const validateCustomEmailForm = () => {
+    if (!customEmail.to.trim()) return 'Customer email is missing.';
+    if (!customEmail.subject.trim()) return 'Subject is required.';
+    if (!customEmail.message.trim()) return 'Message is required.';
+    if (!emailConfig?.resendConfigured) return 'Email service is not configured.';
+    return '';
+  };
+
+  const previewCustomEmail = async () => {
+    const validationError = validateCustomEmailForm();
+    if (validationError) {
+      setNotice({ variant: 'error', text: validationError });
+      return;
+    }
+    setCustomEmailLoading('preview');
+    try {
+      const res = await authedFetch(`/api/admin/bookings/${id}/email-customer/preview`, {
+        method: 'POST',
+        body: JSON.stringify(customEmail),
+      });
+      const payload = (await res.json().catch(() => ({}))) as {
+        preview?: CustomEmailPreview;
+        error?: string;
+      };
+      if (!res.ok || !payload.preview) throw new Error(payload.error || 'Could not preview email.');
+      setCustomEmailPreview(payload.preview);
+    } catch (err) {
+      setNotice({ variant: 'error', text: err instanceof Error ? err.message : 'Could not preview email.' });
+    } finally {
+      setCustomEmailLoading(null);
+    }
+  };
+
+  const sendCustomEmail = async () => {
+    if (!customEmailPreview) return;
+    setCustomEmailLoading('send');
+    try {
+      const res = await authedFetch(`/api/admin/bookings/${id}/email-customer/send`, {
+        method: 'POST',
+        body: JSON.stringify({
+          to: customEmailPreview.to,
+          subject: customEmailPreview.subject,
+          message: customEmailPreview.message,
+        }),
+      });
+      const payload = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) throw new Error(payload.error || 'Could not send email.');
+      setCustomEmailPreview(null);
+      setNotice({ variant: 'success', text: 'Email sent.' });
+      setCustomEmail((prev) => ({ ...prev, subject: '', message: '' }));
+      await load();
+    } catch (err) {
+      setNotice({ variant: 'error', text: err instanceof Error ? err.message : 'Could not send email.' });
+      await load();
+    } finally {
+      setCustomEmailLoading(null);
+    }
+  };
+
   if (authLoading || loading) return <FullPageLoader message="Loading booking details..." />;
   if (!isAdmin) return <FullPageLoader message="Admin access required." />;
   if (!booking) return <div className="p-8">Booking not found.</div>;
@@ -512,6 +643,112 @@ export default function AdminBookingDetails() {
           </div>
 
           <div className="rounded-2xl bg-white p-5 shadow">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h2 className="text-xl font-black">Email Customer</h2>
+                <p className="mt-1 text-sm text-slate-600">Send a custom email from the admin site.</p>
+              </div>
+              <span
+                className={`rounded-full px-3 py-1 text-sm font-black ${
+                  emailConfig?.resendConfigured ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                }`}
+              >
+                Email sending: {emailConfig?.resendConfigured ? 'Ready' : 'Not configured'}
+              </span>
+            </div>
+            <div className="mt-3 rounded-lg bg-slate-50 p-3 text-xs font-semibold text-slate-600">
+              From: {emailConfig?.senderEmail || 'Joshua at Launch Zone Charters <joshua@launchzonecharters.com>'}
+            </div>
+
+            <div className="mt-4 space-y-4">
+              <label className={labelClass}>
+                To
+                <div className="mt-1 flex gap-2">
+                  <input
+                    className={inputClass}
+                    type="email"
+                    value={customEmail.to}
+                    disabled={!emailRecipientEditable}
+                    onChange={(e) => setCustomEmail((prev) => ({ ...prev, to: e.target.value }))}
+                    placeholder="customer@example.com"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setEmailRecipientEditable((prev) => !prev)}
+                    className="rounded-lg border border-slate-300 px-4 py-2 font-bold text-slate-800 hover:bg-slate-50"
+                  >
+                    {emailRecipientEditable ? 'Lock' : 'Edit recipient'}
+                  </button>
+                </div>
+              </label>
+
+              <div>
+                <div className="text-sm font-bold text-slate-700">Quick Templates</div>
+                <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                  {Object.entries(customEmailTemplates).map(([key, template]) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => applyCustomEmailTemplate(key as keyof typeof customEmailTemplates)}
+                      className="rounded-lg border border-slate-300 bg-white px-4 py-3 text-left font-bold text-slate-900 hover:bg-slate-50"
+                    >
+                      {template.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <label className={labelClass}>
+                Subject *
+                <input
+                  className={inputClass}
+                  value={customEmail.subject}
+                  onChange={(e) => setCustomEmail((prev) => ({ ...prev, subject: e.target.value }))}
+                  placeholder="Subject"
+                />
+              </label>
+
+              <label className={labelClass}>
+                Message *
+                <textarea
+                  className={`${inputClass} min-h-[220px]`}
+                  value={customEmail.message}
+                  onChange={(e) => setCustomEmail((prev) => ({ ...prev, message: e.target.value }))}
+                  placeholder="Type your message to the customer..."
+                />
+              </label>
+
+              <div className="grid gap-2 sm:grid-cols-3">
+                <button
+                  type="button"
+                  onClick={() => void previewCustomEmail()}
+                  disabled={customEmailLoading != null}
+                  className="rounded-xl bg-slate-900 px-5 py-4 text-lg font-black text-white disabled:opacity-50"
+                >
+                  {customEmailLoading === 'preview' ? 'Previewing...' : 'Preview Email'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void previewCustomEmail()}
+                  disabled={customEmailLoading != null}
+                  className="rounded-xl bg-green-700 px-5 py-4 text-lg font-black text-white disabled:opacity-50"
+                >
+                  Send Email
+                </button>
+                <button
+                  type="button"
+                  onClick={clearCustomEmail}
+                  disabled={customEmailLoading != null}
+                  className="rounded-xl border border-slate-300 bg-white px-5 py-4 text-lg font-black text-slate-800 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  Clear
+                </button>
+              </div>
+              <p className="text-xs font-semibold text-slate-500">Send Email opens the preview first. Nothing sends until you confirm.</p>
+            </div>
+          </div>
+
+          <div className="rounded-2xl bg-white p-5 shadow">
             <h2 className="text-xl font-black">Communications</h2>
             <div className="mt-4 grid gap-2">
               {communicationButtons.map(([messageType, label]) => (
@@ -567,6 +804,66 @@ export default function AdminBookingDetails() {
           </div>
         </aside>
       </main>
+
+      {customEmailPreview ? (
+        <div className="fixed inset-0 z-[125] flex items-center justify-center bg-slate-950/70 p-4">
+          <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-2xl font-black">Preview Email</h2>
+                <p className="mt-1 text-sm text-slate-600">Review this message before sending.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCustomEmailPreview(null)}
+                className="rounded-lg bg-slate-100 px-3 py-2 font-bold text-slate-800"
+              >
+                Cancel
+              </button>
+            </div>
+
+            <div className="mt-5 space-y-4">
+              <div className="rounded-xl border border-slate-200 p-4">
+                <div className="text-sm font-black text-slate-500">From</div>
+                <div className="mt-1 font-semibold text-slate-900">{customEmailPreview.from}</div>
+              </div>
+              <div className="rounded-xl border border-slate-200 p-4">
+                <div className="text-sm font-black text-slate-500">To</div>
+                <div className="mt-1 font-semibold text-slate-900">{customEmailPreview.to}</div>
+              </div>
+              <div className="rounded-xl border border-slate-200 p-4">
+                <div className="text-sm font-black text-slate-500">Subject</div>
+                <div className="mt-1 font-semibold text-slate-900">{customEmailPreview.subject}</div>
+              </div>
+              <div className="rounded-xl border border-slate-200 p-4">
+                <div className="text-sm font-black text-slate-500">Message</div>
+                <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap rounded-lg bg-slate-100 p-4 text-sm text-slate-900">
+                  {customEmailPreview.message}
+                </pre>
+              </div>
+            </div>
+
+            <div className="mt-6 grid gap-2 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => setCustomEmailPreview(null)}
+                disabled={customEmailLoading === 'send'}
+                className="rounded-xl border border-slate-300 px-5 py-4 text-lg font-black text-slate-800 hover:bg-slate-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void sendCustomEmail()}
+                disabled={customEmailLoading === 'send'}
+                className="rounded-xl bg-green-700 px-5 py-4 text-lg font-black text-white disabled:opacity-50"
+              >
+                {customEmailLoading === 'send' ? 'Sending...' : 'Send Email'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {communicationModal ? (
         <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/70 p-4">

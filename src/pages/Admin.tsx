@@ -68,6 +68,15 @@ type ContactInboxRow = {
   created_at: string;
 };
 
+type ContactReplyPreview = {
+  from: string;
+  to: string;
+  subject: string;
+  message: string;
+  originalMessage: string;
+  customerName: string;
+};
+
 type AdminAlertRow = {
   id: string;
   type: string | null;
@@ -351,6 +360,10 @@ export default function Admin({ onNavigate }: AdminProps) {
   const [captainsLogDeletingId, setCaptainsLogDeletingId] = useState<string | null>(null);
   const [contactInbox, setContactInbox] = useState<ContactInboxRow[]>([]);
   const [contactInboxLoading, setContactInboxLoading] = useState(false);
+  const [contactReplyRow, setContactReplyRow] = useState<ContactInboxRow | null>(null);
+  const [contactReplyDraft, setContactReplyDraft] = useState({ to: '', subject: '', message: '' });
+  const [contactReplyPreview, setContactReplyPreview] = useState<ContactReplyPreview | null>(null);
+  const [contactReplyBusy, setContactReplyBusy] = useState<'preview' | 'send' | null>(null);
   const [alerts, setAlerts] = useState<AdminAlertRow[]>([]);
   const [alertsLoading, setAlertsLoading] = useState(false);
   const [alertsError, setAlertsError] = useState<string | null>(null);
@@ -1569,6 +1582,77 @@ export default function Admin({ onNavigate }: AdminProps) {
     }
   };
 
+  const openContactReply = (row: ContactInboxRow) => {
+    setContactReplyRow(row);
+    setContactReplyPreview(null);
+    setContactReplyDraft({
+      to: row.email,
+      subject: `Re: Your message to Launch Zone Charters`,
+      message: `Hi ${row.full_name || 'there'},\n\n\n\nJoshua\nLaunch Zone Charters`,
+    });
+  };
+
+  const closeContactReply = (force = false) => {
+    if (contactReplyBusy && !force) return;
+    setContactReplyRow(null);
+    setContactReplyPreview(null);
+    setContactReplyDraft({ to: '', subject: '', message: '' });
+  };
+
+  const validateContactReplyDraft = () => {
+    if (!contactReplyDraft.to.trim()) return 'Customer email is missing.';
+    if (!contactReplyDraft.subject.trim()) return 'Subject is required.';
+    if (!contactReplyDraft.message.trim()) return 'Message is required.';
+    return '';
+  };
+
+  const previewContactReply = async () => {
+    if (!contactReplyRow) return;
+    const validationError = validateContactReplyDraft();
+    if (validationError) {
+      setNotice({ variant: 'error', text: validationError });
+      return;
+    }
+    setContactReplyBusy('preview');
+    try {
+      const payload = await apiRequest(`/api/admin/contact-messages/${contactReplyRow.id}/reply/preview`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(contactReplyDraft),
+      });
+      const preview = payload.preview as ContactReplyPreview | undefined;
+      if (!preview) throw new Error('Could not preview reply.');
+      setContactReplyPreview(preview);
+    } catch (err) {
+      setNotice({ variant: 'error', text: err instanceof Error ? err.message : 'Could not preview reply.' });
+    } finally {
+      setContactReplyBusy(null);
+    }
+  };
+
+  const sendContactReply = async () => {
+    if (!contactReplyRow || !contactReplyPreview) return;
+    setContactReplyBusy('send');
+    try {
+      await apiRequest(`/api/admin/contact-messages/${contactReplyRow.id}/reply/send`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          to: contactReplyPreview.to,
+          subject: contactReplyPreview.subject,
+          message: contactReplyPreview.message,
+        }),
+      });
+      setNotice({ variant: 'success', text: 'Reply sent.' });
+      closeContactReply(true);
+      await loadContactInbox();
+    } catch (err) {
+      setNotice({ variant: 'error', text: err instanceof Error ? err.message : 'Could not send reply.' });
+    } finally {
+      setContactReplyBusy(null);
+    }
+  };
+
   const handleDelete = async (bookingId: string) => {
     if (
       !window.confirm(
@@ -2546,6 +2630,13 @@ export default function Admin({ onNavigate }: AdminProps) {
                       </td>
                       <td className="whitespace-nowrap px-4 py-2">
                         <div className="flex flex-col gap-1.5 sm:flex-row sm:flex-wrap sm:items-center">
+                          <button
+                            type="button"
+                            onClick={() => openContactReply(row)}
+                            className="inline-flex items-center justify-center rounded border border-amber-300 bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-900 transition-colors hover:bg-amber-100"
+                          >
+                            Reply
+                          </button>
                           {!row.is_read ? (
                             <button
                               type="button"
@@ -2581,6 +2672,142 @@ export default function Admin({ onNavigate }: AdminProps) {
             )}
           </div>
         </div>
+
+        {contactReplyRow ? (
+          <div className="fixed inset-0 z-[130] flex items-center justify-center bg-slate-950/70 p-4">
+            <div className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h2 className="text-2xl font-black text-slate-900">Reply to Customer</h2>
+                  <p className="mt-1 text-sm text-slate-600">
+                    Original message from {contactReplyRow.full_name || contactReplyRow.email}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => closeContactReply()}
+                  disabled={contactReplyBusy != null}
+                  className="rounded-lg bg-slate-100 px-4 py-2 font-bold text-slate-800 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+              </div>
+
+              <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                <div className="text-xs font-black uppercase tracking-wide text-slate-500">Customer Message</div>
+                <p className="mt-2 whitespace-pre-wrap text-sm text-slate-800">{contactReplyRow.message}</p>
+              </div>
+
+              {!contactReplyPreview ? (
+                <div className="mt-5 space-y-4">
+                  <label className="block text-sm font-bold text-slate-700">
+                    To
+                    <input
+                      className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-3 text-slate-900"
+                      type="email"
+                      value={contactReplyDraft.to}
+                      onChange={(event) => setContactReplyDraft((prev) => ({ ...prev, to: event.target.value }))}
+                    />
+                  </label>
+                  <label className="block text-sm font-bold text-slate-700">
+                    Subject
+                    <input
+                      className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-3 text-slate-900"
+                      value={contactReplyDraft.subject}
+                      onChange={(event) => setContactReplyDraft((prev) => ({ ...prev, subject: event.target.value }))}
+                    />
+                  </label>
+                  <label className="block text-sm font-bold text-slate-700">
+                    Message
+                    <textarea
+                      className="mt-1 min-h-[240px] w-full rounded-lg border border-slate-300 px-3 py-3 text-slate-900"
+                      value={contactReplyDraft.message}
+                      onChange={(event) => setContactReplyDraft((prev) => ({ ...prev, message: event.target.value }))}
+                    />
+                  </label>
+
+                  <div className="grid gap-2 sm:grid-cols-3">
+                    <button
+                      type="button"
+                      onClick={() => void previewContactReply()}
+                      disabled={contactReplyBusy != null}
+                      className="rounded-xl bg-slate-900 px-5 py-4 text-lg font-black text-white disabled:opacity-50"
+                    >
+                      {contactReplyBusy === 'preview' ? 'Previewing...' : 'Preview Reply'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void previewContactReply()}
+                      disabled={contactReplyBusy != null}
+                      className="rounded-xl bg-green-700 px-5 py-4 text-lg font-black text-white disabled:opacity-50"
+                    >
+                      Send Reply
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setContactReplyDraft({ to: contactReplyRow.email, subject: '', message: '' })}
+                      disabled={contactReplyBusy != null}
+                      className="rounded-xl border border-slate-300 px-5 py-4 text-lg font-black text-slate-800 hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                  <p className="text-xs font-semibold text-slate-500">
+                    Send Reply opens preview first. Nothing sends until you confirm.
+                  </p>
+                </div>
+              ) : (
+                <div className="mt-5 space-y-4">
+                  <div className="rounded-xl border border-slate-200 p-4">
+                    <div className="text-xs font-black uppercase tracking-wide text-slate-500">From</div>
+                    <p className="mt-1 font-semibold text-slate-900">{contactReplyPreview.from}</p>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 p-4">
+                    <div className="text-xs font-black uppercase tracking-wide text-slate-500">To</div>
+                    <p className="mt-1 font-semibold text-slate-900">{contactReplyPreview.to}</p>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 p-4">
+                    <div className="text-xs font-black uppercase tracking-wide text-slate-500">Subject</div>
+                    <p className="mt-1 font-semibold text-slate-900">{contactReplyPreview.subject}</p>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 p-4">
+                    <div className="text-xs font-black uppercase tracking-wide text-slate-500">Message</div>
+                    <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap rounded-lg bg-slate-100 p-4 text-sm text-slate-900">
+                      {contactReplyPreview.message}
+                    </pre>
+                  </div>
+
+                  <div className="grid gap-2 sm:grid-cols-3">
+                    <button
+                      type="button"
+                      onClick={() => setContactReplyPreview(null)}
+                      disabled={contactReplyBusy === 'send'}
+                      className="rounded-xl border border-slate-300 px-5 py-4 text-lg font-black text-slate-800 hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      Back
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => closeContactReply()}
+                      disabled={contactReplyBusy === 'send'}
+                      className="rounded-xl border border-slate-300 px-5 py-4 text-lg font-black text-slate-800 hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void sendContactReply()}
+                      disabled={contactReplyBusy === 'send'}
+                      className="rounded-xl bg-green-700 px-5 py-4 text-lg font-black text-white disabled:opacity-50"
+                    >
+                      {contactReplyBusy === 'send' ? 'Sending...' : 'Send Reply'}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        ) : null}
 
         <div className="mb-8 grid gap-6 md:grid-cols-4">
           <div className="rounded-xl bg-white p-6 shadow">

@@ -2542,6 +2542,198 @@ app.post('/api/admin/bookings/:id/communications/send', async (req, res) => {
   }
 });
 
+function adminEmailRecipientFromDetail(detail, override) {
+  const booking = detail?.booking || {};
+  const customer = Array.isArray(booking.customers) ? booking.customers[0] : booking.customers || {};
+  const candidate = cleanText(override || customer.email || booking.email, 200).toLowerCase();
+  return candidate;
+}
+
+function validateAdminCustomEmail(detail, body = {}) {
+  const to = adminEmailRecipientFromDetail(detail, body.to || body.recipient || body.email);
+  const subject = cleanText(body.subject, 200);
+  const message = cleanText(body.message || body.body, 12000);
+  if (!to) {
+    const err = new Error('Customer email is missing.');
+    err.statusCode = 400;
+    throw err;
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
+    const err = new Error('Customer email is invalid.');
+    err.statusCode = 400;
+    throw err;
+  }
+  if (!subject) {
+    const err = new Error('Subject is required.');
+    err.statusCode = 400;
+    throw err;
+  }
+  if (!message) {
+    const err = new Error('Message is required.');
+    err.statusCode = 400;
+    throw err;
+  }
+  return { to, subject, message };
+}
+
+function customEmailHtml(message) {
+  return String(message || '')
+    .split(/\r?\n/)
+    .map((line) => (line.trim() ? `<p>${documentUrlValidation.escapeHtml(line)}</p>` : '<br>'))
+    .join('');
+}
+
+async function logCustomEmailCommunication({
+  bookingId,
+  adminUserId,
+  to,
+  subject,
+  message,
+  status,
+  providerMessageId = null,
+  errorMessage = null,
+}) {
+  const { data, error } = await supabase
+    .from('booking_communications')
+    .insert({
+      booking_id: bookingId,
+      channel: 'email',
+      message_type: 'custom_email',
+      recipient: to,
+      subject,
+      body: message,
+      sent_by: adminUserId,
+      sent_at: status === 'sent' ? new Date().toISOString() : null,
+      status,
+      provider_message_id: providerMessageId,
+      error_message: errorMessage,
+    })
+    .select('*')
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+app.get('/api/admin/email/config-check', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  return res.json({
+    resendConfigured: Boolean(resend && resendFrom),
+    senderEmail: resendFrom,
+    apiKeyPresent: Boolean(resendApiKey),
+  });
+});
+
+app.post('/api/admin/bookings/:id/email-customer/preview', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const id = cleanText(req.params.id, 80);
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid booking id.' });
+    const detail = await loadAdminBookingDetail(id);
+    if (!detail) return res.status(404).json({ error: 'Booking not found.' });
+    const email = validateAdminCustomEmail(detail, req.body || {});
+    return res.json({
+      preview: {
+        from: resendFrom,
+        to: email.to,
+        subject: email.subject,
+        message: email.message,
+      },
+      resendConfigured: Boolean(resend && resendFrom),
+    });
+  } catch (err) {
+    console.error('[admin-email-customer:preview]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not preview email.' });
+  }
+});
+
+app.post('/api/admin/bookings/:id/email-customer/send', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  let email = null;
+  const id = cleanText(req.params.id, 80);
+  try {
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid booking id.' });
+    const detail = await loadAdminBookingDetail(id);
+    if (!detail) return res.status(404).json({ error: 'Booking not found.' });
+    email = validateAdminCustomEmail(detail, req.body || {});
+
+    if (!resend) {
+      await logCustomEmailCommunication({
+        bookingId: id,
+        adminUserId: adminUser.id,
+        to: email.to,
+        subject: email.subject,
+        message: email.message,
+        status: 'failed',
+        errorMessage: 'Email service is not configured.',
+      });
+      return res.status(503).json({ error: 'Email service is not configured.' });
+    }
+
+    const result = await resend.emails.send({
+      from: resendFrom,
+      to: email.to,
+      subject: email.subject,
+      text: email.message,
+      html: customEmailHtml(email.message),
+    });
+
+    if (result.error) {
+      const row = await logCustomEmailCommunication({
+        bookingId: id,
+        adminUserId: adminUser.id,
+        to: email.to,
+        subject: email.subject,
+        message: email.message,
+        status: 'failed',
+        errorMessage: result.error.message || 'Resend failed',
+      });
+      return res.status(502).json({ error: result.error.message || 'Could not send email.', communication: row });
+    }
+
+    const row = await logCustomEmailCommunication({
+      bookingId: id,
+      adminUserId: adminUser.id,
+      to: email.to,
+      subject: email.subject,
+      message: email.message,
+      status: 'sent',
+      providerMessageId: result.data?.id || null,
+    });
+
+    await bookingReliability.insertActivity(supabase, {
+      booking_id: id,
+      event_type: 'custom_email_sent',
+      actor_type: 'admin',
+      actor_id: adminUser.id,
+      message: 'Admin sent a custom customer email.',
+      payload: { communication_id: row.id, recipient: email.to },
+    });
+
+    return res.json({ ok: true, communication: row });
+  } catch (err) {
+    console.error('[admin-email-customer:send]', err);
+    if (email && isBookingUuidParam(id)) {
+      try {
+        await logCustomEmailCommunication({
+          bookingId: id,
+          adminUserId: adminUser.id,
+          to: email.to,
+          subject: email.subject,
+          message: email.message,
+          status: 'failed',
+          errorMessage: err.message || 'Could not send email.',
+        });
+      } catch (logErr) {
+        console.error('[admin-email-customer:send:log-failed]', logErr);
+      }
+    }
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not send email.' });
+  }
+});
+
 function moneyNumber(value) {
   const n = Number(value || 0);
   return Number.isFinite(n) ? n : 0;
@@ -3950,8 +4142,11 @@ app.get('/api/admin/payment-recovery/:id/logs', async (req, res) => {
   }
 });
 
+const DEFAULT_RESEND_FROM = 'Joshua at Launch Zone Charters <joshua@launchzonecharters.com>';
 const resendApiKey = process.env.RESEND_API_KEY;
-const resendFrom = process.env.RESEND_FROM_EMAIL || 'Launch Zone <onboarding@resend.dev>';
+const resendFrom =
+  (process.env.RESEND_FROM_EMAIL || process.env.RESEND_FROM || DEFAULT_RESEND_FROM).trim() ||
+  DEFAULT_RESEND_FROM;
 
 const resend = resendApiKey ? new Resend(resendApiKey) : null;
 
@@ -5539,6 +5734,103 @@ app.post('/api/contact', async (req, res) => {
   } catch (err) {
     console.error('[contact]', err);
     return res.status(500).json({ error: 'Failed to submit contact' });
+  }
+});
+
+async function loadContactMessageForReply(id) {
+  const { data, error } = await supabase
+    .from('contact_messages')
+    .select('id, full_name, email, message, is_read, created_at')
+    .eq('id', id)
+    .maybeSingle();
+  if (error) throw error;
+  return data || null;
+}
+
+function validateContactReply(messageRow, body = {}) {
+  const to = cleanText(body.to || messageRow?.email, 320).toLowerCase();
+  const subject = cleanText(body.subject, 200);
+  const message = cleanText(body.message || body.body, 12000);
+  if (!to) {
+    const err = new Error('Customer email is missing.');
+    err.statusCode = 400;
+    throw err;
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
+    const err = new Error('Customer email is invalid.');
+    err.statusCode = 400;
+    throw err;
+  }
+  if (!subject) {
+    const err = new Error('Subject is required.');
+    err.statusCode = 400;
+    throw err;
+  }
+  if (!message) {
+    const err = new Error('Message is required.');
+    err.statusCode = 400;
+    throw err;
+  }
+  return { to, subject, message };
+}
+
+app.post('/api/admin/contact-messages/:id/reply/preview', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const id = cleanText(req.params.id, 80);
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid message id.' });
+    const messageRow = await loadContactMessageForReply(id);
+    if (!messageRow) return res.status(404).json({ error: 'Customer message not found.' });
+    const reply = validateContactReply(messageRow, req.body || {});
+    return res.json({
+      preview: {
+        from: resendFrom,
+        to: reply.to,
+        subject: reply.subject,
+        message: reply.message,
+        originalMessage: messageRow.message || '',
+        customerName: messageRow.full_name || '',
+      },
+      resendConfigured: Boolean(resend && resendFrom),
+    });
+  } catch (err) {
+    console.error('[admin-contact-reply:preview]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not preview reply.' });
+  }
+});
+
+app.post('/api/admin/contact-messages/:id/reply/send', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const id = cleanText(req.params.id, 80);
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid message id.' });
+    const messageRow = await loadContactMessageForReply(id);
+    if (!messageRow) return res.status(404).json({ error: 'Customer message not found.' });
+    const reply = validateContactReply(messageRow, req.body || {});
+
+    if (!resend) {
+      return res.status(503).json({ error: 'Email service is not configured.' });
+    }
+
+    const result = await resend.emails.send({
+      from: resendFrom,
+      to: reply.to,
+      subject: reply.subject,
+      text: reply.message,
+      html: customEmailHtml(reply.message),
+    });
+
+    if (result.error) {
+      return res.status(502).json({ error: result.error.message || 'Could not send reply.' });
+    }
+
+    await supabase.from('contact_messages').update({ is_read: true }).eq('id', id);
+    return res.json({ ok: true, providerMessageId: result.data?.id || null });
+  } catch (err) {
+    console.error('[admin-contact-reply:send]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not send reply.' });
   }
 });
 

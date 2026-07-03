@@ -27,7 +27,10 @@ function getResend() {
 }
 
 function alertsFromEmail() {
-  return (process.env.RESEND_FROM_EMAIL || process.env.RESEND_FROM || '').trim() || null;
+  return (
+    (process.env.RESEND_FROM_EMAIL || process.env.RESEND_FROM || 'Joshua at Launch Zone Charters <joshua@launchzonecharters.com>')
+      .trim() || null
+  );
 }
 
 /**

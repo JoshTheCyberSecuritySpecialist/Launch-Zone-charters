@@ -26,6 +26,7 @@ import AdminBoats from './pages/AdminBoats';
 import AdminStaffBooking from './pages/AdminStaffBooking';
 import AdminCalendar from './pages/AdminCalendar';
 import AdminBookingDetails from './pages/AdminBookingDetails';
+import AdminOutbox from './pages/AdminOutbox';
 import AdminLogin from './pages/AdminLogin';
 import CaptainsLog from './pages/CaptainsLog';
 import LogArticle from './pages/LogArticle';
@@ -99,6 +100,7 @@ function AppLayout() {
           <Route path="/admin/staff-booking" element={<AdminStaffBooking />} />
           <Route path="/admin/calendar" element={<AdminCalendar />} />
           <Route path="/admin/bookings/:id" element={<AdminBookingDetails />} />
+          <Route path="/admin/outbox" element={<AdminOutbox />} />
           <Route path="/admin/boats" element={<AdminBoats onNavigate={onNavigate} />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

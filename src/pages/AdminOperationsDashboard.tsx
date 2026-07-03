@@ -189,10 +189,10 @@ export default function AdminOperationsDashboard() {
           {[
             ['New Staff Booking', '/admin/staff-booking'],
             ['Calendar', '/admin/calendar'],
+            ['Outbox', '/admin/outbox'],
             ["Today's Trips", '#today-trips'],
             ['Customers', '/admin/bookings'],
             ['Blocked Dates', '/admin/calendar'],
-            ['Promo Codes', '/admin/bookings'],
           ].map(([label, href]) => (
             <a key={label} href={href} className="rounded-2xl bg-white p-4 text-center font-black text-slate-900 shadow hover:bg-amber-50">
               {label}

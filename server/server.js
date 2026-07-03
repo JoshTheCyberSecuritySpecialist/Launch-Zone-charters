@@ -2222,7 +2222,7 @@ async function loadAdminBookingDetail(id) {
       .limit(100),
     supabase
       .from('booking_communications')
-      .select('id, channel, message_type, recipient, subject, sent_by, sent_at, status, provider_message_id, error_message, created_at')
+      .select('id, channel, message_type, recipient, subject, body, sent_by, sent_at, status, provider_message_id, error_message, reviewed_at, reviewed_by, created_at')
       .eq('booking_id', id)
       .order('created_at', { ascending: false })
       .limit(100),
@@ -2731,6 +2731,212 @@ app.post('/api/admin/bookings/:id/email-customer/send', async (req, res) => {
       }
     }
     return res.status(err.statusCode || 500).json({ error: err.message || 'Could not send email.' });
+  }
+});
+
+function normalizeOutboxRow(row) {
+  const booking = Array.isArray(row.bookings) ? row.bookings[0] : row.bookings || {};
+  const customer = Array.isArray(booking.customers) ? booking.customers[0] : booking.customers || {};
+  return {
+    id: row.id,
+    booking_id: row.booking_id,
+    booking_status: booking.status || null,
+    customer_name: customer.full_name || booking.name || 'Unknown customer',
+    customer_email: customer.email || booking.email || null,
+    channel: row.channel,
+    message_type: row.message_type,
+    recipient: row.recipient,
+    subject: row.subject,
+    body: row.body,
+    status: row.status,
+    sent_by: row.sent_by,
+    sent_at: row.sent_at,
+    created_at: row.created_at,
+    provider_message_id: row.provider_message_id,
+    error_message: row.error_message,
+    reviewed_at: row.reviewed_at || null,
+    reviewed_by: row.reviewed_by || null,
+  };
+}
+
+function outboxSelectColumns(includeBody = false) {
+  return [
+    'id',
+    'booking_id',
+    'channel',
+    'message_type',
+    'recipient',
+    'subject',
+    includeBody ? 'body' : null,
+    'status',
+    'sent_by',
+    'sent_at',
+    'created_at',
+    'provider_message_id',
+    'error_message',
+    'reviewed_at',
+    'reviewed_by',
+    'bookings(id, name, email, status, customers(full_name, email))',
+  ].filter(Boolean).join(', ');
+}
+
+function applyOutboxFilters(query, reqQuery) {
+  const from = cleanText(reqQuery.from, 40);
+  const to = cleanText(reqQuery.to, 40);
+  const channel = cleanText(reqQuery.channel, 20).toLowerCase();
+  const status = cleanText(reqQuery.status, 40).toLowerCase();
+  const messageType = cleanText(reqQuery.messageType || reqQuery.message_type, 80);
+  const recipient = cleanText(reqQuery.recipient, 200);
+  const bookingId = cleanText(reqQuery.bookingId || reqQuery.booking_id, 80);
+
+  let q = query;
+  if (from) q = q.gte('created_at', new Date(from).toISOString());
+  if (to) {
+    const end = new Date(to);
+    if (Number.isFinite(end.getTime())) {
+      end.setDate(end.getDate() + 1);
+      q = q.lt('created_at', end.toISOString());
+    }
+  }
+  if (['email', 'sms'].includes(channel)) q = q.eq('channel', channel);
+  if (status) q = q.eq('status', status);
+  if (messageType) q = q.eq('message_type', messageType);
+  if (recipient) q = q.ilike('recipient', `%${recipient}%`);
+  if (bookingId && isBookingUuidParam(bookingId)) q = q.eq('booking_id', bookingId);
+  return q;
+}
+
+app.get('/api/admin/outbox', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const limit = Math.min(Math.max(Number(req.query.limit || 100) || 100, 1), 250);
+    const search = cleanText(req.query.search, 200).toLowerCase();
+    let query = supabase
+      .from('booking_communications')
+      .select(outboxSelectColumns(false))
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    query = applyOutboxFilters(query, req.query);
+    const { data, error } = await query;
+    if (error) throw error;
+    let rows = (Array.isArray(data) ? data : []).map(normalizeOutboxRow);
+    if (search) {
+      rows = rows.filter((row) =>
+        [row.customer_name, row.customer_email, row.recipient, row.subject, row.booking_id]
+          .filter(Boolean)
+          .some((value) => String(value).toLowerCase().includes(search))
+      );
+    }
+    return res.json({ items: rows });
+  } catch (err) {
+    console.error('[admin-outbox:list]', err);
+    return res.status(500).json({ error: err.message || 'Could not load outbox.' });
+  }
+});
+
+app.get('/api/admin/outbox/:id', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const id = cleanText(req.params.id, 80);
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid communication id.' });
+    const { data, error } = await supabase
+      .from('booking_communications')
+      .select(outboxSelectColumns(true))
+      .eq('id', id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'Message not found.' });
+    return res.json({ item: normalizeOutboxRow(data) });
+  } catch (err) {
+    console.error('[admin-outbox:get]', err);
+    return res.status(500).json({ error: err.message || 'Could not load message.' });
+  }
+});
+
+app.post('/api/admin/outbox/:id/resend', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const id = cleanText(req.params.id, 80);
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid communication id.' });
+    const { data, error } = await supabase
+      .from('booking_communications')
+      .select(outboxSelectColumns(true))
+      .eq('id', id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'Message not found.' });
+    const row = normalizeOutboxRow(data);
+    if (!row.recipient) return res.status(400).json({ error: 'Recipient is missing.' });
+
+    const preview = {
+      messageType: row.message_type,
+      subject: row.subject || 'Launch Zone Charters',
+      emailBody: row.body || '',
+      emailHtml: customEmailHtml(row.body || ''),
+      smsBody: row.body || '',
+      recipients: {
+        email: row.channel === 'email' ? row.recipient : '',
+        phone: row.channel === 'sms' ? row.recipient : '',
+        rawPhone: row.channel === 'sms' ? row.recipient : '',
+      },
+    };
+    const resent =
+      row.channel === 'email'
+        ? await bookingCommunications.sendEmail({
+            supabase,
+            resend,
+            resendFrom,
+            bookingId: row.booking_id,
+            adminUserId: adminUser.id,
+            preview,
+          })
+        : await bookingCommunications.sendSms({
+            supabase,
+            bookingId: row.booking_id,
+            adminUserId: adminUser.id,
+            preview,
+          });
+
+    await bookingReliability.insertActivity(supabase, {
+      booking_id: row.booking_id,
+      event_type: 'communication_resent',
+      actor_type: 'admin',
+      actor_id: adminUser.id,
+      message: `Admin resent ${row.message_type.replace(/_/g, ' ')} via ${row.channel}.`,
+      payload: { original_communication_id: row.id, resent_communication_id: resent.id },
+    });
+
+    return res.json({ ok: true, item: resent });
+  } catch (err) {
+    console.error('[admin-outbox:resend]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not resend message.' });
+  }
+});
+
+app.patch('/api/admin/outbox/:id/reviewed', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const id = cleanText(req.params.id, 80);
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid communication id.' });
+    const reviewed = req.body?.reviewed !== false;
+    const { data, error } = await supabase
+      .from('booking_communications')
+      .update({
+        reviewed_at: reviewed ? new Date().toISOString() : null,
+        reviewed_by: reviewed ? adminUser.id : null,
+      })
+      .eq('id', id)
+      .select(outboxSelectColumns(true))
+      .single();
+    if (error) throw error;
+    return res.json({ ok: true, item: normalizeOutboxRow(data) });
+  } catch (err) {
+    console.error('[admin-outbox:reviewed]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not update review status.' });
   }
 });
 

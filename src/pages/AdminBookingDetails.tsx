@@ -15,11 +15,13 @@ type CommunicationRow = {
   message_type: string;
   recipient: string;
   subject?: string | null;
+  body?: string | null;
   sent_by?: string | null;
   sent_at?: string | null;
   status: string;
   error_message?: string | null;
   created_at: string;
+  reviewed_at?: string | null;
 };
 
 type CommunicationPreview = {
@@ -109,6 +111,13 @@ function formatEventName(value: string) {
   return String(value || 'event').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+function communicationStatusClass(status: string) {
+  const s = status.toLowerCase();
+  if (['sent', 'delivered', 'opened', 'clicked'].includes(s)) return 'bg-green-100 text-green-800';
+  if (s === 'failed') return 'bg-red-100 text-red-800';
+  return 'bg-amber-100 text-amber-900';
+}
+
 export default function AdminBookingDetails() {
   const { id = '' } = useParams();
   const navigate = useNavigate();
@@ -127,6 +136,8 @@ export default function AdminBookingDetails() {
     duplicates?: { email?: CommunicationRow | null; sms?: CommunicationRow | null };
     confirmDuplicate?: boolean;
   } | null>(null);
+  const [viewCommunication, setViewCommunication] = useState<CommunicationRow | null>(null);
+  const [communicationActionId, setCommunicationActionId] = useState<string | null>(null);
   const [communicationLoading, setCommunicationLoading] = useState<string | null>(null);
   const [emailConfig, setEmailConfig] = useState<EmailConfig | null>(null);
   const [emailRecipientEditable, setEmailRecipientEditable] = useState(false);
@@ -398,6 +409,39 @@ export default function AdminBookingDetails() {
       setNotice({ variant: 'error', text: err instanceof Error ? err.message : 'Could not send message.' });
     } finally {
       setCommunicationLoading(null);
+    }
+  };
+
+  const loadCommunicationDetail = async (row: CommunicationRow) => {
+    setCommunicationActionId(row.id);
+    try {
+      const res = await authedFetch(`/api/admin/outbox/${row.id}`);
+      const payload = (await res.json().catch(() => ({}))) as { item?: CommunicationRow; error?: string };
+      if (!res.ok || !payload.item) throw new Error(payload.error || 'Could not load message.');
+      setViewCommunication(payload.item);
+    } catch (err) {
+      setNotice({ variant: 'error', text: err instanceof Error ? err.message : 'Could not load message.' });
+    } finally {
+      setCommunicationActionId(null);
+    }
+  };
+
+  const resendSavedCommunication = async (row: CommunicationRow) => {
+    if (!window.confirm(`Send this message again to ${row.recipient}?`)) return;
+    setCommunicationActionId(row.id);
+    try {
+      const res = await authedFetch(`/api/admin/outbox/${row.id}/resend`, {
+        method: 'POST',
+        body: '{}',
+      });
+      const payload = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) throw new Error(payload.error || 'Could not resend message.');
+      setNotice({ variant: 'success', text: 'Message resent.' });
+      await load();
+    } catch (err) {
+      setNotice({ variant: 'error', text: err instanceof Error ? err.message : 'Could not resend message.' });
+    } finally {
+      setCommunicationActionId(null);
     }
   };
 
@@ -764,23 +808,49 @@ export default function AdminBookingDetails() {
               ))}
             </div>
             <div className="mt-5 border-t border-slate-200 pt-4">
-              <h3 className="text-sm font-black uppercase tracking-wide text-slate-500">History</h3>
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="text-sm font-black uppercase tracking-wide text-slate-500">History</h3>
+                <Link to="/admin/outbox" className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-bold text-slate-800 hover:bg-slate-50">
+                  Full Outbox
+                </Link>
+              </div>
               <div className="mt-3 space-y-2">
                 {(detail.communications || []).length === 0 ? (
                   <p className="text-sm text-slate-500">No communications logged yet.</p>
                 ) : (
-                  (detail.communications || []).slice(0, 8).map((row) => (
-                    <div key={row.id} className="rounded-lg border border-slate-200 p-3 text-sm">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="font-black">{row.message_type.replace(/_/g, ' ')}</span>
-                        <span className={`rounded-full px-2 py-0.5 text-xs font-bold ${row.status === 'sent' ? 'bg-green-100 text-green-800' : row.status === 'failed' ? 'bg-red-100 text-red-800' : 'bg-slate-100 text-slate-700'}`}>
-                          {row.status}
+                  (detail.communications || []).slice(0, 12).map((row) => (
+                    <div key={row.id} className="rounded-xl border border-slate-200 p-4 text-sm">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                        <div>
+                          <div className="font-black capitalize">{row.message_type.replace(/_/g, ' ')}</div>
+                          <div className="text-slate-600">{row.channel.toUpperCase()} · {row.recipient || 'No recipient'}</div>
+                          {row.subject ? <div className="mt-1 text-slate-700">{row.subject}</div> : null}
+                          <div className="text-xs text-slate-500">{new Date(row.sent_at || row.created_at).toLocaleString()}</div>
+                        </div>
+                        <span className={`w-fit rounded-full px-3 py-1 text-xs font-black capitalize ${communicationStatusClass(row.status)}`}>
+                          {row.status.replace(/_/g, ' ')}
                         </span>
                       </div>
-                      <div className="mt-1 text-slate-600">{row.channel.toUpperCase()} · {row.recipient || 'No recipient'}</div>
-                      <div className="text-xs text-slate-500">{new Date(row.sent_at || row.created_at).toLocaleString()}</div>
-                      <div className="text-xs text-slate-500">Sent by: {row.sent_by || 'system/admin'}</div>
+                      <div className="mt-2 text-xs text-slate-500">Sent by: {row.sent_by || 'system/admin'}</div>
                       {row.error_message ? <div className="mt-1 text-xs font-semibold text-red-700">{row.error_message}</div> : null}
+                      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                        <button
+                          type="button"
+                          onClick={() => void loadCommunicationDetail(row)}
+                          disabled={communicationActionId === row.id}
+                          className="rounded-lg border border-slate-300 px-3 py-2 font-bold text-slate-800 hover:bg-slate-50 disabled:opacity-50"
+                        >
+                          View
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void resendSavedCommunication(row)}
+                          disabled={communicationActionId === row.id}
+                          className="rounded-lg bg-green-700 px-3 py-2 font-bold text-white disabled:opacity-50"
+                        >
+                          Resend
+                        </button>
+                      </div>
                     </div>
                   ))
                 )}
@@ -860,6 +930,40 @@ export default function AdminBookingDetails() {
               >
                 {customEmailLoading === 'send' ? 'Sending...' : 'Send Email'}
               </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {viewCommunication ? (
+        <div className="fixed inset-0 z-[125] flex items-center justify-center bg-slate-950/70 p-4">
+          <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-2xl font-black">Communication</h2>
+                <p className="mt-1 text-sm capitalize text-slate-600">{viewCommunication.message_type.replace(/_/g, ' ')}</p>
+              </div>
+              <button type="button" onClick={() => setViewCommunication(null)} className="rounded-lg bg-slate-100 px-3 py-2 font-bold text-slate-800">
+                Close
+              </button>
+            </div>
+            <div className="mt-5 grid gap-4 sm:grid-cols-2">
+              <div className="rounded-xl border p-4"><div className="text-xs font-black uppercase text-slate-500">To</div><div className="mt-1 break-all">{viewCommunication.recipient}</div></div>
+              <div className="rounded-xl border p-4"><div className="text-xs font-black uppercase text-slate-500">Channel</div><div className="mt-1 uppercase">{viewCommunication.channel}</div></div>
+              <div className="rounded-xl border p-4"><div className="text-xs font-black uppercase text-slate-500">Subject</div><div className="mt-1">{viewCommunication.subject || '-'}</div></div>
+              <div className="rounded-xl border p-4"><div className="text-xs font-black uppercase text-slate-500">Status</div><div className="mt-1 capitalize">{viewCommunication.status}</div></div>
+              <div className="rounded-xl border p-4"><div className="text-xs font-black uppercase text-slate-500">Sent At</div><div className="mt-1">{new Date(viewCommunication.sent_at || viewCommunication.created_at).toLocaleString()}</div></div>
+              <div className="rounded-xl border p-4"><div className="text-xs font-black uppercase text-slate-500">Sent By</div><div className="mt-1 break-all">{viewCommunication.sent_by || 'system/admin'}</div></div>
+            </div>
+            {viewCommunication.error_message ? <div className="mt-4 rounded-xl bg-red-100 p-4 font-semibold text-red-800">{viewCommunication.error_message}</div> : null}
+            <div className="mt-4 rounded-xl border p-4">
+              <div className="text-xs font-black uppercase text-slate-500">Body</div>
+              <pre className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap rounded-lg bg-slate-100 p-4 text-sm">{viewCommunication.body || '-'}</pre>
+            </div>
+            <div className="mt-6 grid gap-2 sm:grid-cols-3">
+              <button type="button" onClick={() => setViewCommunication(null)} className="rounded-xl border px-5 py-4 text-lg font-black">Close</button>
+              <button type="button" onClick={() => void resendSavedCommunication(viewCommunication)} disabled={communicationActionId === viewCommunication.id} className="rounded-xl bg-green-700 px-5 py-4 text-lg font-black text-white disabled:opacity-50">Resend</button>
+              <Link to="/admin/outbox" className="rounded-xl bg-amber-600 px-5 py-4 text-center text-lg font-black text-white">Open Outbox</Link>
             </div>
           </div>
         </div>

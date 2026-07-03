@@ -37,6 +37,52 @@ type BlockedDate = {
   boat_id: string | null;
   start_time: string;
   end_time: string;
+  title?: string | null;
+  reason?: string | null;
+  location?: string | null;
+  all_day?: boolean;
+  notes?: string | null;
+};
+
+type CalendarItem = {
+  id: string;
+  item_type: 'blocked_time' | 'admin_duty';
+  title: string;
+  reason?: string | null;
+  duty_type?: string | null;
+  assigned_to?: string | null;
+  boat_id?: string | null;
+  location?: string | null;
+  start_time: string;
+  end_time: string;
+  all_day: boolean;
+  blocks_availability: boolean;
+  priority: 'low' | 'normal' | 'high';
+  notes?: string | null;
+  completed: boolean;
+};
+
+type ChoiceSlot = { date: string; hour: number; boatId?: string | null } | null;
+
+type CalendarItemForm = {
+  id?: string;
+  itemType: 'blocked_time' | 'admin_duty';
+  step: number;
+  title: string;
+  reason: string;
+  dutyType: string;
+  assignedTo: string;
+  boatId: string;
+  location: string;
+  date: string;
+  startTime: string;
+  endTime: string;
+  allDay: boolean;
+  blocksAvailability: boolean;
+  priority: 'low' | 'normal' | 'high';
+  notes: string;
+  completed: boolean;
+  saveAnyway?: boolean;
 };
 
 type DragMode = 'move' | 'resize-start' | 'resize-end';
@@ -66,6 +112,12 @@ type QuickMenuState = {
   y: number;
 };
 
+type ItemMenuState = {
+  item: CalendarItem;
+  x: number;
+  y: number;
+};
+
 const pad = (n: number) => String(n).padStart(2, '0');
 const ymd = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const addDays = (d: Date, days: number) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + days);
@@ -74,6 +126,28 @@ const startOfWeek = (d: Date) => addDays(startOfDay(d), -startOfDay(d).getDay())
 const startOfMonth = (d: Date) => new Date(d.getFullYear(), d.getMonth(), 1);
 const hours = Array.from({ length: 14 }, (_, i) => 7 + i);
 const blockingStatuses = new Set(['hold', 'pending', 'pending_verification', 'confirmed', 'ready_for_departure', 'completed']);
+const blankItemForm = (itemType: 'blocked_time' | 'admin_duty', date = todayYmd(), hour = 9, boatId = ''): CalendarItemForm => ({
+  itemType,
+  step: 1,
+  title: itemType === 'blocked_time' ? 'Blocked Time' : 'Admin Duty',
+  reason: '',
+  dutyType: '',
+  assignedTo: '',
+  boatId: boatId || '',
+  location: '',
+  date,
+  startTime: `${pad(hour)}:00`,
+  endTime: `${pad(Math.min(hour + 1, 23))}:00`,
+  allDay: false,
+  blocksAvailability: itemType === 'blocked_time',
+  priority: 'normal',
+  notes: '',
+  completed: false,
+});
+
+function todayYmd() {
+  return new Date().toISOString().slice(0, 10);
+}
 
 function viewRange(view: CalendarView, anchor: Date) {
   if (view === 'day') {
@@ -171,12 +245,18 @@ export default function AdminCalendar() {
   const [boats, setBoats] = useState<BoatRow[]>([]);
   const [bookings, setBookings] = useState<CalendarBooking[]>([]);
   const [blockedDates, setBlockedDates] = useState<BlockedDate[]>([]);
+  const [calendarItems, setCalendarItems] = useState<CalendarItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [dragDraft, setDragDraft] = useState<DragDraft | null>(null);
   const [hoverPreview, setHoverPreview] = useState<MovePreview | null>(null);
   const [pendingMove, setPendingMove] = useState<MovePreview | null>(null);
   const [quickMenu, setQuickMenu] = useState<QuickMenuState | null>(null);
+  const [itemMenu, setItemMenu] = useState<ItemMenuState | null>(null);
+  const [choiceSlot, setChoiceSlot] = useState<ChoiceSlot>(null);
+  const [itemForm, setItemForm] = useState<CalendarItemForm | null>(null);
+  const [itemConflicts, setItemConflicts] = useState<any | null>(null);
+  const [savingItem, setSavingItem] = useState(false);
   const [undoMove, setUndoMove] = useState<{ booking: CalendarBooking; expiresAt: number } | null>(null);
   const undoTimer = useRef<number | null>(null);
   const [filters, setFilters] = useState({
@@ -186,6 +266,11 @@ export default function AdminCalendar() {
     status: '',
     source: '',
     search: '',
+    showBookings: true,
+    showHolds: true,
+    showBlocks: true,
+    showDuties: true,
+    showCompletedDuties: false,
   });
 
   const range = useMemo(() => viewRange(view, anchor), [anchor, view]);
@@ -235,15 +320,27 @@ export default function AdminCalendar() {
       if (filters.status) params.set('status', filters.status);
       if (filters.source) params.set('source', filters.source);
       if (filters.search.trim()) params.set('search', filters.search.trim());
-      const res = await authedFetch(`/api/admin/calendar-bookings?${params.toString()}`);
+      const itemParams = new URLSearchParams({
+        from: range.from.toISOString(),
+        to: range.to.toISOString(),
+        includeCompleted: String(filters.showCompletedDuties),
+      });
+      if (filters.boatId) itemParams.set('boatId', filters.boatId);
+      const [res, itemRes] = await Promise.all([
+        authedFetch(`/api/admin/calendar-bookings?${params.toString()}`),
+        authedFetch(`/api/admin/calendar-items?${itemParams.toString()}`),
+      ]);
       const payload = (await res.json().catch(() => ({}))) as {
         bookings?: CalendarBooking[];
         blockedDates?: BlockedDate[];
         error?: string;
       };
       if (!res.ok) throw new Error(payload.error || 'Could not load calendar.');
+      const itemPayload = (await itemRes.json().catch(() => ({}))) as { items?: CalendarItem[]; error?: string };
+      if (!itemRes.ok) throw new Error(itemPayload.error || 'Could not load duties and blocked times.');
       setBookings(Array.isArray(payload.bookings) ? payload.bookings : []);
       setBlockedDates(Array.isArray(payload.blockedDates) ? payload.blockedDates : []);
+      setCalendarItems(Array.isArray(itemPayload.items) ? itemPayload.items : []);
     } catch (err) {
       setNotice(err instanceof Error ? err.message : 'Could not load calendar.');
     } finally {
@@ -451,6 +548,124 @@ export default function AdminCalendar() {
     }
   };
 
+  const openAddChoice = (date = todayYmd(), hour = 9, boatId?: string | null) => {
+    setChoiceSlot({ date, hour, boatId: boatId || filters.boatId || '' });
+  };
+
+  const openItemForm = (itemType: 'blocked_time' | 'admin_duty', date?: string, hour?: number, boatId?: string | null) => {
+    setChoiceSlot(null);
+    setItemConflicts(null);
+    setItemForm(blankItemForm(itemType, date || todayYmd(), hour ?? 9, boatId || filters.boatId || ''));
+  };
+
+  const editItem = (item: CalendarItem) => {
+    const start = new Date(item.start_time);
+    const end = new Date(item.end_time);
+    setItemMenu(null);
+    setItemConflicts(null);
+    setItemForm({
+      id: item.id,
+      itemType: item.item_type,
+      step: 5,
+      title: item.title || '',
+      reason: item.reason || '',
+      dutyType: item.duty_type || '',
+      assignedTo: item.assigned_to || '',
+      boatId: item.boat_id || '',
+      location: item.location || '',
+      date: ymd(start),
+      startTime: hhmmFromIso(item.start_time),
+      endTime: hhmmFromIso(item.end_time),
+      allDay: item.all_day,
+      blocksAvailability: item.blocks_availability,
+      priority: item.priority || 'normal',
+      notes: item.notes || '',
+      completed: item.completed,
+    });
+  };
+
+  const saveCalendarItem = async (addAnother = false, saveAnyway = false) => {
+    if (!itemForm) return;
+    setSavingItem(true);
+    setItemConflicts(null);
+    try {
+      const start = itemForm.allDay ? new Date(`${itemForm.date}T00:00`) : new Date(`${itemForm.date}T${itemForm.startTime}`);
+      const end = itemForm.allDay ? new Date(start.getTime() + 24 * 60 * 60 * 1000) : new Date(`${itemForm.date}T${itemForm.endTime}`);
+      const body = {
+        item_type: itemForm.itemType,
+        title: itemForm.title,
+        reason: itemForm.reason,
+        duty_type: itemForm.dutyType,
+        assigned_to: itemForm.assignedTo,
+        boat_id: itemForm.boatId || null,
+        location: itemForm.location || null,
+        start_time: start.toISOString(),
+        end_time: end.toISOString(),
+        all_day: itemForm.allDay,
+        blocks_availability: itemForm.itemType === 'blocked_time' ? true : itemForm.blocksAvailability,
+        priority: itemForm.priority,
+        notes: itemForm.notes,
+        completed: itemForm.completed,
+        saveAnyway,
+      };
+      const res = await authedFetch(`/api/admin/calendar-items${itemForm.id ? `/${itemForm.id}` : ''}`, {
+        method: itemForm.id ? 'PATCH' : 'POST',
+        body: JSON.stringify(body),
+      });
+      const payload = (await res.json().catch(() => ({}))) as { item?: CalendarItem; conflicts?: any; error?: string };
+      if (res.status === 409) {
+        setItemConflicts(payload.conflicts || {});
+        throw new Error(payload.error || 'This item conflicts with existing bookings.');
+      }
+      if (!res.ok || !payload.item) throw new Error(payload.error || 'Could not save calendar item.');
+      setCalendarItems((prev) => {
+        const exists = prev.some((row) => row.id === payload.item!.id);
+        return exists ? prev.map((row) => (row.id === payload.item!.id ? payload.item! : row)) : [...prev, payload.item!];
+      });
+      setNotice(`Saved: ${payload.item.title} on ${new Date(payload.item.start_time).toLocaleDateString()} from ${timeLabel(payload.item.start_time, payload.item.end_time)}.`);
+      if (addAnother) setItemForm(blankItemForm(itemForm.itemType, itemForm.date, Number(itemForm.startTime.slice(0, 2)) || 9, itemForm.boatId));
+      else setItemForm(null);
+      await loadBookings();
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : 'Could not save calendar item.');
+    } finally {
+      setSavingItem(false);
+    }
+  };
+
+  const deleteCalendarItem = async (item: CalendarItem) => {
+    const label = item.item_type === 'blocked_time' ? 'remove this blocked time' : 'delete this admin duty';
+    if (!window.confirm(`Are you sure you want to ${label}?`)) return;
+    try {
+      const res = await authedFetch(`/api/admin/calendar-items/${item.id}?item_type=${item.item_type}`, { method: 'DELETE' });
+      const payload = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) throw new Error(payload.error || 'Could not delete calendar item.');
+      setCalendarItems((prev) => prev.filter((row) => row.id !== item.id));
+      setItemForm(null);
+      setItemMenu(null);
+      setNotice(item.item_type === 'blocked_time' ? 'Blocked time removed.' : 'Admin duty deleted.');
+      await loadBookings();
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : 'Could not delete calendar item.');
+    }
+  };
+
+  const markItemComplete = async (item: CalendarItem) => {
+    try {
+      const res = await authedFetch(`/api/admin/calendar-items/${item.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ ...item, item_type: item.item_type, completed: true }),
+      });
+      const payload = (await res.json().catch(() => ({}))) as { item?: CalendarItem; error?: string };
+      if (!res.ok || !payload.item) throw new Error(payload.error || 'Could not mark complete.');
+      setCalendarItems((prev) => prev.map((row) => (row.id === item.id ? payload.item! : row)));
+      setItemMenu(null);
+      setNotice('Admin duty marked complete.');
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : 'Could not mark complete.');
+    }
+  };
+
   const byDate = useMemo(() => {
     const map = new Map<string, CalendarBooking[]>();
     for (const booking of bookings) {
@@ -459,6 +674,21 @@ export default function AdminCalendar() {
     }
     return map;
   }, [bookings]);
+
+  const itemsByDate = useMemo(() => {
+    const map = new Map<string, CalendarItem[]>();
+    const visible = calendarItems.filter((item) => {
+      if (item.item_type === 'blocked_time' && !filters.showBlocks) return false;
+      if (item.item_type === 'admin_duty' && !filters.showDuties) return false;
+      if (item.item_type === 'admin_duty' && item.completed && !filters.showCompletedDuties) return false;
+      return true;
+    });
+    for (const item of visible) {
+      const key = ymd(new Date(item.start_time));
+      map.set(key, [...(map.get(key) || []), item]);
+    }
+    return map;
+  }, [calendarItems, filters.showBlocks, filters.showCompletedDuties, filters.showDuties]);
 
   const sidebar = {
     today: bookings.filter((b) => ymd(new Date(b.start_time)) === ymd(new Date())),
@@ -493,7 +723,10 @@ export default function AdminCalendar() {
       role="button"
       tabIndex={0}
       draggable={booking.status !== 'cancelled'}
-      onClick={() => openBooking(booking)}
+      onClick={(event) => {
+        event.stopPropagation();
+        openBooking(booking);
+      }}
       onKeyDown={(event) => {
         if (event.key === 'Enter') openBooking(booking);
       }}
@@ -562,6 +795,40 @@ export default function AdminCalendar() {
     </div>
   );
 
+  const itemClass = (item: CalendarItem) => {
+    if (item.item_type === 'blocked_time') return 'border-slate-300 bg-slate-200 text-slate-900';
+    if (item.completed) return 'border-green-200 bg-green-100 text-green-900';
+    if (item.priority === 'high') return 'border-red-200 bg-red-100 text-red-900';
+    return 'border-yellow-200 bg-yellow-100 text-yellow-950';
+  };
+
+  const renderCalendarItemCard = (item: CalendarItem, compact = false) => (
+    <button
+      key={`${item.item_type}-${item.id}`}
+      type="button"
+      onClick={(event) => {
+        event.stopPropagation();
+        editItem(item);
+      }}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        setItemMenu({ item, x: event.clientX, y: event.clientY });
+      }}
+      className={`w-full rounded-lg border p-2 text-left text-xs font-bold shadow-sm transition hover:-translate-y-0.5 ${itemClass(item)}`}
+      aria-label={`Edit ${item.title}`}
+    >
+      <div className="text-sm font-black">{compact ? `${hhmmFromIso(item.start_time)} ${item.title}` : item.title}</div>
+      {!compact ? (
+        <>
+          <div>{item.item_type === 'blocked_time' ? 'Blocked Time' : item.duty_type || 'Admin Duty'}</div>
+          <div>{timeLabel(item.start_time, item.end_time)}</div>
+          <div>{item.location || 'All locations'} · {item.boat_id ? boats.find((boat) => boat.id === item.boat_id)?.name || 'Selected boat' : 'All boats'}</div>
+        </>
+      ) : null}
+    </button>
+  );
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
       <div className="border-b border-slate-200 bg-slate-900 py-6 text-white">
@@ -574,9 +841,15 @@ export default function AdminCalendar() {
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Link to="/admin/staff-booking" className="rounded-lg bg-green-700 px-4 py-3 font-semibold text-white hover:bg-green-600">
-              Staff Booking
-            </Link>
+            <button type="button" onClick={() => openAddChoice()} className="rounded-lg bg-green-700 px-5 py-4 text-lg font-black text-white hover:bg-green-600">
+              + New Booking
+            </button>
+            <button type="button" onClick={() => openItemForm('blocked_time')} className="rounded-lg bg-slate-700 px-5 py-4 text-lg font-black text-white hover:bg-slate-600">
+              + Block Time
+            </button>
+            <button type="button" onClick={() => openItemForm('admin_duty')} className="rounded-lg bg-yellow-500 px-5 py-4 text-lg font-black text-slate-950 hover:bg-yellow-400">
+              + Add Admin Duty
+            </button>
             <Link to="/admin" className="inline-flex items-center gap-2 rounded-lg bg-slate-800 px-4 py-3 font-semibold hover:bg-slate-700">
               <ArrowLeft className="h-4 w-4" />
               Dashboard
@@ -618,14 +891,15 @@ export default function AdminCalendar() {
                 <button type="button" onClick={() => setAnchor(view === 'month' ? new Date(anchor.getFullYear(), anchor.getMonth() - 1, 1) : addDays(anchor, view === 'day' ? -1 : -7))} className="rounded-lg bg-slate-100 px-3 py-2">
                   <ChevronLeft className="h-5 w-5" />
                 </button>
-                <button type="button" onClick={() => setAnchor(new Date())} className="rounded-lg bg-slate-100 px-4 py-2 font-semibold">
+                <button type="button" onClick={() => setAnchor(new Date())} className="rounded-lg bg-slate-900 px-5 py-3 text-lg font-black text-white">
                   Today
                 </button>
                 <button type="button" onClick={() => setAnchor(view === 'month' ? new Date(anchor.getFullYear(), anchor.getMonth() + 1, 1) : addDays(anchor, view === 'day' ? 1 : 7))} className="rounded-lg bg-slate-100 px-3 py-2">
                   <ChevronRight className="h-5 w-5" />
                 </button>
-                <button type="button" onClick={() => void loadBookings()} className="rounded-lg bg-slate-100 px-3 py-2">
+                <button type="button" onClick={() => void loadBookings()} className="inline-flex items-center gap-2 rounded-lg bg-amber-600 px-5 py-3 text-lg font-black text-white">
                   <RefreshCw className={`h-5 w-5 ${loading ? 'animate-spin' : ''}`} />
+                  Refresh
                 </button>
               </div>
             </div>
@@ -659,6 +933,25 @@ export default function AdminCalendar() {
               <input value={filters.search} onChange={(e) => setFilters((f) => ({ ...f, search: e.target.value }))} placeholder="Search customer, phone, email, ID" className="rounded-lg border px-3 py-2" />
             </div>
           </div>
+          <div className="mt-4 flex flex-wrap gap-3 border-t border-slate-200 pt-4">
+            {[
+              ['showBookings', 'Bookings'],
+              ['showHolds', 'Holds'],
+              ['showBlocks', 'Blocks'],
+              ['showDuties', 'Duties'],
+              ['showCompletedDuties', 'Completed duties'],
+            ].map(([key, label]) => (
+              <label key={key} className="inline-flex items-center gap-2 rounded-lg bg-slate-100 px-4 py-3 text-base font-bold text-slate-900">
+                <input
+                  type="checkbox"
+                  checked={Boolean(filters[key as keyof typeof filters])}
+                  onChange={(event) => setFilters((prev) => ({ ...prev, [key]: event.target.checked }))}
+                  className="h-5 w-5"
+                />
+                {label}
+              </label>
+            ))}
+          </div>
         </div>
 
         <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
@@ -667,14 +960,18 @@ export default function AdminCalendar() {
               <div className="grid grid-cols-7 border-l border-t border-slate-200">
                 {range.days.map((day) => {
                   const key = ymd(day);
-                  const rows = byDate.get(key) || [];
+                  const rows = (byDate.get(key) || []).filter((booking) =>
+                    booking.status === 'hold' ? filters.showHolds : filters.showBookings
+                  );
+                  const itemRows = itemsByDate.get(key) || [];
                   const inMonth = day.getMonth() === anchor.getMonth();
                   return (
                     <div
                       key={key}
                       role="button"
                       tabIndex={0}
-                      onDoubleClick={() => openStaffBooking(key, 9)}
+                      onClick={() => openAddChoice(key, 9)}
+                      onDoubleClick={() => openAddChoice(key, 9)}
                       onDragOver={(event) => onSlotDragOver(event, key, 9, filters.boatId || null)}
                       onDrop={(event) => onSlotDrop(event, key, 9, filters.boatId || null)}
                       className={`min-h-[135px] border-b border-r border-slate-200 p-2 text-left align-top transition ${
@@ -692,8 +989,9 @@ export default function AdminCalendar() {
                       <div className="font-bold">{day.getDate()}</div>
                       {slotBlocked(key, 9, filters.boatId || null) ? <div className="mt-1 text-xs font-bold text-slate-600">Blocked</div> : null}
                       <div className="mt-2 space-y-1">
+                        {itemRows.slice(0, 3).map((item) => renderCalendarItemCard(item, true))}
                         {rows.slice(0, 4).map((booking) => renderBookingCard(booking, true))}
-                        {rows.length > 4 ? <div className="text-xs font-semibold text-slate-500">+{rows.length - 4} more</div> : null}
+                        {rows.length + itemRows.length > 7 ? <div className="text-xs font-semibold text-slate-500">+{rows.length + itemRows.length - 7} more</div> : null}
                       </div>
                     </div>
                   );
@@ -715,7 +1013,12 @@ export default function AdminCalendar() {
                       </div>
                       {range.days.map((day) => {
                         const key = ymd(day);
-                        const rows = (byDate.get(key) || []).filter((booking) => new Date(booking.start_time).getHours() === hour);
+                        const rows = (byDate.get(key) || []).filter(
+                          (booking) =>
+                            new Date(booking.start_time).getHours() === hour &&
+                            (booking.status === 'hold' ? filters.showHolds : filters.showBookings)
+                        );
+                        const itemRows = (itemsByDate.get(key) || []).filter((item) => new Date(item.start_time).getHours() === hour);
                         const targetBoatId = filters.boatId || null;
                         const blocked = slotBlocked(key, hour, targetBoatId);
                         const previewHere = hoverPreview?.date === key && hoverPreview.hour === hour;
@@ -724,7 +1027,8 @@ export default function AdminCalendar() {
                             key={`${key}-${hour}`}
                             role="button"
                             tabIndex={0}
-                            onDoubleClick={() => openStaffBooking(key, hour, targetBoatId || undefined)}
+                            onClick={() => openAddChoice(key, hour, targetBoatId)}
+                            onDoubleClick={() => openAddChoice(key, hour, targetBoatId)}
                             onDragOver={(event) => onSlotDragOver(event, key, hour, targetBoatId)}
                             onDrop={(event) => onSlotDrop(event, key, hour, targetBoatId)}
                             className={`min-h-[96px] border-b border-r border-slate-200 p-2 text-left transition ${
@@ -744,6 +1048,7 @@ export default function AdminCalendar() {
                               </div>
                             ) : null}
                             <div className="space-y-1">
+                              {itemRows.map((item) => renderCalendarItemCard(item))}
                               {rows.map((booking) => renderBookingCard(booking))}
                             </div>
                           </div>
@@ -815,6 +1120,194 @@ export default function AdminCalendar() {
             </div>
           </div>
         </div>
+      ) : null}
+
+      {choiceSlot ? (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/70 p-4">
+          <div className="w-full max-w-xl rounded-2xl bg-white p-6 shadow-2xl">
+            <h2 className="text-3xl font-black">What do you want to add?</h2>
+            <p className="mt-2 text-lg text-slate-600">
+              {choiceSlot.date} at {pad(choiceSlot.hour)}:00
+            </p>
+            <div className="mt-6 grid gap-3">
+              <button type="button" onClick={() => openStaffBooking(choiceSlot.date, choiceSlot.hour, choiceSlot.boatId || undefined)} className="rounded-xl bg-green-700 px-6 py-5 text-xl font-black text-white">
+                New Booking
+              </button>
+              <button type="button" onClick={() => openItemForm('blocked_time', choiceSlot.date, choiceSlot.hour, choiceSlot.boatId)} className="rounded-xl bg-slate-700 px-6 py-5 text-xl font-black text-white">
+                Block Time
+              </button>
+              <button type="button" onClick={() => openItemForm('admin_duty', choiceSlot.date, choiceSlot.hour, choiceSlot.boatId)} className="rounded-xl bg-yellow-500 px-6 py-5 text-xl font-black text-slate-950">
+                Admin Duty
+              </button>
+              <button type="button" onClick={() => setChoiceSlot(null)} className="rounded-xl border border-slate-300 px-6 py-5 text-xl font-black text-slate-900">
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {itemForm ? (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/70 p-4">
+          <div className="max-h-[92vh] w-full max-w-4xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h2 className="text-3xl font-black">{itemForm.id ? 'Edit Calendar Item' : 'Add to Calendar'}</h2>
+                <p className="mt-1 text-lg text-slate-600">Step {itemForm.step} of 5</p>
+              </div>
+              <button type="button" onClick={() => setItemForm(null)} className="rounded-xl border border-slate-300 px-5 py-3 text-lg font-black text-slate-900">
+                Cancel
+              </button>
+            </div>
+
+            <div className="mt-5 flex flex-wrap gap-2">
+              {[1, 2, 3, 4, 5].map((step) => (
+                <button
+                  key={step}
+                  type="button"
+                  onClick={() => setItemForm((prev) => (prev ? { ...prev, step } : prev))}
+                  className={`rounded-full px-4 py-2 font-bold ${itemForm.step === step ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-800'}`}
+                >
+                  Step {step}
+                </button>
+              ))}
+            </div>
+
+            {itemConflicts ? (
+              <div className="mt-5 rounded-xl border border-red-200 bg-red-50 p-4 text-red-950">
+                <h3 className="text-xl font-black">This block conflicts with existing bookings:</h3>
+                <div className="mt-2 space-y-2">
+                  {(itemConflicts.bookings || []).map((booking: any) => (
+                    <div key={booking.id} className="rounded-lg bg-white p-3">
+                      <div className="font-bold">{booking.customer_name}</div>
+                      <div>{booking.boat_name} · {timeLabel(booking.start_time, booking.end_time)}</div>
+                      <Link to={`/admin/bookings/${booking.id}`} className="font-bold text-red-700 underline">Open Booking</Link>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-4 flex flex-wrap gap-3">
+                  <button type="button" onClick={() => setItemConflicts(null)} className="rounded-xl border border-red-300 px-5 py-3 text-lg font-black">Cancel</button>
+                  <button type="button" onClick={() => void saveCalendarItem(false, true)} className="rounded-xl bg-red-700 px-5 py-3 text-lg font-black text-white">Save Anyway</button>
+                </div>
+              </div>
+            ) : null}
+
+            <div className="mt-6 rounded-2xl border border-slate-200 p-5">
+              {itemForm.step === 1 ? (
+                <div>
+                  <h3 className="text-2xl font-black">Step 1: What are you adding?</h3>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                    <button type="button" onClick={() => setItemForm((p) => p && { ...p, itemType: 'admin_duty', title: p.title === 'Blocked Time' ? 'Admin Duty' : p.title, blocksAvailability: false })} className={`rounded-xl px-5 py-5 text-xl font-black ${itemForm.itemType === 'admin_duty' ? 'bg-yellow-500 text-slate-950' : 'bg-slate-100'}`}>Admin Duty</button>
+                    <button type="button" onClick={() => setItemForm((p) => p && { ...p, itemType: 'blocked_time', title: p.title === 'Admin Duty' ? 'Blocked Time' : p.title, blocksAvailability: true })} className={`rounded-xl px-5 py-5 text-xl font-black ${itemForm.itemType === 'blocked_time' ? 'bg-slate-700 text-white' : 'bg-slate-100'}`}>Blocked Time</button>
+                    <button type="button" onClick={() => openStaffBooking(itemForm.date, Number(itemForm.startTime.slice(0, 2)) || 9, itemForm.boatId || undefined)} className="rounded-xl bg-green-700 px-5 py-5 text-xl font-black text-white">Booking</button>
+                  </div>
+                </div>
+              ) : null}
+
+              {itemForm.step === 2 ? (
+                <div>
+                  <h3 className="text-2xl font-black">Step 2: When?</h3>
+                  <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                    <label className="text-lg font-bold">Date<input type="date" value={itemForm.date} onChange={(e) => setItemForm((p) => p && { ...p, date: e.target.value })} className="mt-2 min-h-[54px] w-full rounded-xl border px-4 text-lg" /></label>
+                    <label className="flex items-center gap-3 text-lg font-bold"><input type="checkbox" checked={itemForm.allDay} onChange={(e) => setItemForm((p) => p && { ...p, allDay: e.target.checked })} className="h-6 w-6" /> All day</label>
+                    <label className="text-lg font-bold">Start Time<input type="time" disabled={itemForm.allDay} value={itemForm.startTime} onChange={(e) => setItemForm((p) => p && { ...p, startTime: e.target.value })} className="mt-2 min-h-[54px] w-full rounded-xl border px-4 text-lg disabled:opacity-50" /></label>
+                    <label className="text-lg font-bold">End Time<input type="time" disabled={itemForm.allDay} value={itemForm.endTime} onChange={(e) => setItemForm((p) => p && { ...p, endTime: e.target.value })} className="mt-2 min-h-[54px] w-full rounded-xl border px-4 text-lg disabled:opacity-50" /></label>
+                  </div>
+                </div>
+              ) : null}
+
+              {itemForm.step === 3 ? (
+                <div>
+                  <h3 className="text-2xl font-black">Step 3: What boat/location?</h3>
+                  <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                    <label className="text-lg font-bold">Boat<select value={itemForm.boatId} onChange={(e) => setItemForm((p) => p && { ...p, boatId: e.target.value })} className="mt-2 min-h-[54px] w-full rounded-xl border px-4 text-lg"><option value="">All boats</option>{boats.map((boat) => <option key={boat.id} value={boat.id}>{boat.name}</option>)}</select></label>
+                    <label className="text-lg font-bold">Location<select value={itemForm.location} onChange={(e) => setItemForm((p) => p && { ...p, location: e.target.value })} className="mt-2 min-h-[54px] w-full rounded-xl border px-4 text-lg"><option value="">All locations</option><option>Port Orange</option><option>Titusville</option></select></label>
+                  </div>
+                </div>
+              ) : null}
+
+              {itemForm.step === 4 ? (
+                <div>
+                  <h3 className="text-2xl font-black">Step 4: Details</h3>
+                  <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                    <label className="text-lg font-bold">Title<input value={itemForm.title} onChange={(e) => setItemForm((p) => p && { ...p, title: e.target.value })} className="mt-2 min-h-[54px] w-full rounded-xl border px-4 text-lg" /></label>
+                    <label className="text-lg font-bold">Reason<input value={itemForm.reason} onChange={(e) => setItemForm((p) => p && { ...p, reason: e.target.value })} placeholder="Maintenance, weather, call customer..." className="mt-2 min-h-[54px] w-full rounded-xl border px-4 text-lg" /></label>
+                    {itemForm.itemType === 'admin_duty' ? (
+                      <>
+                        <label className="text-lg font-bold">Duty Type<input value={itemForm.dutyType} onChange={(e) => setItemForm((p) => p && { ...p, dutyType: e.target.value })} className="mt-2 min-h-[54px] w-full rounded-xl border px-4 text-lg" /></label>
+                        <label className="text-lg font-bold">Assigned To<input value={itemForm.assignedTo} onChange={(e) => setItemForm((p) => p && { ...p, assignedTo: e.target.value })} className="mt-2 min-h-[54px] w-full rounded-xl border px-4 text-lg" /></label>
+                        <label className="text-lg font-bold">Priority<select value={itemForm.priority} onChange={(e) => setItemForm((p) => p && { ...p, priority: e.target.value as CalendarItemForm['priority'] })} className="mt-2 min-h-[54px] w-full rounded-xl border px-4 text-lg"><option value="low">Low</option><option value="normal">Normal</option><option value="high">High</option></select></label>
+                        <label className="flex items-center gap-3 text-lg font-bold"><input type="checkbox" checked={itemForm.blocksAvailability} onChange={(e) => setItemForm((p) => p && { ...p, blocksAvailability: e.target.checked })} className="h-6 w-6" /> Blocks availability</label>
+                        <label className="flex items-center gap-3 text-lg font-bold"><input type="checkbox" checked={itemForm.completed} onChange={(e) => setItemForm((p) => p && { ...p, completed: e.target.checked })} className="h-6 w-6" /> Completed</label>
+                      </>
+                    ) : null}
+                    <label className="text-lg font-bold sm:col-span-2">Notes<textarea value={itemForm.notes} onChange={(e) => setItemForm((p) => p && { ...p, notes: e.target.value })} className="mt-2 min-h-[120px] w-full rounded-xl border p-4 text-lg" /></label>
+                  </div>
+                </div>
+              ) : null}
+
+              {itemForm.step === 5 ? (
+                <div>
+                  <h3 className="text-2xl font-black">Step 5: Review & Save</h3>
+                  <div className="mt-4 rounded-xl bg-slate-100 p-4 text-lg">
+                    <p><strong>Type:</strong> {itemForm.itemType === 'blocked_time' ? 'Blocked Time' : 'Admin Duty'}</p>
+                    <p><strong>Title:</strong> {itemForm.title}</p>
+                    <p><strong>When:</strong> {itemForm.date} {itemForm.allDay ? 'All day' : `${itemForm.startTime} - ${itemForm.endTime}`}</p>
+                    <p><strong>Boat:</strong> {itemForm.boatId ? boats.find((boat) => boat.id === itemForm.boatId)?.name : 'All boats'}</p>
+                    <p><strong>Location:</strong> {itemForm.location || 'All locations'}</p>
+                    <p><strong>Blocks availability:</strong> {itemForm.itemType === 'blocked_time' || itemForm.blocksAvailability ? 'Yes' : 'No'}</p>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+
+            <div className="mt-6 flex flex-wrap justify-between gap-3">
+              <div className="flex flex-wrap gap-3">
+                {itemForm.id ? (
+                  <button type="button" onClick={() => void deleteCalendarItem({ ...(itemForm as any), id: itemForm.id, item_type: itemForm.itemType, start_time: new Date(`${itemForm.date}T${itemForm.startTime}`).toISOString(), end_time: new Date(`${itemForm.date}T${itemForm.endTime}`).toISOString() })} className="rounded-xl bg-red-700 px-6 py-4 text-lg font-black text-white">
+                    {itemForm.itemType === 'blocked_time' ? 'Remove Block' : 'Delete'}
+                  </button>
+                ) : null}
+                {itemForm.itemType === 'admin_duty' && itemForm.id ? (
+                  <button type="button" onClick={() => setItemForm((p) => p && { ...p, completed: true, step: 5 })} className="rounded-xl bg-green-700 px-6 py-4 text-lg font-black text-white">
+                    Mark Complete
+                  </button>
+                ) : null}
+              </div>
+              <div className="flex flex-wrap gap-3">
+                <button type="button" onClick={() => setItemForm(null)} className="rounded-xl border border-slate-300 px-6 py-4 text-lg font-black text-slate-900">Cancel</button>
+                {itemForm.step > 1 ? <button type="button" onClick={() => setItemForm((p) => p && { ...p, step: p.step - 1 })} className="rounded-xl bg-slate-200 px-6 py-4 text-lg font-black text-slate-900">Back</button> : null}
+                {itemForm.step < 5 ? (
+                  <button type="button" onClick={() => setItemForm((p) => p && { ...p, step: p.step + 1 })} className="rounded-xl bg-slate-900 px-6 py-4 text-lg font-black text-white">Next</button>
+                ) : (
+                  <>
+                    <button type="button" disabled={savingItem} onClick={() => void saveCalendarItem(false)} className="rounded-xl bg-slate-900 px-6 py-4 text-lg font-black text-white disabled:opacity-50">
+                      {itemForm.id ? 'Save Changes' : 'Save'}
+                    </button>
+                    {!itemForm.id ? <button type="button" disabled={savingItem} onClick={() => void saveCalendarItem(true)} className="rounded-xl bg-amber-600 px-6 py-4 text-lg font-black text-white disabled:opacity-50">Save & Add Another</button> : null}
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {itemMenu ? (
+        <>
+          <button type="button" className="fixed inset-0 z-[110] cursor-default bg-transparent" aria-label="Close item menu" onClick={() => setItemMenu(null)} />
+          <div className="fixed z-[111] w-72 rounded-xl border border-slate-200 bg-white p-3 shadow-2xl" style={{ left: Math.min(itemMenu.x, window.innerWidth - 300), top: Math.min(itemMenu.y, window.innerHeight - 240) }}>
+            <div className="border-b border-slate-100 pb-2">
+              <div className="font-black">{itemMenu.item.title}</div>
+              <div className="text-xs text-slate-500">{timeLabel(itemMenu.item.start_time, itemMenu.item.end_time)}</div>
+            </div>
+            <div className="mt-3 grid gap-2">
+              <button type="button" onClick={() => editItem(itemMenu.item)} className="rounded-lg bg-slate-100 px-4 py-3 text-left font-bold">Edit</button>
+              {itemMenu.item.item_type === 'admin_duty' ? <button type="button" onClick={() => void markItemComplete(itemMenu.item)} className="rounded-lg bg-green-700 px-4 py-3 text-left font-bold text-white">Mark Complete</button> : null}
+              <button type="button" onClick={() => void deleteCalendarItem(itemMenu.item)} className="rounded-lg bg-red-700 px-4 py-3 text-left font-bold text-white">{itemMenu.item.item_type === 'blocked_time' ? 'Remove Block' : 'Delete'}</button>
+            </div>
+          </div>
+        </>
       ) : null}
 
       {quickMenu ? (

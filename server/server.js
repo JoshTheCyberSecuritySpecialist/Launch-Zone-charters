@@ -1715,7 +1715,7 @@ async function loadCalendarBlockedDates({ fromIso, toIso, boatId }) {
   const boat = cleanText(boatId, 80);
   let query = supabase
     .from('blocked_dates')
-    .select('id, boat_id, start_time, end_time')
+    .select('id, boat_id, start_time, end_time, title, reason, location, all_day, notes, created_at, updated_at')
     .lt('start_time', toIso)
     .gt('end_time', fromIso);
   if (boat) query = query.or(`boat_id.eq.${boat},boat_id.is.null`);
@@ -1740,8 +1740,120 @@ async function loadCalendarBlockedDates({ fromIso, toIso, boatId }) {
       boat_id: row.boat_id || null,
       start_time: start.toUTC().toISO(),
       end_time: end.plus({ days: 1 }).toUTC().toISO(),
+      title: row.reason || 'Blocked Time',
+      reason: row.reason || null,
+      location: null,
+      all_day: true,
+      notes: null,
     };
   });
+}
+
+function normalizeCalendarBlock(row) {
+  return {
+    id: row.id,
+    item_type: 'blocked_time',
+    title: row.title || row.reason || 'Blocked Time',
+    reason: row.reason || null,
+    duty_type: null,
+    assigned_to: null,
+    boat_id: row.boat_id || null,
+    location: row.location || null,
+    start_time: row.start_time,
+    end_time: row.end_time,
+    all_day: Boolean(row.all_day),
+    blocks_availability: true,
+    priority: 'normal',
+    notes: row.notes || null,
+    completed: false,
+    created_at: row.created_at || null,
+    updated_at: row.updated_at || null,
+  };
+}
+
+function normalizeAdminCalendarItem(row) {
+  return {
+    id: row.id,
+    item_type: row.item_type,
+    title: row.title || (row.item_type === 'admin_duty' ? 'Admin Duty' : 'Blocked Time'),
+    reason: row.reason || null,
+    duty_type: row.duty_type || null,
+    assigned_to: row.assigned_to || null,
+    boat_id: row.boat_id || null,
+    location: row.location || null,
+    start_time: row.start_time,
+    end_time: row.end_time,
+    all_day: Boolean(row.all_day),
+    blocks_availability: Boolean(row.blocks_availability),
+    priority: row.priority || 'normal',
+    notes: row.notes || null,
+    completed: Boolean(row.completed),
+    created_by: row.created_by || null,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function calendarItemTimes(body) {
+  const allDay = Boolean(body.all_day || body.allDay);
+  const startRaw = cleanText(body.start_time || body.startTime, 80);
+  const endRaw = cleanText(body.end_time || body.endTime, 80);
+  if (startRaw && endRaw) {
+    const start = new Date(startRaw);
+    const end = new Date(endRaw);
+    if (Number.isFinite(start.getTime()) && Number.isFinite(end.getTime()) && end > start) {
+      return { startIso: start.toISOString(), endIso: end.toISOString(), allDay };
+    }
+  }
+  const date = cleanText(body.date, 20);
+  if (!date) return null;
+  if (allDay) {
+    const start = DateTime.fromISO(date, { zone: availabilityService.BUSINESS_TZ }).startOf('day');
+    return { startIso: start.toUTC().toISO(), endIso: start.plus({ days: 1 }).toUTC().toISO(), allDay };
+  }
+  const startTime = cleanText(body.start_time_local || body.startTimeLocal || body.startTime || '09:00', 20);
+  const endTime = cleanText(body.end_time_local || body.endTimeLocal || body.endTime || '10:00', 20);
+  const start = DateTime.fromISO(`${date}T${startTime}`, { zone: availabilityService.BUSINESS_TZ });
+  const end = DateTime.fromISO(`${date}T${endTime}`, { zone: availabilityService.BUSINESS_TZ });
+  if (!start.isValid || !end.isValid || end <= start) return null;
+  return { startIso: start.toUTC().toISO(), endIso: end.toUTC().toISO(), allDay };
+}
+
+async function blockingCalendarItemConflicts({ boatId, startIso, endIso, excludeBlockedDateId = null, excludeItemId = null }) {
+  const conflictQuery = supabase
+    .from('bookings')
+    .select('id, start_time, end_time, status, customers(full_name), boats(name)')
+    .lt('start_time', endIso)
+    .gt('end_time', startIso)
+    .in('status', ['hold', 'pending', 'pending_verification', 'confirmed', 'ready_for_departure', 'completed']);
+  const scopedBookings = boatId ? conflictQuery.eq('boat_id', boatId) : conflictQuery;
+  const [bookingResult, blockedResult, itemResult] = await Promise.all([
+    scopedBookings,
+    loadCalendarBlockedDates({ fromIso: startIso, toIso: endIso, boatId }),
+    supabase
+      .from('admin_calendar_items')
+      .select('id, title, boat_id, start_time, end_time, blocks_availability')
+      .eq('blocks_availability', true)
+      .lt('start_time', endIso)
+      .gt('end_time', startIso),
+  ]);
+  const bookingConflicts = bookingResult.error ? [] : bookingResult.data || [];
+  const blockConflicts = (blockedResult || []).filter((row) => String(row.id) !== String(excludeBlockedDateId || ''));
+  const itemConflicts = itemResult.error
+    ? []
+    : (itemResult.data || []).filter((row) => String(row.id) !== String(excludeItemId || '') && (!row.boat_id || !boatId || row.boat_id === boatId));
+  return {
+    bookings: bookingConflicts.map((row) => ({
+      id: row.id,
+      customer_name: (Array.isArray(row.customers) ? row.customers[0] : row.customers)?.full_name || 'Existing booking',
+      boat_name: (Array.isArray(row.boats) ? row.boats[0] : row.boats)?.name || 'Boat',
+      start_time: row.start_time,
+      end_time: row.end_time,
+      status: row.status,
+    })),
+    blocked: blockConflicts,
+    duties: itemConflicts,
+  };
 }
 
 app.get('/api/admin/calendar-bookings', async (req, res) => {
@@ -1865,6 +1977,204 @@ app.patch('/api/admin/calendar-bookings/:id', async (req, res) => {
   } catch (err) {
     console.error('[admin-calendar-bookings:update]', err);
     return res.status(err.statusCode || 500).json({ error: err.message || 'Could not update booking.' });
+  }
+});
+
+app.get('/api/admin/calendar-items', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const { fromIso, toIso } = calendarRangeFromQuery(req.query || {});
+    const boatId = cleanText(req.query.boatId || req.query.boat_id, 80);
+    const includeCompleted = String(req.query.includeCompleted || '').toLowerCase() === 'true';
+    const [blockedDates, itemResult] = await Promise.all([
+      loadCalendarBlockedDates({ fromIso, toIso, boatId }),
+      supabase
+        .from('admin_calendar_items')
+        .select('*')
+        .lt('start_time', toIso)
+        .gt('end_time', fromIso)
+        .order('start_time', { ascending: true }),
+    ]);
+    if (itemResult.error) throw itemResult.error;
+    const items = [
+      ...(blockedDates || []).map(normalizeCalendarBlock),
+      ...(itemResult.data || [])
+        .filter((row) => !boatId || !row.boat_id || row.boat_id === boatId)
+        .filter((row) => includeCompleted || !row.completed)
+        .map(normalizeAdminCalendarItem),
+    ];
+    return res.json({ items, from: fromIso, to: toIso });
+  } catch (err) {
+    console.error('[admin-calendar-items:list]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not load calendar items.' });
+  }
+});
+
+app.post('/api/admin/calendar-items', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const body = req.body || {};
+    const itemType = cleanText(body.item_type || body.itemType, 40);
+    if (!['blocked_time', 'admin_duty'].includes(itemType)) return res.status(400).json({ error: 'Choose Block Time or Admin Duty.' });
+    const times = calendarItemTimes(body);
+    if (!times) return res.status(400).json({ error: 'Valid date, start time, and end time are required.' });
+    const boatId = cleanText(body.boat_id || body.boatId, 80) || null;
+    const title = cleanText(body.title, 160) || (itemType === 'blocked_time' ? 'Blocked Time' : 'Admin Duty');
+    const location = cleanText(body.location, 80) || null;
+    const blocksAvailability = itemType === 'blocked_time' ? true : Boolean(body.blocks_availability || body.blocksAvailability);
+
+    let conflicts = { bookings: [], blocked: [], duties: [] };
+    if (blocksAvailability) {
+      conflicts = await blockingCalendarItemConflicts({ boatId, startIso: times.startIso, endIso: times.endIso });
+      const hasConflicts = conflicts.bookings.length > 0 || conflicts.blocked.length > 0 || conflicts.duties.length > 0;
+      if (hasConflicts && !body.saveAnyway) {
+        return res.status(409).json({ error: 'This block conflicts with existing calendar items.', conflicts });
+      }
+    }
+
+    if (itemType === 'blocked_time') {
+      const { data, error } = await supabase
+        .from('blocked_dates')
+        .insert({
+          title,
+          reason: cleanText(body.reason, 300) || title,
+          boat_id: boatId,
+          location,
+          start_time: times.startIso,
+          end_time: times.endIso,
+          all_day: times.allDay,
+          notes: cleanText(body.notes, 1000) || null,
+          created_by: null,
+        })
+        .select('id, boat_id, start_time, end_time, title, reason, location, all_day, notes, created_at, updated_at')
+        .single();
+      if (error) throw error;
+      return res.status(201).json({ item: normalizeCalendarBlock(data), conflicts });
+    }
+
+    const { data, error } = await supabase
+      .from('admin_calendar_items')
+      .insert({
+        item_type: 'admin_duty',
+        title,
+        reason: cleanText(body.reason, 300) || null,
+        duty_type: cleanText(body.duty_type || body.dutyType, 80) || null,
+        assigned_to: cleanText(body.assigned_to || body.assignedTo, 120) || null,
+        boat_id: boatId,
+        location,
+        start_time: times.startIso,
+        end_time: times.endIso,
+        all_day: times.allDay,
+        blocks_availability: blocksAvailability,
+        priority: ['low', 'normal', 'high'].includes(cleanText(body.priority, 20)) ? cleanText(body.priority, 20) : 'normal',
+        notes: cleanText(body.notes, 1000) || null,
+        completed: Boolean(body.completed),
+        created_by: adminUser.id,
+      })
+      .select('*')
+      .single();
+    if (error) throw error;
+    return res.status(201).json({ item: normalizeAdminCalendarItem(data), conflicts });
+  } catch (err) {
+    console.error('[admin-calendar-items:create]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not save calendar item.' });
+  }
+});
+
+app.patch('/api/admin/calendar-items/:id', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const id = cleanText(req.params.id, 80);
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid calendar item id.' });
+    const body = req.body || {};
+    const itemType = cleanText(body.item_type || body.itemType, 40);
+    const table = itemType === 'blocked_time' ? 'blocked_dates' : 'admin_calendar_items';
+    const times = calendarItemTimes(body);
+    const boatId = cleanText(body.boat_id || body.boatId, 80) || null;
+    const blocksAvailability = itemType === 'blocked_time' ? true : Boolean(body.blocks_availability || body.blocksAvailability);
+
+    if (blocksAvailability && times) {
+      const conflicts = await blockingCalendarItemConflicts({
+        boatId,
+        startIso: times.startIso,
+        endIso: times.endIso,
+        excludeBlockedDateId: itemType === 'blocked_time' ? id : null,
+        excludeItemId: itemType === 'admin_duty' ? id : null,
+      });
+      const hasConflicts = conflicts.bookings.length > 0 || conflicts.blocked.length > 0 || conflicts.duties.length > 0;
+      if (hasConflicts && !body.saveAnyway) {
+        return res.status(409).json({ error: 'This item conflicts with existing calendar items.', conflicts });
+      }
+    }
+
+    if (table === 'blocked_dates') {
+      const update = {
+        title: cleanText(body.title, 160) || 'Blocked Time',
+        reason: cleanText(body.reason, 300) || cleanText(body.title, 160) || 'Blocked Time',
+        boat_id: boatId,
+        location: cleanText(body.location, 80) || null,
+        all_day: times?.allDay ?? Boolean(body.all_day || body.allDay),
+        notes: cleanText(body.notes, 1000) || null,
+        updated_at: new Date().toISOString(),
+      };
+      if (times) {
+        update.start_time = times.startIso;
+        update.end_time = times.endIso;
+      }
+      const { data, error } = await supabase
+        .from('blocked_dates')
+        .update(update)
+        .eq('id', id)
+        .select('id, boat_id, start_time, end_time, title, reason, location, all_day, notes, created_at, updated_at')
+        .single();
+      if (error) throw error;
+      return res.json({ item: normalizeCalendarBlock(data) });
+    }
+
+    const update = {
+      title: cleanText(body.title, 160) || 'Admin Duty',
+      reason: cleanText(body.reason, 300) || null,
+      duty_type: cleanText(body.duty_type || body.dutyType, 80) || null,
+      assigned_to: cleanText(body.assigned_to || body.assignedTo, 120) || null,
+      boat_id: boatId,
+      location: cleanText(body.location, 80) || null,
+      all_day: times?.allDay ?? Boolean(body.all_day || body.allDay),
+      blocks_availability: blocksAvailability,
+      priority: ['low', 'normal', 'high'].includes(cleanText(body.priority, 20)) ? cleanText(body.priority, 20) : 'normal',
+      notes: cleanText(body.notes, 1000) || null,
+      completed: Boolean(body.completed),
+      updated_at: new Date().toISOString(),
+    };
+    if (times) {
+      update.start_time = times.startIso;
+      update.end_time = times.endIso;
+    }
+    const { data, error } = await supabase.from('admin_calendar_items').update(update).eq('id', id).select('*').single();
+    if (error) throw error;
+    return res.json({ item: normalizeAdminCalendarItem(data) });
+  } catch (err) {
+    console.error('[admin-calendar-items:update]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not update calendar item.' });
+  }
+});
+
+app.delete('/api/admin/calendar-items/:id', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const id = cleanText(req.params.id, 80);
+    const itemType = cleanText(req.query.item_type || req.query.itemType, 40);
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid calendar item id.' });
+    const table = itemType === 'blocked_time' ? 'blocked_dates' : 'admin_calendar_items';
+    const { error } = await supabase.from(table).delete().eq('id', id);
+    if (error) throw error;
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error('[admin-calendar-items:delete]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not delete calendar item.' });
   }
 });
 

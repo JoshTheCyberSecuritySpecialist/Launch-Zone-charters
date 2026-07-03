@@ -89,6 +89,23 @@ async function fetchBlockedDateRanges(boatId, rangeStartIso, rangeEndIso) {
   });
 }
 
+async function fetchAdminBlockingItemRanges(boatId, rangeStartIso, rangeEndIso) {
+  const boat = String(boatId);
+  const { data, error } = await supabase
+    .from('admin_calendar_items')
+    .select('id, boat_id, start_time, end_time, title, item_type, blocks_availability')
+    .eq('blocks_availability', true)
+    .lt('start_time', rangeEndIso)
+    .gt('end_time', rangeStartIso)
+    .or(`boat_id.eq.${boat},boat_id.is.null`);
+  if (error) {
+    // Backward compatibility while the migration is not yet applied.
+    if (/admin_calendar_items|schema cache|does not exist/i.test(String(error.message || ''))) return [];
+    throw new Error(error.message || 'Could not load admin calendar blocks');
+  }
+  return data || [];
+}
+
 function toIntervals(rows, keyStart, keyEnd) {
   return (rows || []).map((r) => ({
     startMs: new Date(String(r[keyStart])).getTime(),
@@ -136,9 +153,10 @@ async function checkBookingSlotAvailability({
   }
 
   const slot = parseSlotRange(startTime, endTime);
-  const [bookings, blockedDates] = await Promise.all([
+  const [bookings, blockedDates, adminBlocks] = await Promise.all([
     fetchBlockingBookings(boat, slot.startIso, slot.endIso),
     fetchBlockedDateRanges(boat, slot.startIso, slot.endIso),
+    fetchAdminBlockingItemRanges(boat, slot.startIso, slot.endIso),
   ]);
 
   const bookingConflict = bookings.find((row) => {
@@ -160,7 +178,9 @@ async function checkBookingSlotAvailability({
     };
   }
 
-  const blockedIntervals = toIntervals(blockedDates, 'start_time', 'end_time');
+  const blockedIntervals = toIntervals(blockedDates, 'start_time', 'end_time').concat(
+    toIntervals(adminBlocks, 'start_time', 'end_time')
+  );
   if (slotConflicts(slot.startMs, slot.endMs, blockedIntervals)) {
     return {
       available: false,
@@ -196,13 +216,15 @@ async function assertBookingSlotAvailable(input) {
  * @param {string} opts.rangeEndIso exclusive or inclusive end - use full day coverage
  */
 async function loadBlockingIntervals(boatId, rangeStartIso, rangeEndIso) {
-  const [bookings, blocked] = await Promise.all([
+  const [bookings, blocked, adminBlocks] = await Promise.all([
     fetchBlockingBookings(boatId, rangeStartIso, rangeEndIso),
     fetchBlockedDateRanges(boatId, rangeStartIso, rangeEndIso),
+    fetchAdminBlockingItemRanges(boatId, rangeStartIso, rangeEndIso),
   ]);
   const bi = toIntervals(bookings, 'start_time', 'end_time');
   const bd = toIntervals(blocked, 'start_time', 'end_time');
-  return bi.concat(bd);
+  const ab = toIntervals(adminBlocks, 'start_time', 'end_time');
+  return bi.concat(bd, ab);
 }
 
 function parseDateOnlyInZone(dateStr, zone) {

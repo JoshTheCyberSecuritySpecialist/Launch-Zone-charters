@@ -188,7 +188,6 @@ export default function AdminStaffBooking() {
         if (cancelled) return;
         const rows = Array.isArray(payload.boats) ? payload.boats : [];
         setBoats(rows);
-        setForm((prev) => (prev.boatId || rows.length === 0 ? prev : { ...prev, boatId: rows[0].id }));
       })
       .catch((err) => {
         if (!cancelled) setNotice({ variant: 'error', text: err instanceof Error ? err.message : 'Could not load boats.' });
@@ -223,8 +222,12 @@ export default function AdminStaffBooking() {
   }, [durationHours, form.bookingType, form.discount, selectedBoat]);
 
   useEffect(() => {
-    if (!form.boatId || !form.date || !form.startTime || durationHours <= 0) {
-      setAvailability({ status: 'idle', message: 'Select a boat, date, time, and duration.' });
+    if (!form.boatId) {
+      setAvailability({ status: 'idle', message: 'Select a boat first.' });
+      return;
+    }
+    if (!form.date || !form.startTime || durationHours <= 0) {
+      setAvailability({ status: 'idle', message: 'Select a date, time, and duration.' });
       return;
     }
 
@@ -264,8 +267,8 @@ export default function AdminStaffBooking() {
   }, [authedFetch, durationHours, form.boatId, form.date, form.location, form.startTime]);
 
   const reset = (clearNotice = true) => {
-    setForm((prev) => ({ ...blankForm(), boatId: boats[0]?.id || prev.boatId || '' }));
-    setAvailability({ status: 'idle', message: 'Select a boat, date, time, and duration.' });
+    setForm(blankForm());
+    setAvailability({ status: 'idle', message: 'Select a boat first.' });
     if (clearNotice) setNotice(null);
   };
 
@@ -276,7 +279,7 @@ export default function AdminStaffBooking() {
       return;
     }
     if (!form.boatId) {
-      setNotice({ variant: 'error', text: 'Boat is required.' });
+      setNotice({ variant: 'error', text: 'Select a boat first.' });
       return;
     }
     if (!form.date || !form.startTime || durationHours <= 0) {

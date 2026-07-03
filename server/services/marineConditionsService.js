@@ -36,6 +36,9 @@ const LOCATION_CONFIGS = {
 };
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
+const LOG_RAW_WEATHER_PAYLOADS =
+  process.env.NODE_ENV !== 'production' ||
+  ['1', 'true', 'yes', 'on'].includes(String(process.env.WEATHER_DEBUG_LOGS || '').trim().toLowerCase());
 
 /** Last successful Open-Meteo marine/wind JSON per location — used after HTTP 429 (20 min). */
 const OPEN_METEO_PARTIAL_TTL_MS = 20 * 60 * 1000;
@@ -449,7 +452,9 @@ async function getMarineConditions(options = {}) {
     pointsJson = noaa.pointsJson;
     forecastJson = noaa.forecastJson;
     console.log('[marine-conditions] NOAA points + grid forecast OK');
-    console.log('[marine-conditions] NOAA forecast response:', JSON.stringify(forecastJson).slice(0, 4000));
+    if (LOG_RAW_WEATHER_PAYLOADS) {
+      console.log('[marine-conditions] NOAA forecast response:', JSON.stringify(forecastJson).slice(0, 4000));
+    }
   } catch (e) {
     noaaForecastError = e?.message || String(e);
     console.warn('[marine-conditions] NOAA forecast failed:', noaaForecastError);
@@ -458,7 +463,9 @@ async function getMarineConditions(options = {}) {
   try {
     alertsJson = await fetchNoaaAlerts(location);
     console.log('[marine-conditions] NOAA alerts OK');
-    console.log('[marine-conditions] NOAA alerts response:', JSON.stringify(alertsJson).slice(0, 3000));
+    if (LOG_RAW_WEATHER_PAYLOADS) {
+      console.log('[marine-conditions] NOAA alerts response:', JSON.stringify(alertsJson).slice(0, 3000));
+    }
   } catch (e) {
     noaaAlertsError = e?.message || String(e);
     console.warn('[marine-conditions] NOAA alerts failed:', noaaAlertsError);
@@ -490,7 +497,9 @@ async function getMarineConditions(options = {}) {
     if (omMarine.rateLimited429) openMeteoMarine429 = true;
     if (marineJson) {
       console.log('[marine-conditions] Open-Meteo marine OK');
-      console.log('[marine-conditions] Open-Meteo marine response:', JSON.stringify(marineJson).slice(0, 4000));
+      if (LOG_RAW_WEATHER_PAYLOADS) {
+        console.log('[marine-conditions] Open-Meteo marine response:', JSON.stringify(marineJson).slice(0, 4000));
+      }
     }
   } catch (e) {
     openMeteoMarineError = e?.message || String(e);
@@ -503,7 +512,9 @@ async function getMarineConditions(options = {}) {
     if (omWind.rateLimited429) openMeteoWind429 = true;
     if (windJson) {
       console.log('[marine-conditions] Open-Meteo wind OK');
-      console.log('[marine-conditions] Open-Meteo wind response:', JSON.stringify(windJson).slice(0, 4000));
+      if (LOG_RAW_WEATHER_PAYLOADS) {
+        console.log('[marine-conditions] Open-Meteo wind response:', JSON.stringify(windJson).slice(0, 4000));
+      }
     }
   } catch (e) {
     openMeteoWindError = e?.message || String(e);
@@ -623,7 +634,16 @@ async function getMarineConditions(options = {}) {
     },
   };
 
-  console.log('[marine-conditions] final merged output:', JSON.stringify(merged));
+  if (LOG_RAW_WEATHER_PAYLOADS) {
+    console.log('[marine-conditions] final merged output:', JSON.stringify(merged));
+  } else {
+    console.log('[marine-conditions] final merged output:', {
+      status: merged.status,
+      statusLevel: merged.statusLevel,
+      locationLabel: merged.locationLabel,
+      warnings: merged.meta.warnings.length,
+    });
+  }
 
   cacheByLocation.set(cacheKey, { expires: Date.now() + CACHE_TTL_MS, payload: merged });
   return { ...merged, cached: false };

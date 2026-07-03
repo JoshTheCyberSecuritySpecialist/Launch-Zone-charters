@@ -223,6 +223,10 @@ export default function AdminBookingDetails() {
   };
 
   const save = async () => {
+    if (!form.boatId) {
+      setNotice({ variant: 'error', text: 'Select a boat first.' });
+      return;
+    }
     if (availability === 'conflict') {
       setNotice({ variant: 'error', text: 'Conflict detected. Choose another boat or time before saving.' });
       return;
@@ -402,7 +406,7 @@ export default function AdminBookingDetails() {
             <div className="rounded-2xl bg-white p-5 shadow">
               <h2 className="text-xl font-black">Trip Information</h2>
               <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                <label className={labelClass}>Boat<select className={inputClass} value={form.boatId || ''} onChange={(e) => setField('boatId', e.target.value)}>{boats.map((boat) => <option key={boat.id} value={boat.id}>{boat.name}</option>)}</select></label>
+                <label className={labelClass}>Boat<select className={inputClass} value={form.boatId || ''} onChange={(e) => setField('boatId', e.target.value)}><option value="">Select boat</option>{boats.map((boat) => <option key={boat.id} value={boat.id}>{boat.name}</option>)}</select></label>
                 <label className={labelClass}>Location<input className={inputClass} value={form.location || ''} onChange={(e) => setField('location', e.target.value)} /></label>
                 <label className={labelClass}>Booking Type<select className={inputClass} value={form.bookingType || 'rental'} onChange={(e) => setField('bookingType', e.target.value)}><option value="rental">Rental</option><option value="captain_charter">Captain Charter</option></select></label>
                 <label className={labelClass}>Date<input className={inputClass} type="date" value={form.date || ''} onChange={(e) => setField('date', e.target.value)} /></label>
@@ -413,6 +417,7 @@ export default function AdminBookingDetails() {
                 <label className={`${labelClass} sm:col-span-2`}>Booking Source<select className={inputClass} value={form.source || ''} onChange={(e) => setField('source', e.target.value)}>{sourceOptions.map((s) => <option key={s} value={s}>{s}</option>)}</select></label>
               </div>
               <div className="mt-4 text-sm font-bold">
+                {!form.boatId ? <span className="text-slate-600">Select a boat first.</span> : null}
                 {availability === 'available' ? <span className="text-green-700">Available</span> : null}
                 {availability === 'conflict' ? <span className="text-red-700">Conflict Detected</span> : null}
                 {availability === 'checking' ? <span className="text-slate-600">Checking availability...</span> : null}

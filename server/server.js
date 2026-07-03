@@ -2,6 +2,7 @@
  * Launch Zone API: booking confirmation + contact form (Resend + Supabase).
  * From /server: npm install && npm start
  */
+const fs = require('fs');
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 const { spawn, execFile } = require('child_process');
@@ -333,25 +334,30 @@ async function verifyAdminRequest(req, res) {
 }
 
 /**
- * Resolve Python executable and args for spawn (no shell).
+ * Resolve the project-local Python executable and args for spawn (no shell).
  * @param {string} projectRoot
  * @returns {{ command: string, args: string[], cwd: string }}
  */
 function buildPythonSpawn(projectRoot) {
-  let py =
-    (process.env.PYTHON_PATH || '').trim() ||
-    (process.platform === 'win32' ? 'python' : 'python3');
-  if (
-    (py.startsWith('"') && py.endsWith('"')) ||
-    (py.startsWith("'") && py.endsWith("'"))
-  ) {
-    py = py.slice(1, -1);
-  }
+  const py =
+    process.platform === 'win32'
+      ? path.join(__dirname, '.venv', 'Scripts', 'python.exe')
+      : path.join(__dirname, '.venv', 'bin', 'python');
   return {
     command: py,
     args: ['./ai-content/upload.py'],
     cwd: projectRoot,
   };
+}
+
+function formatCaptainsLogVenvSetupMessage(command) {
+  return [
+    `Captain's Log Python virtual environment is missing at ${command}.`,
+    'Render builds from server/, so create it from the server directory with:',
+    'python3 -m venv .venv',
+    '.venv/bin/python -m pip install --upgrade pip',
+    '.venv/bin/python -m pip install -r requirements-captains-log.txt',
+  ].join('\n');
 }
 
 /**
@@ -382,8 +388,8 @@ function runFile(command, args, opts = {}) {
 }
 
 /**
- * Ensure Python deps for Captain's Log exist (auto-install from requirements.txt when missing).
- * Prevents runtime failures like ModuleNotFoundError: requests on cloud hosts.
+ * Ensure Python deps for Captain's Log exist in server/.venv only.
+ * Prevents externally-managed-environment failures on cloud hosts.
  * @param {string} command
  * @param {string} projectRoot
  */
@@ -395,18 +401,30 @@ async function ensurePythonPipelineDeps(command, projectRoot) {
   );
   if (skipCheck) return;
 
+  if (!fs.existsSync(command)) {
+    throw Object.assign(new Error('Captain\'s Log Python virtual environment is missing'), {
+      details: formatCaptainsLogVenvSetupMessage(command),
+    });
+  }
+
+  const requirementsPath = path.join(__dirname, 'requirements-captains-log.txt');
+  if (!fs.existsSync(requirementsPath)) {
+    throw Object.assign(new Error('Captain\'s Log Python requirements file is missing'), {
+      details: `Expected requirements file at ${requirementsPath}.`,
+    });
+  }
+
   const importCheck = 'import requests, bs4, supabase, dotenv';
   try {
     await runFile(command, ['-c', importCheck], { cwd: projectRoot, env: process.env });
     return;
   } catch (checkErr) {
     console.warn(
-      '[generate-content] Python dependency precheck failed, attempting pip install:',
+      '[generate-content] Python dependency precheck failed, installing into server/.venv:',
       checkErr?.stderr || checkErr?.message || checkErr
     );
   }
 
-  const requirementsPath = path.join(projectRoot, 'ai-content', 'requirements.txt');
   await runFile(command, ['-m', 'pip', 'install', '-r', requirementsPath], {
     cwd: projectRoot,
     env: process.env,
@@ -2332,6 +2350,7 @@ app.patch('/api/admin/bookings/:id', async (req, res) => {
 
     const scheduleChanged = Boolean(update.boat_id || update.start_time || update.end_time);
     if (scheduleChanged && String(update.status || existing.status) !== 'cancelled') {
+      if (!nextBoatId) return res.status(400).json({ error: 'Select a boat first.' });
       await availabilityService.assertBookingSlotAvailable({
         boatId: nextBoatId,
         startTime: nextStart,
@@ -5547,28 +5566,31 @@ app.post('/api/generate-content', async (req, res) => {
     return res.status(200).json({ success: false, message: 'Already generating' });
   }
 
+  const projectRoot = path.resolve(__dirname, '..');
+  const { command } = buildPythonSpawn(projectRoot);
+  if (!fs.existsSync(command)) {
+    return res.status(500).json({
+      status: 'error',
+      error: 'Captain\'s Log Python virtual environment is missing',
+      details: formatCaptainsLogVenvSetupMessage(command),
+    });
+  }
+
   isGenerating = true;
   console.log('[generate-content] admin:', adminUser.id);
 
-  try {
-    const result = await runPythonScript();
-    console.log('[generate-content] Completed');
-    return res.json({
-      status: 'completed',
-      result,
+  runPythonScript()
+    .then((result) => {
+      console.log('[generate-content] Completed', result);
+    })
+    .catch((err) => {
+      console.error('[generate-content] Error:', err);
     });
-  } catch (err) {
-    console.error('[generate-content] Error:', err);
-    const message = err instanceof Error ? err.message : String(err);
-    const details = err && typeof err === 'object' && 'details' in err ? err.details : undefined;
-    const output = err && typeof err === 'object' && 'output' in err ? err.output : undefined;
-    return res.status(500).json({
-      status: 'error',
-      error: message,
-      ...(details !== undefined ? { details } : {}),
-      ...(output !== undefined ? { output } : {}),
-    });
-  }
+
+  return res.status(202).json({
+    status: 'started',
+    message: 'Captain\'s Log content generation started',
+  });
 });
 
 app.get('/api/admin/alerts', async (req, res) => {

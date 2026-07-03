@@ -99,7 +99,7 @@ async function logAlertActivity({ type, message, score }) {
 }
 
 async function runMonitor() {
-  console.log('ALERT ENGINE STARTED');
+  console.log('[conditionMonitor] started');
   console.log('⏰ Running condition monitor…');
 
   const url = (process.env.SUPABASE_URL || '').trim();
@@ -113,10 +113,10 @@ async function runMonitor() {
     const bio = await evaluateBioAlertConditions();
     console.log('CONDITIONS:', { alertType: 'bio', data: bio });
     if (!bio.ok) {
-      console.log('NO ALERT: conditions not met');
+      console.log('[conditionMonitor] conditions not met');
       console.log('[conditionMonitor] bio alert engine skip:', bio.reason || 'unknown');
     } else if (bio.reason === 'no-new-data') {
-      console.log('NO ALERT: conditions not met');
+      console.log('[conditionMonitor] conditions not met');
       console.log('[conditionMonitor] bio alert engine skip: no new data');
     } else if (bio.shouldAlert) {
       console.log('ALERT TRIGGERED:', 'bio');
@@ -136,17 +136,17 @@ async function runMonitor() {
           `${bioMessage}\n\nBook: ${book}\n\nLaunch Zone Charters — ${publicSiteUrl()}`
       );
     } else {
-      console.log('NO ALERT: conditions not met');
+      console.log('[conditionMonitor] conditions not met');
       console.log('[conditionMonitor] bio alert threshold not met');
     }
 
     const sandbar = await evaluateSandbarAlertConditions();
     console.log('CONDITIONS:', { alertType: 'sandbar', data: sandbar });
     if (!sandbar.ok) {
-      console.log('NO ALERT: conditions not met');
+      console.log('[conditionMonitor] conditions not met');
       console.log('[conditionMonitor] sandbar alert engine skip:', sandbar.reason || 'unknown');
     } else if (sandbar.reason === 'no-new-data') {
-      console.log('NO ALERT: conditions not met');
+      console.log('[conditionMonitor] conditions not met');
       console.log('[conditionMonitor] sandbar alert engine skip: no new data');
     } else if (sandbar.shouldAlert) {
       console.log('ALERT TRIGGERED:', 'sandbar');
@@ -167,20 +167,20 @@ async function runMonitor() {
           `${sandbarMessage}\n\nBook: ${book}\n\nLaunch Zone Charters — ${publicSiteUrl()}`
       );
     } else {
-      console.log('NO ALERT: conditions not met');
+      console.log('[conditionMonitor] conditions not met');
       console.log('[conditionMonitor] sandbar alert threshold not met');
     }
 
     const alertEval = await evaluateAlertConditions();
     console.log('CONDITIONS:', { alertType: 'rocket', data: alertEval });
     if (!alertEval.ok) {
-      console.log('NO ALERT: conditions not met');
+      console.log('[conditionMonitor] conditions not met');
       console.log('[conditionMonitor] alert engine skip:', alertEval.reason || 'unknown');
       return;
     }
 
     if (alertEval.reason === 'no-new-data') {
-      console.log('NO ALERT: conditions not met');
+      console.log('[conditionMonitor] conditions not met');
       console.log('[conditionMonitor] alert engine skip: no new data');
       return;
     }
@@ -210,7 +210,7 @@ async function runMonitor() {
           `${rocketMessage}\n\nBook: ${book}\n\nLaunch Zone Charters — ${publicSiteUrl()}`
       );
     } else {
-      console.log('NO ALERT: conditions not met');
+      console.log('[conditionMonitor] conditions not met');
       console.log(
         '[conditionMonitor] alert threshold not met:',
         `score=${alertEval.score}/${alertEval.threshold}`

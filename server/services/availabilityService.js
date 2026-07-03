@@ -50,6 +50,17 @@ async function fetchBlockingBookings(boatId, rangeStartIso, rangeEndIso) {
   return (data || []).filter(bookingRowBlocksSlot);
 }
 
+async function fetchBlockingCharters(rangeStartIso, rangeEndIso) {
+  const { data, error } = await supabase
+    .from('bookings')
+    .select('id, start_time, end_time, status, expires_at, customer_id, booking_type, charter_type, customers(full_name, email, phone)')
+    .eq('booking_type', 'charter')
+    .lt('start_time', rangeEndIso)
+    .gt('end_time', rangeStartIso);
+  if (error) throw new Error(error.message || 'Could not load charter bookings');
+  return (data || []).filter(bookingRowBlocksSlot);
+}
+
 async function fetchBlockedDateRanges(boatId, rangeStartIso, rangeEndIso) {
   const boat = String(boatId);
   const { data, error } = await supabase
@@ -200,6 +211,49 @@ async function checkBookingSlotAvailability({
 
 async function assertBookingSlotAvailable(input) {
   const result = await checkBookingSlotAvailability(input);
+  if (result.available) return result;
+
+  const err = new Error(SLOT_TAKEN_USER_MESSAGE);
+  err.statusCode = 409;
+  err.code = result.reason || 'slot_unavailable';
+  err.availability = result;
+  throw err;
+}
+
+async function checkCharterSlotAvailability({
+  startTime,
+  endTime,
+  excludeBookingId = null,
+} = {}) {
+  const slot = parseSlotRange(startTime, endTime);
+  const bookings = await fetchBlockingCharters(slot.startIso, slot.endIso);
+  const bookingConflict = bookings.find((row) => {
+    if (excludeBookingId && String(row.id) === String(excludeBookingId)) return false;
+    return intervalsOverlap(
+      slot.startMs,
+      slot.endMs,
+      new Date(String(row.start_time)).getTime(),
+      new Date(String(row.end_time)).getTime()
+    );
+  });
+
+  if (bookingConflict) {
+    return {
+      available: false,
+      reason: 'charter_conflict',
+      conflict: bookingConflict,
+    };
+  }
+
+  return {
+    available: true,
+    reason: null,
+    conflict: null,
+  };
+}
+
+async function assertCharterSlotAvailable(input) {
+  const result = await checkCharterSlotAvailability(input);
   if (result.available) return result;
 
   const err = new Error(SLOT_TAKEN_USER_MESSAGE);
@@ -390,7 +444,9 @@ module.exports = {
   MIN_LEAD_HOURS,
   BLOCKING_BOOKING_STATUSES,
   defaultFromTo,
+  assertCharterSlotAvailable,
   assertBookingSlotAvailable,
+  checkCharterSlotAvailability,
   checkBookingSlotAvailability,
   isStartTimeAllowed,
   listDatesAvailability,

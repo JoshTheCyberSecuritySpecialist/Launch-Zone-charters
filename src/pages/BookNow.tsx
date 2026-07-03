@@ -71,6 +71,8 @@ const FORECAST_LON = -80.8076;
 const CALENDAR_INTEL_CACHE_MS = 15 * 60 * 1000;
 const BUSINESS_TIMEZONE = 'America/New_York';
 const SAME_DAY_MIN_NOTICE_HOURS = 2;
+const BIO_NIGHT_CHARTER_TIMES = ['20:00', '21:00', '22:00', '23:00', '00:00', '01:00', '02:00', '03:00', '04:00'];
+const DEFAULT_CHARTER_TIMES = ['17:00', '18:00', '19:00', '20:00', '21:00'];
 
 /** Rental step-1 preset: Morning/Afternoon = half_day 4hr; Full day = full_day 8hr. */
 type RentalDurationPreset = 'morning' | 'afternoon' | 'fullday';
@@ -101,6 +103,48 @@ function ymdInTimezone(timeZone: string): string {
     month: '2-digit',
     day: '2-digit',
   }).format(new Date());
+}
+
+function parseYmd(value: string) {
+  const [year, month, day] = String(value || '').split('-').map(Number);
+  if (!year || !month || !day) return null;
+  return { year, month, day };
+}
+
+function timeLabelFromHHMM(time: string): string {
+  const [hh, mm] = String(time || '').split(':').map(Number);
+  if (!Number.isFinite(hh) || !Number.isFinite(mm)) return time;
+  return new Date(2000, 0, 1, hh, mm).toLocaleTimeString(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
+function isNextMorningBioStart(charterType: CharterType, time: string) {
+  if (charterType !== 'night_bio') return false;
+  const hour = Number(String(time || '').split(':')[0]);
+  return Number.isFinite(hour) && hour >= 0 && hour <= 4;
+}
+
+function buildSelectedStartDateTime({
+  slotStartIso,
+  date,
+  time,
+  bookingMode,
+  charterType,
+}: {
+  slotStartIso: string;
+  date: string;
+  time: string;
+  bookingMode: BookingMode;
+  charterType: CharterType;
+}) {
+  if (slotStartIso.trim()) return new Date(slotStartIso.trim());
+  const parsedDate = parseYmd(date);
+  const [hour, minute] = String(time || '').split(':').map(Number);
+  if (!parsedDate || !Number.isFinite(hour) || !Number.isFinite(minute)) return new Date(NaN);
+  const rollToNextMorning = bookingMode === 'charter' && isNextMorningBioStart(charterType, time);
+  return new Date(parsedDate.year, parsedDate.month - 1, parsedDate.day + (rollToNextMorning ? 1 : 0), hour, minute);
 }
 
 interface Boat {
@@ -400,7 +444,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
       if (intent === 'night') {
         setBookingMode('charter');
         setStep(1);
-        next.time = '19:00';
+        next.time = '20:00';
         next.charterType = 'night_bio';
         next.hours = 1;
       }
@@ -414,7 +458,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
         setBookingMode('charter');
         setStep(1);
         next.charterType = 'night_bio';
-        next.time = '19:00';
+        next.time = '20:00';
         next.hours = 1;
       }
       if (charterType === 'sunset' || charterType === 'sunset_cruise') {
@@ -957,6 +1001,25 @@ export default function BookNow({ onNavigate }: BookNowProps) {
           primary: `Full charter total: $${pricing.total.toFixed(2)}`,
           sub: 'Per boat',
         };
+  const charterTimeOptions = isBioCharter ? BIO_NIGHT_CHARTER_TIMES : DEFAULT_CHARTER_TIMES;
+  const selectedStartDateTime = buildSelectedStartDateTime({
+    slotStartIso: bookingData.slotStartIso,
+    date: bookingData.date,
+    time: bookingData.time,
+    bookingMode,
+    charterType: bookingData.charterType,
+  });
+  const selectedDateTimeLabel =
+    bookingData.slotStartIso && Number.isFinite(selectedStartDateTime.getTime())
+      ? selectedStartDateTime.toLocaleString(undefined, {
+          month: 'short',
+          day: 'numeric',
+          hour: 'numeric',
+          minute: '2-digit',
+        })
+      : isBioCharter && isNextMorningBioStart(bookingData.charterType, bookingData.time)
+        ? `${bookingData.date} night · ${timeLabelFromHHMM(bookingData.time)} next morning`
+        : `${bookingData.date || '-'} · ${timeLabelFromHHMM(bookingData.time)}`;
 
   /** Dark-theme fields — `.lz-input-on-dark` in index.css sets value/placeholder/autofill/time contrast */
   const fieldClass =
@@ -1136,9 +1199,16 @@ export default function BookNow({ onNavigate }: BookNowProps) {
         checkoutOutcome = 'aborted_no_api_url';
         return;
       }
-      const startDateTime = bookingData.slotStartIso.trim()
-        ? new Date(bookingData.slotStartIso.trim())
-        : new Date(`${bookingData.date}T${bookingData.time}`);
+      const startDateTime = buildSelectedStartDateTime({
+        slotStartIso: bookingData.slotStartIso,
+        date: bookingData.date,
+        time: bookingData.time,
+        bookingMode,
+        charterType: bookingData.charterType,
+      });
+      if (!Number.isFinite(startDateTime.getTime())) {
+        throw new Error('Choose a valid date and start time.');
+      }
       const endDateTime = new Date(
         startDateTime.getTime() + (bookingMode === 'charter' ? 1 : bookingData.hours) * 60 * 60 * 1000
       );
@@ -1619,7 +1689,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                         passengerCount: 1,
                         rentalType: 'half_day',
                         hours: 1,
-                        time: '19:00',
+                        time: '20:00',
                       }));
                       setStep(1);
                     }}
@@ -1899,13 +1969,17 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                         <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-400">
                           Choose your time
                         </label>
+                        {isBioCharter && (
+                          <p className="mb-3 rounded-lg border border-cyan-400/25 bg-cyan-950/25 px-3 py-2 text-xs font-semibold text-cyan-100">
+                            Late-night bio tours are available during peak glowing conditions. Times after midnight are
+                            booked as the next morning for the selected night.
+                          </p>
+                        )}
                         <div className="flex flex-wrap gap-3">
-                          {['17:00', '18:00', '19:00', '20:00', '21:00'].map((time) => {
-                            const [hh, mm] = time.split(':').map(Number);
-                            const label = new Date(2000, 0, 1, hh, mm).toLocaleTimeString(undefined, {
-                              hour: 'numeric',
-                              minute: '2-digit',
-                            });
+                          {charterTimeOptions.map((time) => {
+                            const slotLabel = isBioCharter && isNextMorningBioStart(bookingData.charterType, time)
+                              ? `${timeLabelFromHHMM(time)} next morning`
+                              : timeLabelFromHHMM(time);
                             const active = bookingData.time === time && !bookingData.slotStartIso;
                             return (
                               <button
@@ -1920,23 +1994,25 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                                   active ? bookingSlotChipActive : `border ${bookingChoiceIdle}`
                                 }`}
                               >
-                                {label}
+                                {slotLabel}
                               </button>
                             );
                           })}
                         </div>
-                        <div className="mt-3 max-w-xs">
-                          <label className="mb-1 block text-xs text-slate-500">Custom time</label>
-                          <input
-                            type="time"
-                            required
-                            value={bookingData.time}
-                            onChange={(e) =>
-                              setBookingData({ ...bookingData, time: e.target.value, slotStartIso: '' })
-                            }
-                            className={fieldClass}
-                          />
-                        </div>
+                        {!isBioCharter && (
+                          <div className="mt-3 max-w-xs">
+                            <label className="mb-1 block text-xs text-slate-500">Custom time</label>
+                            <input
+                              type="time"
+                              required
+                              value={bookingData.time}
+                              onChange={(e) =>
+                                setBookingData({ ...bookingData, time: e.target.value, slotStartIso: '' })
+                              }
+                              className={fieldClass}
+                            />
+                          </div>
+                        )}
                       </div>
                       <div>
                         <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-400">
@@ -2646,15 +2722,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                     <div className="flex justify-between">
                       <span>Date & Time:</span>
                       <span className="font-semibold text-right">
-                        {bookingData.date}
-                        {' · '}
-                        {bookingData.slotStartIso
-                          ? timeSlots.find((s) => s.start === bookingData.slotStartIso)?.label ??
-                            new Date(bookingData.slotStartIso).toLocaleTimeString(undefined, {
-                              hour: 'numeric',
-                              minute: '2-digit',
-                            })
-                          : bookingData.time}
+                        {selectedDateTimeLabel}
                       </span>
                     </div>
                     <div className="flex justify-between">

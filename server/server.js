@@ -160,6 +160,7 @@ const SLOT_TAKEN_USER_MESSAGE =
   'This time slot was just booked. Please select another time.';
 const SLOT_TOO_SOON_USER_MESSAGE =
   'This time is no longer available. Please choose a later time.';
+const BIO_NIGHT_CHARTER_START_HOURS = new Set([20, 21, 22, 23, 0, 1, 2, 3, 4]);
 
 function isOverlapConstraintError(err) {
   if (!err) return false;
@@ -180,6 +181,29 @@ function assertBookingLeadTime(startIso) {
     const err = new Error(SLOT_TOO_SOON_USER_MESSAGE);
     err.statusCode = 409;
     err.code = 'slot_too_soon';
+    throw err;
+  }
+}
+
+function assertCharterStartTimeAllowed(charterType, startIso) {
+  const local = DateTime.fromISO(String(startIso || ''), { zone: 'utc' }).setZone(availabilityService.BUSINESS_TZ);
+  if (!local.isValid) {
+    const err = new Error('Invalid charter start time.');
+    err.statusCode = 400;
+    throw err;
+  }
+  const type = String(charterType || '').trim().toLowerCase();
+  if (type === 'bio') {
+    if (local.minute !== 0 || !BIO_NIGHT_CHARTER_START_HOURS.has(local.hour)) {
+      const err = new Error('Bioluminescence night tours are available from 8:00 PM through 4:00 AM.');
+      err.statusCode = 400;
+      throw err;
+    }
+    return;
+  }
+  if (local.hour < 5) {
+    const err = new Error('Late-night times are only available for bioluminescence night tours.');
+    err.statusCode = 400;
     throw err;
   }
 }
@@ -934,6 +958,12 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
         err.statusCode = 409;
         throw err;
       }
+        assertCharterStartTimeAllowed(charterType, booking.start_time);
+        await availabilityService.assertCharterSlotAvailable({
+          startTime: booking.start_time,
+          endTime: bookingInsert.end_time,
+          excludeBookingId: holdRow?.id || null,
+        });
     } else {
       assertBookingLeadTime(booking.start_time);
       await availabilityService.assertBookingSlotAvailable({
@@ -3833,6 +3863,11 @@ app.post('/api/create-checkout-session', async (req, res) => {
           err.statusCode = 409;
           throw err;
         }
+        assertCharterStartTimeAllowed(charterType, startTime.toISOString());
+        await availabilityService.assertCharterSlotAvailable({
+          startTime: startTime.toISOString(),
+          endTime: new Date(startTime.getTime() + 60 * 60 * 1000).toISOString(),
+        });
       } else {
         assertBookingLeadTime(startTime.toISOString());
         await availabilityService.assertBookingSlotAvailable({

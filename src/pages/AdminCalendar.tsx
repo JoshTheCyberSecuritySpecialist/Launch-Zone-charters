@@ -124,7 +124,7 @@ const addDays = (d: Date, days: number) => new Date(d.getFullYear(), d.getMonth(
 const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
 const startOfWeek = (d: Date) => addDays(startOfDay(d), -startOfDay(d).getDay());
 const startOfMonth = (d: Date) => new Date(d.getFullYear(), d.getMonth(), 1);
-const hours = Array.from({ length: 14 }, (_, i) => 7 + i);
+const hours = Array.from({ length: 24 }, (_, i) => i);
 const blockingStatuses = new Set(['hold', 'pending', 'pending_verification', 'confirmed', 'ready_for_departure', 'completed']);
 const blankItemForm = (itemType: 'blocked_time' | 'admin_duty', date = todayYmd(), hour = 9, boatId = ''): CalendarItemForm => ({
   itemType,
@@ -1008,7 +1008,7 @@ export default function AdminCalendar() {
                   {hours.map((hour) => (
                     <Fragment key={hour}>
                       <div key={`time-${hour}`} className="border-b border-r border-slate-200 bg-slate-50 p-3 text-sm font-bold text-slate-600">
-                        {hour > 12 ? hour - 12 : hour}:00 {hour >= 12 ? 'PM' : 'AM'}
+                        {hour % 12 || 12}:00 {hour >= 12 ? 'PM' : 'AM'}
                       </div>
                       {range.days.map((day) => {
                         const key = ymd(day);

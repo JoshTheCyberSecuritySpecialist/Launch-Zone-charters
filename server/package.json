@@ -7,8 +7,9 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
+    "postinstall": "node scripts/ensure-captains-log-venv.js",
     "build": "npm run setup:captains-log",
-    "setup:captains-log": "python3 -m venv .venv && .venv/bin/python -m pip install --upgrade pip && .venv/bin/python -m pip install -r requirements-captains-log.txt",
+    "setup:captains-log": "node scripts/ensure-captains-log-venv.js",
     "test:lead-time": "node tests/bookingLeadTime.test.js"
   },
   "engines": {

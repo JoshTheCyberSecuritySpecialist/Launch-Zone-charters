@@ -377,10 +377,8 @@ function buildPythonSpawn(projectRoot) {
 function formatCaptainsLogVenvSetupMessage(command) {
   return [
     `Captain's Log Python virtual environment is missing at ${command}.`,
-    'Render builds from server/, so create it from the server directory with:',
-    'python3 -m venv .venv',
-    '.venv/bin/python -m pip install --upgrade pip',
-    '.venv/bin/python -m pip install -r requirements-captains-log.txt',
+    'It should be created automatically during Render builds via npm postinstall/build (scripts/ensure-captains-log-venv.js).',
+    'If this persists after deploy, confirm Render Build Command includes npm install and check build logs for [captains-log-venv].',
   ].join('\n');
 }
 

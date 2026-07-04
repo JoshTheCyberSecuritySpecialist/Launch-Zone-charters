@@ -1352,89 +1352,106 @@ def run_pipeline() -> dict[str, Any]:
                 print("[WARN] rewrite bypass — source-only excerpt fallback")
                 _apply_pipeline_rewrite_fallback(article, title)
 
-            # Phase 1 (non-blocking): audit structure immediately after rewrite/fallback,
-            # before image gates can skip the article.
+            # Legacy structure gate runs before image processing (SEO hub defers until after enhancer).
             content_for_audit = (article.get("content") or "").strip()
             seo_title_for_audit = (article.get("title") or title or "").strip()
-            audit_ok, audit_issues, audit_meta = audit_article_structure(
-                seo_title_for_audit, content_for_audit
-            )
-            structure_audit_checked += 1
-            block_issues = blocking_structure_issues(audit_issues)
-            if not audit_ok:
-                structure_audit_failures += 1
-            print(
-                json.dumps(
-                    {
-                        "stage": "structure_audit",
-                        "ok": audit_ok,
-                        "issues": audit_issues[:6],
-                        "blocking_issues": block_issues[:6],
-                        **audit_meta,
-                    },
-                    ensure_ascii=False,
+            article_category = str(article.get("category") or "Boating Tips")
+            article_keyword_topic = str(article.get("keyword_topic") or "")
+
+            if not PIPELINE_SEO_HUB_MODE:
+                audit_ok, audit_issues, audit_meta = audit_article_structure(
+                    seo_title_for_audit, content_for_audit, seo_hub_mode=False
                 )
-            )
-            if structure_enforce and block_issues:
-                # Phase 2: attempt one deterministic source fallback, then re-audit.
-                source_blob = "\n\n".join(
-                    x.strip()
-                    for x in (
-                        str(article.get("title") or ""),
-                        str(article.get("summary") or ""),
-                        str(article.get("content") or ""),
+                structure_audit_checked += 1
+                block_issues = blocking_structure_issues(audit_issues, seo_hub_mode=False)
+                if not audit_ok:
+                    structure_audit_failures += 1
+                print(
+                    json.dumps(
+                        {
+                            "stage": "structure_audit",
+                            "ok": audit_ok,
+                            "issues": audit_issues[:6],
+                            "blocking_issues": block_issues[:6],
+                            **audit_meta,
+                        },
+                        ensure_ascii=False,
                     )
-                    if str(x).strip()
                 )
-                fb = pipeline_fallback_from_source(
-                    source_blob,
-                    str(article.get("title") or title),
-                    str(article.get("category") or "Boating Tips"),
-                )
-                if (fb.get("content") or "").strip():
-                    article["title"] = (fb.get("title") or article.get("title") or title)[:500]
-                    article["content"] = (fb.get("content") or "").strip()
-                    print(
-                        json.dumps(
-                            {
-                                "stage": "structure_enforce",
-                                "action": "fallback_repair_attempt",
-                                "prior_blocking_issues": block_issues[:6],
-                            },
-                            ensure_ascii=False,
+                if structure_enforce and block_issues:
+                    # Phase 2: attempt one deterministic source fallback, then re-audit.
+                    source_blob = "\n\n".join(
+                        x.strip()
+                        for x in (
+                            str(article.get("title") or ""),
+                            str(article.get("summary") or ""),
+                            str(article.get("content") or ""),
                         )
+                        if str(x).strip()
                     )
-                    audit_ok2, issues2, meta2 = audit_article_structure(
+                    fb = pipeline_fallback_from_source(
+                        source_blob,
                         str(article.get("title") or title),
-                        str(article.get("content") or ""),
+                        article_category,
                     )
-                    structure_audit_checked += 1
-                    if not audit_ok2:
-                        structure_audit_failures += 1
-                    block_issues2 = blocking_structure_issues(issues2)
-                    print(
-                        json.dumps(
-                            {
-                                "stage": "structure_audit",
-                                "ok": audit_ok2,
-                                "issues": issues2[:6],
-                                "blocking_issues": block_issues2[:6],
-                                "repair_attempt": True,
-                                **meta2,
-                            },
-                            ensure_ascii=False,
+                    if (fb.get("content") or "").strip():
+                        article["title"] = (fb.get("title") or article.get("title") or title)[:500]
+                        article["content"] = (fb.get("content") or "").strip()
+                        print(
+                            json.dumps(
+                                {
+                                    "stage": "structure_enforce",
+                                    "action": "fallback_repair_attempt",
+                                    "prior_blocking_issues": block_issues[:6],
+                                },
+                                ensure_ascii=False,
+                            )
                         )
-                    )
-                    if block_issues2:
-                        print(f"[SKIP] structure gate failed after repair → {block_issues2[:3]}")
+                        audit_ok2, issues2, meta2 = audit_article_structure(
+                            str(article.get("title") or title),
+                            str(article.get("content") or ""),
+                            seo_hub_mode=False,
+                        )
+                        structure_audit_checked += 1
+                        if not audit_ok2:
+                            structure_audit_failures += 1
+                        block_issues2 = blocking_structure_issues(issues2, seo_hub_mode=False)
+                        print(
+                            json.dumps(
+                                {
+                                    "stage": "structure_audit",
+                                    "ok": audit_ok2,
+                                    "issues": issues2[:6],
+                                    "blocking_issues": block_issues2[:6],
+                                    "repair_attempt": True,
+                                    **meta2,
+                                },
+                                ensure_ascii=False,
+                            )
+                        )
+                        if block_issues2:
+                            print(f"[SKIP] structure gate failed after repair → {block_issues2[:3]}")
+                            delta["skipped_validation"] += 1
+                            _merge_stats(stats, delta)
+                            continue
+                    else:
+                        print(f"[SKIP] structure gate failed (no fallback content) → {block_issues[:3]}")
                         delta["skipped_validation"] += 1
                         _merge_stats(stats, delta)
                         continue
-                else:
-                    print(f"[SKIP] structure gate failed (no fallback content) → {block_issues[:3]}")
-                    delta["skipped_validation"] += 1
-                    _merge_stats(stats, delta)
-                    continue
+            else:
+                print(
+                    json.dumps(
+                        {
+                            "stage": "structure_audit",
+                            "ok": True,
+                            "deferred": True,
+                            "reason": "seo_hub_mode_waits_for_enhancer",
+                            "word_count": len(re.findall(r"\b[\w'-]+\b", content_for_audit)),
+                        },
+                        ensure_ascii=False,
+                    )
+                )
 
             try:
                 img_result = process_image_strict(article)
@@ -1534,13 +1551,15 @@ def run_pipeline() -> dict[str, Any]:
                 slug = slug[:200]
 
             source_url_db = url or None
-            article_category = str(article.get("category") or "Boating Tips")
-            article_keyword_topic = str(article.get("keyword_topic") or "")
 
-            if ENABLE_FINAL_ARTICLE_ENHANCER and (
-                (not FINAL_ENHANCER_ONLY_NEW)
-                or not is_duplicate_article(client, source_url_db or "", log=False)
-            ):
+            run_enhancer = PIPELINE_SEO_HUB_MODE or (
+                ENABLE_FINAL_ARTICLE_ENHANCER
+                and (
+                    (not FINAL_ENHANCER_ONLY_NEW)
+                    or not is_duplicate_article(client, source_url_db or "", log=False)
+                )
+            )
+            if run_enhancer:
                 content = apply_final_article_enhancer(
                     content=content,
                     seo_title=seo_title,
@@ -1563,6 +1582,71 @@ def run_pipeline() -> dict[str, Any]:
                 )
                 article["content"] = content
 
+            if PIPELINE_SEO_HUB_MODE and structure_enforce:
+                audit_ok, audit_issues, audit_meta = audit_article_structure(
+                    seo_title,
+                    content,
+                    seo_hub_mode=True,
+                    category=article_category,
+                    keyword_topic=article_keyword_topic,
+                )
+                structure_audit_checked += 1
+                block_issues = blocking_structure_issues(audit_issues, seo_hub_mode=True)
+                if not audit_ok:
+                    structure_audit_failures += 1
+                print(
+                    json.dumps(
+                        {
+                            "stage": "structure_audit_post_enhancer",
+                            "ok": audit_ok,
+                            "issues": audit_issues[:6],
+                            "blocking_issues": block_issues[:6],
+                            **audit_meta,
+                        },
+                        ensure_ascii=False,
+                    )
+                )
+                if block_issues:
+                    template = detect_seo_template(
+                        category=article_category,
+                        keyword_topic=article_keyword_topic,
+                        title=seo_title,
+                        body=content,
+                    )
+                    content = append_missing_evergreen_sections(
+                        content,
+                        template=template,
+                        min_words=PIPELINE_MIN_WORDS_SEO_HUB,
+                    )
+                    article["content"] = content
+                    audit_ok2, audit_issues2, audit_meta2 = audit_article_structure(
+                        seo_title,
+                        content,
+                        seo_hub_mode=True,
+                        category=article_category,
+                        keyword_topic=article_keyword_topic,
+                    )
+                    structure_audit_checked += 1
+                    block_issues2 = blocking_structure_issues(audit_issues2, seo_hub_mode=True)
+                    print(
+                        json.dumps(
+                            {
+                                "stage": "structure_audit_post_enhancer",
+                                "ok": audit_ok2,
+                                "repair_attempt": True,
+                                "issues": audit_issues2[:6],
+                                "blocking_issues": block_issues2[:6],
+                                **audit_meta2,
+                            },
+                            ensure_ascii=False,
+                        )
+                    )
+                    if block_issues2 and not audit_ok2:
+                        print(f"[SKIP] SEO hub structure gate failed → {block_issues2[:3]}")
+                        delta["skipped_validation"] += 1
+                        _merge_stats(stats, delta)
+                        continue
+
             def _validate_current() -> tuple[bool, str]:
                 return validate_article(
                     content,
@@ -1575,31 +1659,39 @@ def run_pipeline() -> dict[str, Any]:
                 )
 
             ok, reason = _validate_current()
-            if not ok and reason.startswith("below_min_words"):
+            if not ok and PIPELINE_SEO_HUB_MODE and (
+                reason.startswith("below_min_words") or reason.startswith("missing_sections")
+            ):
+                wc0 = reason.split(":", 1)[-1] if ":" in reason else "?"
+                print(
+                    f"[INFO] SEO hub finalize ({reason}) — expanding evergreen sections "
+                    f"(currently {wc0} words/sections)"
+                )
+                template = detect_seo_template(
+                    category=article_category,
+                    keyword_topic=article_keyword_topic,
+                    title=seo_title,
+                    body=content,
+                )
+                content = append_missing_evergreen_sections(
+                    content,
+                    template=template,
+                    min_words=PIPELINE_MIN_WORDS_SEO_HUB,
+                )
+                article["content"] = content
+                ok, reason = _validate_current()
+            elif not ok and reason.startswith("below_min_words"):
                 wc0 = reason.split(":", 1)[-1] if ":" in reason else "?"
                 print(
                     f"[INFO] Word count under {PIPELINE_MIN_WORDS_FINAL} ({wc0} words) — "
-                    "expanding with evergreen sections, then re-checking"
+                    "padding with source-safe text, then re-checking"
                 )
-                if PIPELINE_SEO_HUB_MODE:
-                    template = detect_seo_template(
-                        category=article_category,
-                        keyword_topic=article_keyword_topic,
-                        title=seo_title,
-                        body=content,
-                    )
-                    content = append_missing_evergreen_sections(
-                        content,
-                        template=template,
-                        min_words=PIPELINE_MIN_WORDS_SEO_HUB,
-                    )
-                else:
-                    content = _expand_short_content_for_validation(
-                        content,
-                        seo_title,
-                        str(article.get("summary") or ""),
-                        PIPELINE_MIN_WORDS_FINAL,
-                    )
+                content = _expand_short_content_for_validation(
+                    content,
+                    seo_title,
+                    str(article.get("summary") or ""),
+                    PIPELINE_MIN_WORDS_FINAL,
+                )
                 article["content"] = content
                 ok, reason = _validate_current()
             if not ok and reason == "no_local_reference":

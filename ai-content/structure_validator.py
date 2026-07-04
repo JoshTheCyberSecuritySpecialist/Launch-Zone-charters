@@ -1,13 +1,21 @@
 """
 Structure auditor + gate helpers.
 
-Strict single schema: TITLE + ## + five required ### sections (+ optional Questions).
+Legacy mode: TITLE + ## + five required ### sections (+ optional Questions).
+SEO hub mode: long-form template sections (see seo_evergreen.py).
 """
 
 from __future__ import annotations
 
 import re
 from typing import Any
+
+from config import PIPELINE_SEO_HUB_MODE
+from seo_evergreen import (
+    detect_seo_template,
+    template_section_headings,
+    validate_seo_hub_structure,
+)
 
 _H2_RE = re.compile(r"(?mi)^##\s+(.+?)\s*$")
 _H3_RE = re.compile(r"(?mi)^###\s+(.+?)\s*$")
@@ -24,7 +32,7 @@ _BANNED_H2 = (
 
 _CTA_H3 = "book your experience"
 
-# Exact normalized heading text (see rewrite.py STEP 6).
+# Exact normalized heading text (legacy rewrite.py STEP 6).
 _REQUIRED_H3 = (
     "what this means for your trip",
     "best ways to experience the space coast safely",
@@ -38,7 +46,7 @@ _OPTIONAL_H3 = "questions readers ask"
 
 def _norm(s: str) -> str:
     t = re.sub(r"\s+", " ", (s or "").strip().lower())
-    t = t.replace("’", "'").replace("`", "'")
+    t = t.replace("'", "'").replace("`", "'")
     return t
 
 
@@ -47,13 +55,8 @@ def _schema_match_score(h3: list[str], required: tuple[str, ...]) -> int:
     return sum(1 for need in required if need in hs)
 
 
-def audit_article_structure(
-    title: str,
-    content: str,
-) -> tuple[bool, list[str], dict[str, Any]]:
-    """
-    Returns (ok, issues, meta). Phase 1 is non-blocking; caller decides enforcement.
-    """
+def _audit_legacy_structure(title: str, content: str) -> tuple[bool, list[str], dict[str, Any]]:
+    """Strict five-section schema (pre-SEO-hub articles)."""
     t = (title or "").strip()
     c = (content or "").strip()
     issues: list[str] = []
@@ -89,7 +92,6 @@ def audit_article_structure(
     if dups:
         issues.append(f"duplicate_h3:{','.join(dups[:6])}")
 
-    # Strict: 5 required, or 6 with optional Questions only.
     n = len(h3)
     if has_questions:
         if n != 6:
@@ -116,7 +118,7 @@ def audit_article_structure(
             issues.append("repeated_long_phrase")
 
     meta: dict[str, Any] = {
-        "schema_detected": "strict",
+        "schema_detected": "legacy_strict",
         "h2_count": len(h2),
         "h3_count": len(h3),
         "short_schema_score": _schema_match_score(h3, required),
@@ -128,12 +130,126 @@ def audit_article_structure(
     return len(issues) == 0, issues, meta
 
 
-def blocking_structure_issues(issues: list[str]) -> list[str]:
+def _audit_seo_hub_structure(
+    title: str,
+    content: str,
+    *,
+    category: str = "",
+    keyword_topic: str = "",
+    min_sections: int = 6,
+) -> tuple[bool, list[str], dict[str, Any]]:
+    """Long-form template schema — flexible section count, enforced after enhancer."""
+    t = (title or "").strip()
+    c = (content or "").strip()
+    issues: list[str] = []
+
+    h2 = [m.group(1).strip() for m in _H2_RE.finditer(c)]
+    h3 = [m.group(1).strip() for m in _H3_RE.finditer(c)]
+    h2n = [_norm(x) for x in h2]
+
+    if not t:
+        issues.append("missing_title")
+    if not c:
+        issues.append("missing_content")
+    if not h2:
+        issues.append("missing_h2_headline")
+
+    for b in _BANNED_H2:
+        if b in h2n:
+            issues.append(f"banned_h2:{b}")
+
+    template = detect_seo_template(
+        category=category,
+        keyword_topic=keyword_topic,
+        title=title,
+        body=content,
+    )
+    required = template_section_headings(template)
+    h3n = {_norm(x) for x in h3}
+    matched = sum(1 for sec in required if _norm(sec) in h3n)
+    if matched < min_sections:
+        issues.append(f"missing_sections:{matched}/{len(required)}")
+
+    if len(h3) < min_sections:
+        issues.append(f"section_count_out_of_bounds:{len(h3)}")
+
+    seen: dict[str, int] = {}
+    for s in h3n:
+        seen[s] = seen.get(s, 0) + 1
+    dups = [k for k, v in seen.items() if v > 1]
+    if dups:
+        issues.append(f"duplicate_h3:{','.join(dups[:6])}")
+
+    ok_seo, reason_seo, seo_meta = validate_seo_hub_structure(
+        c,
+        template=template,
+        title=title,
+        min_words=0,
+        min_sections=min_sections,
+    )
+    if not ok_seo and reason_seo.startswith("headline_repeated"):
+        issues.append(reason_seo)
+    if not ok_seo and reason_seo.startswith("filler:"):
+        issues.append(reason_seo)
+
+    meta: dict[str, Any] = {
+        "schema_detected": "seo_hub",
+        "template": template,
+        "h2_count": len(h2),
+        "h3_count": len(h3),
+        "sections_matched": matched,
+        "sections_required": len(required),
+        "word_count": len(_WORD_RE.findall(c)),
+        **seo_meta,
+    }
+    return len(issues) == 0, issues, meta
+
+
+def audit_article_structure(
+    title: str,
+    content: str,
+    *,
+    seo_hub_mode: bool | None = None,
+    category: str = "",
+    keyword_topic: str = "",
+    min_sections: int | None = None,
+) -> tuple[bool, list[str], dict[str, Any]]:
     """
-    Phase 2: issues that should fail publish unless repaired.
+    Returns (ok, issues, meta). Caller decides enforcement timing.
+    SEO hub articles should be audited after the final enhancer pass.
     """
+    hub = PIPELINE_SEO_HUB_MODE if seo_hub_mode is None else seo_hub_mode
+    if hub:
+        ms = 6 if min_sections is None else min_sections
+        return _audit_seo_hub_structure(
+            title,
+            content,
+            category=category,
+            keyword_topic=keyword_topic,
+            min_sections=ms,
+        )
+    return _audit_legacy_structure(title, content)
+
+
+def blocking_structure_issues(issues: list[str], *, seo_hub_mode: bool | None = None) -> list[str]:
+    """
+    Issues that should fail publish unless repaired.
+    SEO hub: do not block on legacy missing_required_h3 / strict section counts pre-enhancer.
+    """
+    hub = PIPELINE_SEO_HUB_MODE if seo_hub_mode is None else seo_hub_mode
     out: list[str] = []
     for i in issues:
+        if hub:
+            if (
+                i.startswith("missing_sections:")
+                or i.startswith("duplicate_h3:")
+                or i.startswith("banned_h2:")
+                or i == "missing_h2_headline"
+                or i.startswith("headline_repeated")
+                or i.startswith("filler:")
+            ):
+                out.append(i)
+            continue
         if (
             i.startswith("missing_required_h3:")
             or i.startswith("duplicate_h3:")

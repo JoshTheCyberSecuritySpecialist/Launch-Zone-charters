@@ -1,4 +1,5 @@
 import { env } from '../config/env.js';
+import { adminDebugLog } from './adminDiagnostics';
 
 const API_BASE_URL = env.apiUrl;
 
@@ -6,6 +7,7 @@ const pendingRequests = new Map<string, Promise<unknown>>();
 const cache = new Map<string, { data: unknown; timestamp: number }>();
 
 const CACHE_TTL = 30 * 1000;
+const API_TIMEOUT_MS = 15000;
 
 function buildUrl(path: string): string {
   if (path.startsWith('http')) return path;
@@ -34,26 +36,56 @@ export async function apiGet<T = unknown>(path: string, options: ApiGetOptions =
     return pendingRequests.get(cacheKey) as Promise<T>;
   }
 
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+  const startedAt = performance.now();
+  adminDebugLog('api:get:start', { url });
+
   const request = fetch(url, {
     method: 'GET',
     credentials: 'include',
+    signal: controller.signal,
     headers: {
       'Content-Type': 'application/json',
       ...(options.headers || {}),
     },
   })
     .then(async (res) => {
+      const text = await res.text();
+      let data: unknown = {};
+      if (text) {
+        try {
+          data = JSON.parse(text);
+        } catch {
+          data = { text: text.slice(0, 240) };
+        }
+      }
+      adminDebugLog('api:get:response', {
+        url,
+        status: res.status,
+        ok: res.ok,
+        elapsedMs: Math.round(performance.now() - startedAt),
+        body: data,
+      });
       if (!res.ok) {
-        const text = await res.text();
         throw new Error(`API GET failed: ${res.status} ${url} ${text}`);
       }
-      const data = (await res.json()) as T;
       if (!options.skipCache) {
         cache.set(cacheKey, { data, timestamp: Date.now() });
       }
-      return data;
+      return data as T;
+    })
+    .catch((err) => {
+      const message = err instanceof DOMException && err.name === 'AbortError'
+        ? `API GET timed out after ${Math.round(API_TIMEOUT_MS / 1000)}s: ${url}`
+        : err instanceof Error
+          ? err.message
+          : 'API GET failed.';
+      adminDebugLog('api:get:error', { url, message });
+      throw new Error(message);
     })
     .finally(() => {
+      window.clearTimeout(timeout);
       pendingRequests.delete(cacheKey);
     });
 

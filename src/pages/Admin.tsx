@@ -36,6 +36,7 @@ import {
   getAdminSubscribers,
   getIncidentsByBookingId,
 } from '../lib/adminApi';
+import { adminDebugLog, describeError, fetchJsonWithTimeout, withTimeout } from '../lib/adminDiagnostics';
 
 interface AdminProps {
   onNavigate: (page: string) => void;
@@ -310,7 +311,7 @@ function insuranceComplianceEmojiLabel(status: string | null | undefined): { emo
 }
 
 export default function Admin({ onNavigate }: AdminProps) {
-  const { user, isAdmin, signOut, loading: authLoading } = useAuth();
+  const { user, isAdmin, signOut, loading: authLoading, authError, retryAuth } = useAuth();
 
   useEffect(() => {
     if (import.meta.env.DEV) {
@@ -329,6 +330,7 @@ export default function Admin({ onNavigate }: AdminProps) {
     customers: 0,
   });
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [tableLoading, setTableLoading] = useState(false);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [emailSearch, setEmailSearch] = useState('');
@@ -657,6 +659,13 @@ export default function Admin({ onNavigate }: AdminProps) {
     }
   }, [isAdmin]);
 
+  const getAdminToken = useCallback(async (): Promise<string | null> => {
+    const {
+      data: { session },
+    } = await withTimeout('Admin session lookup', supabase.auth.getSession(), 12000);
+    return session?.access_token || null;
+  }, []);
+
   const loadAlerts = useCallback(async () => {
     if (!isAdmin) return;
     if (!env.apiUrlConfigured || !env.apiUrl) {
@@ -668,10 +677,7 @@ export default function Admin({ onNavigate }: AdminProps) {
     setAlertsLoading(true);
     setAlertsError(null);
     try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      const token = session?.access_token;
+      const token = await getAdminToken();
       if (!token) {
         setAlertsError('Admin session unavailable.');
         setAlerts([]);
@@ -687,7 +693,7 @@ export default function Admin({ onNavigate }: AdminProps) {
     } finally {
       setAlertsLoading(false);
     }
-  }, [isAdmin]);
+  }, [getAdminToken, isAdmin]);
 
   const loadSubscribers = useCallback(async () => {
     if (!isAdmin) return;
@@ -700,10 +706,7 @@ export default function Admin({ onNavigate }: AdminProps) {
     setSubscribersLoading(true);
     setSubscribersError(null);
     try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      const token = session?.access_token;
+      const token = await getAdminToken();
       if (!token) {
         setSubscribersError('Admin session unavailable.');
         setSubscribers([]);
@@ -719,7 +722,7 @@ export default function Admin({ onNavigate }: AdminProps) {
     } finally {
       setSubscribersLoading(false);
     }
-  }, [isAdmin]);
+  }, [getAdminToken, isAdmin]);
 
   const handleRunAlerts = useCallback(async () => {
     if (!isAdmin || runningAlerts) return;
@@ -730,21 +733,17 @@ export default function Admin({ onNavigate }: AdminProps) {
     setRunningAlerts(true);
     setNotice(null);
     try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      const token = session?.access_token;
+      const token = await getAdminToken();
       if (!token) {
         setNotice({ variant: 'error', text: 'Admin session unavailable.' });
         return;
       }
 
-      const res = await fetch(`${env.apiUrl}/api/admin/run-alerts`, {
+      const payload = await fetchJsonWithTimeout<{ success?: boolean; error?: string }>('admin-api:run-alerts', `${env.apiUrl}/api/admin/run-alerts`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
-      });
-      const payload = (await res.json().catch(() => ({}))) as { success?: boolean; error?: string };
-      if (!res.ok || !payload.success) {
+      }, 15000);
+      if (!payload.success) {
         setNotice({ variant: 'error', text: payload.error || 'Failed to run alerts.' });
         return;
       }
@@ -757,7 +756,7 @@ export default function Admin({ onNavigate }: AdminProps) {
     } finally {
       setRunningAlerts(false);
     }
-  }, [isAdmin, runningAlerts, loadAlerts, loadSubscribers]);
+  }, [getAdminToken, isAdmin, runningAlerts, loadAlerts, loadSubscribers]);
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -790,13 +789,6 @@ export default function Admin({ onNavigate }: AdminProps) {
     void loadSubscribers();
   }, [isAdmin, loadSubscribers]);
 
-  const getAdminToken = useCallback(async (): Promise<string | null> => {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-    return session?.access_token || null;
-  }, []);
-
   const apiRequest = useCallback(
     async (path: string, options?: RequestInit) => {
       if (!env.apiUrlConfigured || !env.apiUrl) {
@@ -808,16 +800,12 @@ export default function Admin({ onNavigate }: AdminProps) {
         Authorization: `Bearer ${token}`,
         ...(options?.headers || {}),
       };
-      const res = await fetch(`${env.apiUrl}${path}`, { ...options, headers });
-      const payload = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        const msg =
-          payload && typeof payload === 'object' && 'error' in payload && typeof payload.error === 'string'
-            ? payload.error
-            : 'Request failed.';
-        throw new Error(msg);
-      }
-      return payload as Record<string, unknown>;
+      return await fetchJsonWithTimeout<Record<string, unknown>>(
+        `admin-api:${path}`,
+        `${env.apiUrl}${path}`,
+        { ...options, headers },
+        15000
+      );
     },
     [getAdminToken]
   );
@@ -1236,14 +1224,25 @@ export default function Admin({ onNavigate }: AdminProps) {
   const loadPreTripSubmissions = useCallback(async () => {
     if (!isAdmin) return;
     setPreTripLoading(true);
-    const { data, error } = await supabase
-      .from('pre_trip_submissions')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(100);
-    logSupabaseError('Admin.loadPreTripSubmissions', error);
-    setPreTripSubmissions((data as PreTripSubmissionRow[]) || []);
-    setPreTripLoading(false);
+    try {
+      const { data, error } = await withTimeout(
+        'Admin pre-trip submissions',
+        supabase
+          .from('pre_trip_submissions')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(100),
+        15000
+      );
+      logSupabaseError('Admin.loadPreTripSubmissions', error);
+      setPreTripSubmissions((data as PreTripSubmissionRow[]) || []);
+    } catch (err) {
+      console.error('[Admin.loadPreTripSubmissions]', err);
+      setPreTripSubmissions([]);
+      setNotice({ variant: 'error', text: describeError(err, 'Could not load pre-trip submissions.') });
+    } finally {
+      setPreTripLoading(false);
+    }
   }, [isAdmin]);
 
   useEffect(() => {
@@ -1252,16 +1251,18 @@ export default function Admin({ onNavigate }: AdminProps) {
   }, [isAdmin, loadPreTripSubmissions]);
 
   const loadPreTripSuggestions = async (submissionId: string) => {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-    const token = session?.access_token;
-    if (!token) return;
     setPreTripSuggestionsLoading(submissionId);
-    const out = await fetchPreTripMatchSuggestions(token, submissionId);
-    setPreTripSuggestionsLoading(null);
-    if (out.ok) {
-      setPreTripSuggestions((prev) => ({ ...prev, [submissionId]: out.suggestions }));
+    try {
+      const token = await getAdminToken();
+      if (!token) return;
+      const out = await withTimeout('Admin pre-trip match suggestions', fetchPreTripMatchSuggestions(token, submissionId), 15000);
+      if (out.ok) {
+        setPreTripSuggestions((prev) => ({ ...prev, [submissionId]: out.suggestions }));
+      }
+    } catch (err) {
+      setNotice({ variant: 'error', text: describeError(err, 'Could not load match suggestions.') });
+    } finally {
+      setPreTripSuggestionsLoading(null);
     }
   };
 
@@ -1279,44 +1280,55 @@ export default function Admin({ onNavigate }: AdminProps) {
     submissionId: string,
     action: 'match' | 'approve' | 'reject'
   ) => {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-    const token = session?.access_token;
-    if (!token) {
-      window.alert('Sign in again to continue.');
-      return;
-    }
     const matched_booking_id = (preTripMatchIds[submissionId] || '').trim();
     if ((action === 'match' || action === 'approve') && !matched_booking_id) {
       window.alert('Enter a booking ID to match this submission.');
       return;
     }
     setPreTripActionBusy(submissionId);
-    const out = await adminUpdatePreTripSubmission(token, submissionId, {
-      action,
-      matched_booking_id: matched_booking_id || undefined,
-      admin_notes: preTripNotes[submissionId]?.trim() || undefined,
-    });
-    setPreTripActionBusy(null);
-    if (!out.ok) {
-      window.alert(out.error || 'Action failed.');
-      return;
+    try {
+      const token = await getAdminToken();
+      if (!token) {
+        window.alert('Sign in again to continue.');
+        return;
+      }
+      const out = await withTimeout(
+        'Admin pre-trip action',
+        adminUpdatePreTripSubmission(token, submissionId, {
+          action,
+          matched_booking_id: matched_booking_id || undefined,
+          admin_notes: preTripNotes[submissionId]?.trim() || undefined,
+        }),
+        15000
+      );
+      if (!out.ok) {
+        window.alert(out.error || 'Action failed.');
+        return;
+      }
+      setNotice({ variant: 'success', text: `Submission ${action}ed successfully.` });
+      void loadPreTripSubmissions();
+      void loadBookings();
+    } catch (err) {
+      setNotice({ variant: 'error', text: describeError(err, 'Pre-trip action failed.') });
+    } finally {
+      setPreTripActionBusy(null);
     }
-    setNotice({ variant: 'success', text: `Submission ${action}ed successfully.` });
-    void loadPreTripSubmissions();
-    void loadBookings();
   };
 
   const loadStats = useCallback(async () => {
-    const [{ count: totalAll }, { count: pendingCt }, { data: priceRows }] = await Promise.all([
-      supabase.from('bookings').select('*', { count: 'exact', head: true }),
-      supabase
-        .from('bookings')
-        .select('*', { count: 'exact', head: true })
-        .in('status', ['pending', 'pending_verification']),
-      supabase.from('bookings').select('total_price').limit(5000),
-    ]);
+    adminDebugLog('admin:stats:start');
+    const [{ count: totalAll }, { count: pendingCt }, { data: priceRows }] = await withTimeout(
+      'Admin stats load',
+      Promise.all([
+        supabase.from('bookings').select('*', { count: 'exact', head: true }),
+        supabase
+          .from('bookings')
+          .select('*', { count: 'exact', head: true })
+          .in('status', ['pending', 'pending_verification']),
+        supabase.from('bookings').select('total_price').limit(5000),
+      ]),
+      15000
+    );
 
     const revenue =
       priceRows?.reduce((sum, row) => sum + parseFloat(String(row.total_price)), 0) ?? 0;
@@ -1327,11 +1339,13 @@ export default function Admin({ onNavigate }: AdminProps) {
       revenue,
       customers: totalAll ?? 0,
     });
+    adminDebugLog('admin:stats:success', { totalBookings: totalAll, pendingBookings: pendingCt });
   }, []);
 
   const loadBookings = useCallback(async () => {
     if (!isAdmin) return;
 
+    setLoadError(null);
     if (initialBookingsLoadRef.current) {
       setLoading(true);
     } else {
@@ -1339,12 +1353,22 @@ export default function Admin({ onNavigate }: AdminProps) {
     }
 
     try {
+      adminDebugLog('admin:bookings:start', {
+        initial: initialBookingsLoadRef.current,
+        statusFilter,
+        hasSearch: Boolean(debouncedEmailSearch.trim()),
+        page,
+      });
       let customerIds: string[] | null = null;
       if (debouncedEmailSearch.trim() !== '') {
-        const { data: custs, error: custErr } = await supabase
-          .from('customers')
-          .select('id')
-          .ilike('email', `%${debouncedEmailSearch.trim()}%`);
+        const { data: custs, error: custErr } = await withTimeout(
+          'Admin customer search',
+          supabase
+            .from('customers')
+            .select('id')
+            .ilike('email', `%${debouncedEmailSearch.trim()}%`),
+          15000
+        );
 
         logSupabaseError('Admin.searchCustomers', custErr);
 
@@ -1367,7 +1391,7 @@ export default function Admin({ onNavigate }: AdminProps) {
         countQuery = countQuery.in('customer_id', customerIds);
       }
 
-      const { count, error: countErr } = await countQuery;
+      const { count, error: countErr } = await withTimeout('Admin booking count', countQuery, 15000);
       logSupabaseError('Admin.countBookings', countErr);
 
       const total = count ?? 0;
@@ -1409,7 +1433,7 @@ export default function Admin({ onNavigate }: AdminProps) {
         return q;
       };
 
-      const embedRes = await buildEmbedQuery().range(from, to);
+      const embedRes = await withTimeout('Admin bookings embed query', buildEmbedQuery().range(from, to), 15000);
       let rows: AdminBookingRow[] = [];
       let loadError = embedRes.error;
 
@@ -1419,7 +1443,7 @@ export default function Admin({ onNavigate }: AdminProps) {
       }
 
       if (loadError) {
-        const plain = await buildPlainQuery().range(from, to);
+        const plain = await withTimeout('Admin bookings fallback query', buildPlainQuery().range(from, to), 15000);
         if (import.meta.env.DEV) {
           console.log('📦 BOOKINGS RAW (fallback *):', plain.data);
           console.log('❌ ERROR (fallback):', plain.error);
@@ -1433,11 +1457,22 @@ export default function Admin({ onNavigate }: AdminProps) {
       logSupabaseError('Admin.loadBookings', loadError);
 
       setBookings(rows);
+      setLoadError(null);
       if (import.meta.env.DEV) {
         console.log('✅ FINAL BOOKINGS:', rows);
       }
 
       await loadStats();
+      adminDebugLog('admin:bookings:success', { rows: rows.length });
+    } catch (err) {
+      const message = describeError(err, 'Could not load admin bookings.');
+      console.error('[Admin.loadBookings]', message);
+      setLoadError(message);
+      setNotice({ variant: 'error', text: message });
+      if (initialBookingsLoadRef.current) {
+        setBookings([]);
+        setTotalCount(0);
+      }
     } finally {
       setLoading(false);
       setTableLoading(false);
@@ -1690,10 +1725,7 @@ export default function Admin({ onNavigate }: AdminProps) {
 
     void (async () => {
       try {
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
-        const token = session?.access_token;
+        const token = await getAdminToken();
         if (!token) {
           setNotice({ variant: 'error', text: 'You must be signed in.' });
           persistLastRun('Failed');
@@ -1706,20 +1738,18 @@ export default function Admin({ onNavigate }: AdminProps) {
           return;
         }
 
-        const res = await fetch(`${env.apiUrl}/api/generate-content`, {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        });
-
-        const payload = (await res.json().catch(() => ({}))) as {
+        const payload = await fetchJsonWithTimeout<{
           success?: boolean;
           status?: string;
           message?: string;
           error?: string;
           details?: string;
-        };
+        }>('admin-api:generate-content', `${env.apiUrl}/api/generate-content`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }, 15000);
 
         const errLine =
           typeof payload.error === 'string'
@@ -1731,13 +1761,6 @@ export default function Admin({ onNavigate }: AdminProps) {
           typeof payload.details === 'string' && payload.details.trim()
             ? ` ${payload.details.trim().slice(0, 500)}`
             : '';
-
-        if (!res.ok) {
-          console.error('[generate-content]', res.status, payload);
-          setNotice({ variant: 'error', text: `${errLine}${detailSuffix}`.trim() });
-          persistLastRun('Failed');
-          return;
-        }
 
         if (payload.success === false) {
           if (payload.message === 'Already generating') {
@@ -1833,6 +1856,38 @@ export default function Admin({ onNavigate }: AdminProps) {
     return <FullPageLoader message="Checking admin access…" />;
   }
 
+  if (authError) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
+        <div className="w-full max-w-md rounded-xl bg-white p-8 text-center shadow-lg">
+          <h2 className="mb-2 text-2xl font-bold text-slate-900">Admin session could not load</h2>
+          <p className="mb-4 text-slate-600">
+            The admin page stopped while restoring your mobile browser session.
+          </p>
+          <div className="mb-6 rounded-lg bg-red-50 px-4 py-3 text-left text-sm font-semibold text-red-800">
+            {authError}
+          </div>
+          <div className="flex flex-col gap-3 sm:flex-row sm:justify-center">
+            <button
+              type="button"
+              onClick={retryAuth}
+              className="rounded-lg bg-amber-600 px-6 py-3 font-bold text-white transition-colors hover:bg-amber-700"
+            >
+              Retry
+            </button>
+            <button
+              type="button"
+              onClick={() => onNavigate('admin-login')}
+              className="rounded-lg bg-slate-200 px-6 py-3 font-bold text-slate-900 transition-colors hover:bg-slate-300"
+            >
+              Admin Login
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (!isAdmin) {
     const signedIn = Boolean(user);
     return (
@@ -1867,6 +1922,38 @@ export default function Admin({ onNavigate }: AdminProps) {
 
   if (loading && bookings.length === 0 && !tableLoading) {
     return <FullPageLoader message="Loading dashboard…" />;
+  }
+
+  if (loadError && bookings.length === 0) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
+        <div className="w-full max-w-lg rounded-xl bg-white p-8 text-center shadow-lg">
+          <h2 className="mb-2 text-2xl font-bold text-slate-900">Admin dashboard could not load</h2>
+          <p className="mb-4 text-slate-600">
+            The first admin data request failed or timed out. This can happen on mobile networks or when Safari suspends a request.
+          </p>
+          <div className="mb-6 rounded-lg bg-red-50 px-4 py-3 text-left text-sm font-semibold text-red-800">
+            {loadError}
+          </div>
+          <div className="flex flex-col gap-3 sm:flex-row sm:justify-center">
+            <button
+              type="button"
+              onClick={() => void loadBookings()}
+              className="rounded-lg bg-amber-600 px-6 py-3 font-bold text-white transition-colors hover:bg-amber-700"
+            >
+              Retry
+            </button>
+            <button
+              type="button"
+              onClick={() => onNavigate('admin-login')}
+              className="rounded-lg bg-slate-200 px-6 py-3 font-bold text-slate-900 transition-colors hover:bg-slate-300"
+            >
+              Admin Login
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   return (

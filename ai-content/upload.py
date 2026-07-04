@@ -66,12 +66,19 @@ from config import (
     PIPELINE_MAX_ATTEMPTS_PER_RUN,
     PIPELINE_EXCERPT_SIMILARITY_THRESHOLD,
     PIPELINE_MIN_WORDS_FINAL,
+    PIPELINE_MIN_WORDS_SEO_HUB,
     PIPELINE_SEO_HUB_MODE,
     PIPELINE_TITLE_SIMILARITY_THRESHOLD,
     SUPABASE_SERVICE_ROLE_KEY,
     SUPABASE_URL,
 )
 from final_formatter import apply_final_article_enhancer
+from seo_evergreen import (
+    BANNED_FILLER_PHRASES,
+    append_missing_evergreen_sections,
+    detect_seo_template,
+    validate_seo_hub_structure,
+)
 from image_seo import record_published_image_alt
 from images import process_image_strict, reset_image_run_dedupe
 from pipeline_metrics import (
@@ -683,7 +690,7 @@ FILLER_PHRASES = (
     "todo:",
     "dummy text",
     "placeholder",
-)
+) + BANNED_FILLER_PHRASES
 
 
 def validate_article(
@@ -692,6 +699,10 @@ def validate_article(
     public_image_url: str | None,
     supabase_project_url: str,
     min_words: int | None = None,
+    seo_title: str = "",
+    seo_hub_mode: bool = False,
+    category: str = "",
+    keyword_topic: str = "",
 ) -> tuple[bool, str]:
     """
     Gate before captains_log insert — local relevance, anti-filler, min words, image URL rules.
@@ -710,6 +721,22 @@ def validate_article(
     for fp in FILLER_PHRASES:
         if fp in low:
             return False, f"filler:{fp}"
+    if seo_hub_mode:
+        template = detect_seo_template(
+            category=category,
+            keyword_topic=keyword_topic,
+            title=seo_title,
+            body=content,
+        )
+        ok_seo, reason_seo, _meta = validate_seo_hub_structure(
+            content,
+            template=template,
+            title=seo_title,
+            min_words=mw,
+            min_sections=8,
+        )
+        if not ok_seo:
+            return False, reason_seo
     u = (public_image_url or "").strip()
     if not u:
         return False, "no_image"
@@ -1506,49 +1533,9 @@ def run_pipeline() -> dict[str, Any]:
                 slug = f"{slug}-{uuid.uuid4().hex[:6]}"
                 slug = slug[:200]
 
-            ok, reason = validate_article(
-                content,
-                public_image_url=public_image_url,
-                supabase_project_url=(SUPABASE_URL or "").strip(),
-            )
-            if not ok and reason.startswith("below_min_words"):
-                wc0 = reason.split(":", 1)[-1] if ":" in reason else "?"
-                print(
-                    f"[INFO] Word count under {PIPELINE_MIN_WORDS_FINAL} ({wc0} words) — "
-                    "padding with source-safe text, then re-checking"
-                )
-                content = _expand_short_content_for_validation(
-                    content,
-                    seo_title,
-                    str(article.get("summary") or ""),
-                    PIPELINE_MIN_WORDS_FINAL,
-                )
-                article["content"] = content
-                ok, reason = validate_article(
-                    content,
-                    public_image_url=public_image_url,
-                    supabase_project_url=(SUPABASE_URL or "").strip(),
-                )
-            if not ok and reason == "no_local_reference":
-                print("[WARN] local reference appended for validation")
-                content = (
-                    content
-                    + "\n\nLocal note: Boating near Titusville and Port Orange on the Indian River Lagoon "
-                    "means checking Florida Space Coast marine forecasts before you launch."
-                )
-                article["content"] = content
-                ok, reason = validate_article(
-                    content,
-                    public_image_url=public_image_url,
-                    supabase_project_url=(SUPABASE_URL or "").strip(),
-                )
-            if not ok:
-                print(f"[SKIP] validate_article: {reason}")
-                delta["skipped_validation"] += 1
-                _merge_stats(stats, delta)
-                continue
-
             source_url_db = url or None
+            article_category = str(article.get("category") or "Boating Tips")
+            article_keyword_topic = str(article.get("keyword_topic") or "")
 
             if ENABLE_FINAL_ARTICLE_ENHANCER and (
                 (not FINAL_ENHANCER_ONLY_NEW)
@@ -1568,8 +1555,67 @@ def run_pipeline() -> dict[str, Any]:
                     max_internal_links=FINAL_ENHANCER_MAX_INTERNAL_LINKS,
                     topic_min_score=FINAL_ENHANCER_TOPIC_MIN_SCORE,
                     secondary_blend_ratio=FINAL_ENHANCER_SECONDARY_BLEND_RATIO,
+                    seo_hub_mode=PIPELINE_SEO_HUB_MODE,
+                    category=article_category,
+                    keyword_topic=article_keyword_topic,
+                    source_url=source_url_db or "",
+                    min_words=PIPELINE_MIN_WORDS_SEO_HUB,
                 )
                 article["content"] = content
+
+            def _validate_current() -> tuple[bool, str]:
+                return validate_article(
+                    content,
+                    public_image_url=public_image_url,
+                    supabase_project_url=(SUPABASE_URL or "").strip(),
+                    seo_title=seo_title,
+                    seo_hub_mode=PIPELINE_SEO_HUB_MODE,
+                    category=article_category,
+                    keyword_topic=article_keyword_topic,
+                )
+
+            ok, reason = _validate_current()
+            if not ok and reason.startswith("below_min_words"):
+                wc0 = reason.split(":", 1)[-1] if ":" in reason else "?"
+                print(
+                    f"[INFO] Word count under {PIPELINE_MIN_WORDS_FINAL} ({wc0} words) — "
+                    "expanding with evergreen sections, then re-checking"
+                )
+                if PIPELINE_SEO_HUB_MODE:
+                    template = detect_seo_template(
+                        category=article_category,
+                        keyword_topic=article_keyword_topic,
+                        title=seo_title,
+                        body=content,
+                    )
+                    content = append_missing_evergreen_sections(
+                        content,
+                        template=template,
+                        min_words=PIPELINE_MIN_WORDS_SEO_HUB,
+                    )
+                else:
+                    content = _expand_short_content_for_validation(
+                        content,
+                        seo_title,
+                        str(article.get("summary") or ""),
+                        PIPELINE_MIN_WORDS_FINAL,
+                    )
+                article["content"] = content
+                ok, reason = _validate_current()
+            if not ok and reason == "no_local_reference":
+                print("[WARN] local reference appended for validation")
+                content = (
+                    content
+                    + "\n\nLocal note: Boating near Titusville and Port Orange on the Indian River Lagoon "
+                    "means checking Florida Space Coast marine forecasts before you launch."
+                )
+                article["content"] = content
+                ok, reason = _validate_current()
+            if not ok:
+                print(f"[SKIP] validate_article: {reason}")
+                delta["skipped_validation"] += 1
+                _merge_stats(stats, delta)
+                continue
 
             print(
                 json.dumps(

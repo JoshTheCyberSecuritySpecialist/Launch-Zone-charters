@@ -193,7 +193,8 @@ PIPELINE_TOP_N: int = int(os.environ.get("PIPELINE_TOP_N", "6"))
 PIPELINE_MAX_ATTEMPTS_PER_RUN: int = int(os.environ.get("PIPELINE_MAX_ATTEMPTS_PER_RUN", "10"))
 
 # Quality control — Captain's Log insert gate (grounding + SEO)
-PIPELINE_MIN_WORDS_FINAL: int = int(os.environ.get("PIPELINE_MIN_WORDS_FINAL", "220"))
+PIPELINE_MIN_WORDS_STANDARD: int = int(os.environ.get("PIPELINE_MIN_WORDS_FINAL", "220"))
+PIPELINE_MIN_WORDS_SEO_HUB: int = int(os.environ.get("PIPELINE_MIN_WORDS_SEO_HUB", "1500"))
 GROUNDING_MIN_TOKEN_OVERLAP: float = float(os.environ.get("GROUNDING_MIN_TOKEN_OVERLAP", "0.055"))
 
 # Near-duplicate gate: SequenceMatcher ratio vs recent titles/excerpts (upload.py).
@@ -226,6 +227,11 @@ PIPELINE_VERBOSE: bool = not _env_disabled("PIPELINE_VERBOSE")
 # Default on so Captain's Log reads like useful blog posts; set PIPELINE_SEO_HUB_MODE=0 for RSS-only (faster).
 _PIPELINE_SEO_HUB_RAW = (os.environ.get("PIPELINE_SEO_HUB_MODE") or "1").strip().lower()
 PIPELINE_SEO_HUB_MODE: bool = _PIPELINE_SEO_HUB_RAW not in ("0", "false", "no", "off")
+
+# Effective minimum word count for validate_article (1500 in SEO hub mode).
+PIPELINE_MIN_WORDS_FINAL: int = (
+    PIPELINE_MIN_WORDS_SEO_HUB if PIPELINE_SEO_HUB_MODE else PIPELINE_MIN_WORDS_STANDARD
+)
 
 # Full HTML fetch per RSS row in fetch_all() (slow). Also enabled when SEO hub mode is on.
 # Override with PIPELINE_FETCH_FULL_ARTICLE=0 to force RSS-only even if hub mode is on.
@@ -273,7 +279,15 @@ def _env_truthy(name: str) -> bool:
 
 
 # Final article enhancer (single late-pass formatter in upload pipeline).
-ENABLE_FINAL_ARTICLE_ENHANCER: bool = _env_truthy("ENABLE_FINAL_ARTICLE_ENHANCER")
+# Default ON when SEO hub mode is enabled unless explicitly disabled.
+def _final_enhancer_default() -> bool:
+    raw = os.environ.get("ENABLE_FINAL_ARTICLE_ENHANCER")
+    if raw is None or not raw.strip():
+        return PIPELINE_SEO_HUB_MODE
+    return _env_truthy("ENABLE_FINAL_ARTICLE_ENHANCER")
+
+
+ENABLE_FINAL_ARTICLE_ENHANCER: bool = _final_enhancer_default()
 FINAL_ENHANCER_ONLY_NEW: bool = not _env_disabled("FINAL_ENHANCER_ONLY_NEW")
 FINAL_ENHANCER_ENABLE_CHECKLIST: bool = not _env_disabled("FINAL_ENHANCER_ENABLE_CHECKLIST")
 FINAL_ENHANCER_ENABLE_LOCAL_CONTEXT: bool = not _env_disabled("FINAL_ENHANCER_ENABLE_LOCAL_CONTEXT")
@@ -309,6 +323,7 @@ PIPELINE_FAST: bool = _env_truthy("PIPELINE_FAST")
 if PIPELINE_FAST:
     PIPELINE_SEO_HUB_MODE = False
     PIPELINE_FETCH_FULL_ARTICLE = False
+    PIPELINE_MIN_WORDS_FINAL = PIPELINE_MIN_WORDS_STANDARD
     OLLAMA_TIMEOUT_SEC = min(OLLAMA_TIMEOUT_SEC, 50)
     OLLAMA_STREAM_ATTEMPTS = min(OLLAMA_STREAM_ATTEMPTS, 1)
     PIPELINE_TOP_N = min(PIPELINE_TOP_N, 4)

@@ -6,7 +6,14 @@ and explicit internal routes (single module; one call site in upload.py).
 from __future__ import annotations
 
 import re
+
 from rewrite import markdown_internal_link_allowed, markdown_trusted_authority_link_allowed
+from seo_evergreen import (
+    append_missing_evergreen_sections,
+    detect_seo_template,
+    template_section_headings,
+    word_count,
+)
 
 _H3_RE = re.compile(r"(?mi)^#{2,3}\s+(.+?)\s*$")
 _SENT_RE = re.compile(r"(?<=[.!?])\s+")
@@ -144,9 +151,10 @@ _AUTHORITY_POOLS: dict[str, tuple[tuple[str, str], ...]] = {
         ("NOAA weather & oceans", "https://www.noaa.gov/"),
     ),
     "rocket_launch": (
-        ("NOAA weather & oceans", "https://www.noaa.gov/"),
+        ("NASA launch schedule", "https://www.nasa.gov/"),
+        ("Space Launch Delta 45", "https://www.spaceforce.mil/About-Us/Fact-Sheets/Display/Article/2490245/space-launch-delta-45/"),
         ("Marine forecasts", "https://marine.weather.gov/"),
-        ("U.S. Coast Guard boating safety", "https://www.uscgboating.org/"),
+        ("NOAA weather & oceans", "https://www.noaa.gov/"),
     ),
     "bioluminescence_night": (
         ("Marine forecasts", "https://marine.weather.gov/"),
@@ -193,9 +201,9 @@ _AUTHORITY_POOLS: dict[str, tuple[tuple[str, str], ...]] = {
 # Explicit internal routes only (subset of rewrite.ALLOWED_INTERNAL_MARKDOWN_PATHS).
 _INTERNAL_ROUTES_BY_TOPIC: dict[str, tuple[str, ...]] = {
     "regulations_compliance": ("/faqs", "/booking", "/boat-rentals"),
-    "rocket_launch": ("/launches", "/conditions", "/booking", "/captains-log"),
-    "bioluminescence_night": ("/bioluminescent-tours", "/booking", "/conditions"),
-    "marine_weather": ("/conditions", "/faqs", "/booking"),
+    "rocket_launch": ("/launches", "/conditions", "/pricing", "/booking", "/about"),
+    "bioluminescence_night": ("/bioluminescent-tours", "/booking", "/conditions", "/pricing", "/about"),
+    "marine_weather": ("/conditions", "/faqs", "/booking", "/pricing", "/about"),
     "boating_safety": ("/faqs", "/booking", "/boat-rentals"),
     "first_time_renter": ("/faqs", "/pricing", "/booking"),
     "fishing_wildlife": ("/boat-rentals", "/booking", "/captains-log"),
@@ -206,7 +214,7 @@ _INTERNAL_ROUTES_BY_TOPIC: dict[str, tuple[str, ...]] = {
         "/conditions",
         "/booking",
     ),
-    "general_boating_guidance": ("/booking", "/captains-log", "/faqs"),
+    "general_boating_guidance": ("/booking", "/captains-log", "/faqs", "/pricing", "/about"),
 }
 
 _CHECKLIST_PRIMARY: dict[str, tuple[str, ...]] = {
@@ -641,6 +649,105 @@ def _legacy_internal_link(blob: str) -> str:
     return "/booking" if markdown_internal_link_allowed("/booking") else ""
 
 
+def _append_resources_section(
+    body: str,
+    *,
+    primary: str,
+    secondary: str | None,
+    source_url: str = "",
+    heading: str = "###",
+) -> str:
+    """Authority links + optional original news source at end of article."""
+    links = _collect_authority_links(primary, secondary, max_links=3)
+    if source_url and source_url.startswith("http"):
+        links.append(f"[Original news source]({source_url})")
+    if not links:
+        return body
+    block = f"{heading} Resources and Official References\n\n" + "\n\n".join(
+        f"- {link}" for link in links
+    )
+    if _norm("Resources and Official References") in {_norm(x) for x in _H3_RE.findall(body)}:
+        return body
+    return f"{body.rstrip()}\n\n{block}".strip()
+
+
+def apply_seo_longform_enhancer(
+    *,
+    content: str,
+    seo_title: str,
+    slug: str = "",
+    category: str = "",
+    keyword_topic: str = "",
+    source_url: str = "",
+    min_words: int = 1500,
+    max_internal_links: int = 5,
+) -> str:
+    """
+    SEO hub last pass: fill missing template sections from evergreen library,
+    add authority/internal links, and reach minimum word count.
+    """
+    body = (content or "").strip()
+    if not body:
+        return body
+
+    template = detect_seo_template(
+        category=category,
+        keyword_topic=keyword_topic,
+        title=seo_title,
+        body=body,
+    )
+    body = append_missing_evergreen_sections(body, template=template, min_words=min_words)
+
+    primary, secondary = _finalize_classification(
+        title=seo_title,
+        slug=slug,
+        body=body,
+        min_score=3,
+        blend_ratio=0.65,
+    )
+    body = _append_resources_section(
+        body,
+        primary=primary,
+        secondary=secondary,
+        source_url=source_url,
+    )
+
+    # Ensure Final Thoughts has internal links if model omitted them.
+    if _norm("Final Thoughts") in {_norm(x) for x in _H3_RE.findall(body)}:
+        paths = _rank_internal_paths(
+            primary,
+            secondary,
+            title=seo_title,
+            slug=slug,
+            body=body,
+        )
+        labels = {
+            "/booking": "Book Now",
+            "/launches": "Rocket Launch Charters",
+            "/conditions": "Marine Conditions",
+            "/pricing": "Pricing",
+            "/about": "About Us",
+            "/bioluminescent-tours": "Bioluminescence tours",
+        }
+        link_bits = [
+            f"[{labels.get(p, 'Learn more')}]({p})"
+            for p in paths[:max_internal_links]
+            if markdown_internal_link_allowed(p)
+        ]
+        if link_bits and not re.search(r"\]\(/(?:launches|booking|pricing|about|conditions)", body):
+            body = _append_to_section(
+                body,
+                "Final Thoughts",
+                "Plan your trip: " + " · ".join(link_bits) + ".",
+            )
+
+    # Top up if still short after evergreen append.
+    if word_count(body) < min_words:
+        body = append_missing_evergreen_sections(body, template=template, min_words=min_words)
+
+    return body.strip()
+
+
 def apply_final_article_enhancer(
     *,
     content: str,
@@ -656,11 +763,24 @@ def apply_final_article_enhancer(
     max_internal_links: int = 3,
     topic_min_score: int = 4,
     secondary_blend_ratio: float = 0.7,
+    seo_hub_mode: bool = False,
+    category: str = "",
+    keyword_topic: str = "",
+    source_url: str = "",
+    min_words: int = 1500,
 ) -> str:
-    """
-    Last-pass enhancer for publish consistency.
-    Appends only missing sections; prefers sentences already present in content.
-    """
+    """Last-pass enhancer for publish consistency."""
+    if seo_hub_mode:
+        return apply_seo_longform_enhancer(
+            content=content,
+            seo_title=seo_title,
+            slug=slug,
+            category=category,
+            keyword_topic=keyword_topic,
+            source_url=source_url,
+            min_words=min_words,
+            max_internal_links=max(3, max_internal_links),
+        )
     body = (content or "").strip()
     if not body:
         return body

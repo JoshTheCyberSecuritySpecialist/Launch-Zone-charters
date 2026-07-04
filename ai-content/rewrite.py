@@ -33,6 +33,11 @@ from config import (
 )
 from grounding import validate_rewritten_article
 from pipeline_metrics import record_if_requests_timeout
+from seo_evergreen import (
+    BALANCED_GROUNDING_SEO_HUB,
+    build_seo_hub_engine,
+    detect_seo_template,
+)
 from scraper import (
     _rocket_pillar_reject_national_nasa_event,
     strip_scraped_news_chaff,
@@ -117,7 +122,17 @@ def _norm_authority_host(netloc: str) -> str:
 
 def _host_trusted_authority(netloc: str) -> bool:
     h = _norm_authority_host(netloc)
-    return h in ("marine.weather.gov", "noaa.gov", "myfwc.com", "uscgboating.org")
+    if h in (
+        "marine.weather.gov",
+        "weather.gov",
+        "noaa.gov",
+        "nasa.gov",
+        "spaceforce.mil",
+        "myfwc.com",
+        "uscgboating.org",
+    ):
+        return True
+    return h.endswith(".noaa.gov") or h.endswith(".weather.gov") or h.endswith(".nasa.gov")
 
 
 def markdown_trusted_authority_link_allowed(url: str) -> bool:
@@ -203,9 +218,8 @@ def _strip_bare_http_keep_markdown_links(text: str) -> str:
 
 ALLOWED_INTERNAL_PATHS_PROMPT_LIST = ", ".join(sorted(ALLOWED_INTERNAL_MARKDOWN_PATHS))
 TRUSTED_AUTHORITY_DOMAINS_PROMPT = (
-    "marine.weather.gov, noaa.gov, myfwc.com, uscgboating.org ONLY "
-    "(markdown `[text](https://…)` only; use https://marine.weather.gov/, https://www.noaa.gov/, "
-    "https://myfwc.com/, https://www.uscgboating.org/)"
+    "marine.weather.gov, weather.gov, noaa.gov, nasa.gov, spaceforce.mil, myfwc.com, uscgboating.org "
+    "(markdown `[text](https://…)` only)"
 )
 
 # Injected into LOCAL_CONTENT_ENGINE / SEO hub — avoids duplicate marketing blocks in the body.
@@ -705,8 +719,9 @@ CAT_DEFAULT = "Boating Tips"
 MIN_WORDS_HARD = 400
 MIN_WORDS_TARGET = 400
 MAX_WORDS_TARGET = 700
-# SEO hub mode allows longer published bodies (see config PIPELINE_SEO_HUB_MODE).
-MAX_WORDS_SEO_HUB = 1100
+# SEO hub mode: long-form evergreen articles (see seo_evergreen.py + config PIPELINE_MIN_WORDS_SEO_HUB).
+MIN_WORDS_SEO_HUB = 1500
+MAX_WORDS_SEO_HUB = 2400
 
 
 def _pipeline_max_output_words() -> int:
@@ -731,7 +746,7 @@ def _ollama_num_predict() -> int:
     """Token cap per /generate completion; aligns with bounded STEP 6 (single call, not multi-section requests)."""
     if OLLAMA_NUM_PREDICT > 0:
         return OLLAMA_NUM_PREDICT
-    return 3200 if PIPELINE_SEO_HUB_MODE else 2400
+    return 5500 if PIPELINE_SEO_HUB_MODE else 2400
 
 
 def truncate_text(text: str, max_words: int = 200) -> str:
@@ -1312,20 +1327,15 @@ READABILITY (scan-friendly):
 """
 
 SEARCH_INTENT_READABILITY_HUB = """
-READABILITY (long-form hub):
-- Follow STEP 6 exactly: one `##` headline, intro, then the seven `###` sections in order.
-- Obey SECTION LENGTH in STEP 6 (per-section word budgets; one completion).
-- SECTION PURITY: Each `###` block must contain **only** that section's job — never paste "Questions readers ask", "Before you go", or "Local context" inside **Practical checklist** or another section.
-- One bullet per line; never fuse two bullets on one line. Never use the pattern `sentence. - Next item` on one line — use a newline before each `- `.
-- Short sentences; no travel-blog adjectives (sparkling, pristine, reminiscent, nestled).
-- Do not repeat the TITLE line verbatim as the only sentence in the intro.
-
-PLACE NAMES (critical — avoid unreadable stuffing):
-- In the full article, use at most **one** long geography stack per section (e.g. "Indian River Lagoon near Titusville" OR "Halifax River / Port Orange") — then shorten to **the lagoon**, **local waters**, **the Space Coast**, **near Titusville**, etc.
-- Do **not** chain "Daytona Beach, Port Orange, Halifax River, Indian River Lagoon, Titusville" in every bullet — it reads as spam.
-- **Practical checklist** bullets: each line starts with `- `, **one action per line**, target **≤22 words**, no subordinate clauses stacked with semicolons.
-
-BUSINESS NAMES: Do not name restaurants, marinas, or venues unless they appear in SOURCE FACTS.
+READABILITY (long-form SEO hub):
+- Follow STEP 6 template outline exactly: one `##` headline, intro, then all `###` sections in order.
+- Minimum **1,500 words** total; do not stop early.
+- Each `###` block: **only** that section's content — no pasted FAQ or Final Thoughts inside other sections.
+- One bullet per line in Safety Tips when using lists; `- ` prefix on each line.
+- Short sentences; captain's voice — not wire-copy summary.
+- Do not repeat the TITLE line verbatim anywhere except once as the ## headline (reword slightly).
+- No travel-blog adjectives (sparkling, pristine, nestled).
+- Work semantic keywords naturally: rocket launch Titusville, Florida Space Coast, boat launch viewing, Indian River Lagoon.
 """
 
 
@@ -1333,11 +1343,11 @@ def _search_intent_prompt_block(title: str, keyword_topic: str, *, hub: bool = F
     """Pipeline-only: reinforces SEO section structure (standard or hub outline)."""
     _ = title, keyword_topic
     if hub:
-        return f"""TONE: Calm local expert — useful blog-style article, honest and grounded.
+        return f"""TONE: Local captain — long-form Space Coast boating guide, honest and useful.
 
-STRUCTURE: Obey STEP 6 long-form outline (## headline + seven ### sections in fixed order).
+STRUCTURE: Obey STEP 6 template outline for the assigned ARTICLE TYPE.
 
-OPENING: The ## section must deliver a direct answer from SOURCE FACTS before subsections.
+OPENING: The ## section must answer the search intent before subsections.
 
 {SEARCH_INTENT_READABILITY_HUB}
 """
@@ -1634,11 +1644,20 @@ def _dedupe_fallback_sections(
 
     # Keep sections non-empty without reusing long repeated phrases.
     if not means_out:
-        means_out = "Key details are limited in the current source update."
+        means_out = (
+            "On the Indian River Lagoon near Titusville, launch news affects ramp traffic, "
+            "hold zones, and how early you should be on the water for a safe viewing position."
+        )
     if not ways_out:
-        ways_out = "Use the available source details to plan conservatively before departure."
+        ways_out = (
+            "Watching from a boat gives mobility when haze sits on shore and room for cameras "
+            "without parking-lot crowds along the Space Coast."
+        )
     if not before_out:
-        before_out = "Check for the latest source update before finalizing your plan."
+        before_out = (
+            "Confirm the official launch window and marine forecast before you leave the dock, "
+            "and keep plans flexible if the range scrubs."
+        )
 
     return intro_out, means_out, ways_out, before_out
 
@@ -1917,18 +1936,39 @@ def rewrite_pipeline_article(article: dict[str, Any]) -> dict[str, Any] | None:
 
         fallback_title = _fallback_seo_title(title, cat)
         hub = PIPELINE_SEO_HUB_MODE
-        max_src_words = 2000 if hub else 800
+        max_src_words = 2500 if hub else 800
         article_text = truncate_text(blob, max_words=max_src_words)
-        engine = LOCAL_CONTENT_ENGINE_SEO_HUB if hub else LOCAL_CONTENT_ENGINE
+        seo_template = detect_seo_template(
+            category=cat,
+            keyword_topic=keyword_topic,
+            title=title,
+            body=body_clean,
+        )
+        engine = (
+            build_seo_hub_engine(
+                template=seo_template,
+                allowed_paths=ALLOWED_INTERNAL_PATHS_PROMPT_LIST,
+                writer_conventions=PIPELINE_WRITER_CONVENTIONS,
+            )
+            if hub
+            else LOCAL_CONTENT_ENGINE
+        )
         vb = _search_intent_prompt_block(title, keyword_topic, hub=hub)
-        step6_line = "## headline, intro, five required ### sections in strict order (optional sixth: Questions Readers Ask)"
+        step6_line = (
+            f"## headline, intro, then all ### sections for `{seo_template}` template in strict order"
+            if hub
+            else "## headline, intro, five required ### sections in strict order (optional sixth: Questions Readers Ask)"
+        )
+        grounding_block = BALANCED_GROUNDING_SEO_HUB if hub else f"{SOURCE_FIDELITY_ABSOLUTE}\n\n{STRICT_SOURCE_GROUNDING}"
         print(
             json.dumps(
                 {
                     "stage": "pipeline_mode",
                     "seo_hub": hub,
+                    "seo_template": seo_template if hub else None,
                     "source_words_cap": max_src_words,
                     "max_output_words": _pipeline_max_output_words(),
+                    "min_output_words": MIN_WORDS_SEO_HUB if hub else MIN_WORDS_TARGET,
                     "ollama_num_predict": _ollama_num_predict(),
                     "source_summary_words": len(summary_raw.split()),
                     "source_body_words": len(body_clean.split()),
@@ -1938,7 +1978,7 @@ def rewrite_pipeline_article(article: dict[str, Any]) -> dict[str, Any] | None:
             )
         )
         prompt = f"""
-You are an editor producing markdown for a Captain's Log post.
+You are a local captain writing a long-form Captain's Log post for Launch Zone Charters.
 
 {engine}
 
@@ -1948,9 +1988,7 @@ You are an editor producing markdown for a Captain's Log post.
 
 ---
 
-{SOURCE_FIDELITY_ABSOLUTE}
-
-{STRICT_SOURCE_GROUNDING}
+{grounding_block}
 
 ---
 
@@ -1959,9 +1997,9 @@ SOURCE FACTS (headline + summary primary; body optional):
 
 ---
 RESPONSE FORMAT (required for the CMS):
-- First line: TITLE: <SEO title — must follow STEP 3 TITLE SHAPE: topic + location when the source names one + renter/user intent; no vague one-word stubs>
+- First line: TITLE: <SEO title — topic + Space Coast location + search intent; no vague stubs>
 - Blank line
-- Markdown body: follow STEP 6 exactly ({step6_line}), including SECTION LENGTH budgets (single response). Prefer tighter, shorter sections when SOURCE FACTS are thin; omit optional parts (e.g. Questions Readers Ask) rather than inventing content to hit word targets. No Summary/min read/bylines. No images or phone numbers. Markdown links per engine (internal + optional authority hosts); no other http(s) in the body. Do not add booking CTAs — the site adds conversion UI separately.
+- Markdown body: follow STEP 6 exactly ({step6_line}). {"Target minimum 1,500 words with original Space Coast boating expertise." if hub else "Prefer tighter sections when SOURCE FACTS are thin."} No Summary/min read/bylines. No images or phone numbers. Internal markdown links per STEP 6; no bare http(s) in prose. Do not add separate booking CTA blocks.
 """
         response_text = _ollama_stream_generate(prompt)
         used_structured_fallback = False
@@ -1996,15 +2034,17 @@ RESPONSE FORMAT (required for the CMS):
             rewritten_content = ensure_minimum_length(rewritten_content, title)
             wc_final = _word_count(rewritten_content)
             max_out = _pipeline_max_output_words()
-            if wc_final > max_out + 50:
+            if wc_final > max_out + 100:
                 rewritten_content = _trim_to_word_budget(
-                    rewritten_content, max_words=max_out + 80
+                    rewritten_content, max_words=max_out + 120
                 )
 
             ok_qc, reason_qc, meta_qc = validate_rewritten_article(
                 blob,
                 seo_title,
                 rewritten_content,
+                min_token_overlap=0.025 if hub else None,
+                max_suspicious_numbers=6 if hub else 3,
             )
             article["_pipeline_source_blob"] = blob
             article["_grounding_meta"] = meta_qc

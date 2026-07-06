@@ -1,4 +1,5 @@
-import { useCallback } from 'react';
+import { lazy, Suspense, useCallback } from 'react';
+import FullPageLoader from './components/FullPageLoader';
 import { Helmet } from 'react-helmet-async';
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import Header from './components/Header';
@@ -31,9 +32,12 @@ import AdminLogin from './pages/AdminLogin';
 import CaptainsLog from './pages/CaptainsLog';
 import LogArticle from './pages/LogArticle';
 import BioluminescentTours from './pages/BioluminescentTours';
+import ObservationBottle from './pages/ObservationBottle';
 import { pageKeyFromPath, pathFromPageKey } from './navigation';
 import ScrollToTop from './components/ScrollToTop';
 import { SITE_FAVICON_PATH } from './constants/branding';
+
+const BioGuidePage = lazy(() => import('./pages/BioGuidePage'));
 
 function AppLayout() {
   const navigate = useNavigate();
@@ -84,8 +88,16 @@ function AppLayout() {
           <Route path="/verify" element={<VerifyBooking onNavigate={onNavigate} />} />
           <Route path="/pricing" element={<Pricing onNavigate={onNavigate} />} />
           <Route path="/launches" element={<Launches onNavigate={onNavigate} />} />
-          <Route path="/bioluminescence" element={<Navigate to="/bioluminescent-tours" replace />} />
+          <Route
+            path="/bioluminescence"
+            element={
+              <Suspense fallback={<FullPageLoader variant="dark" message="Loading guide…" />}>
+                <BioGuidePage onNavigate={onNavigate} />
+              </Suspense>
+            }
+          />
           <Route path="/bioluminescent-tours" element={<BioluminescentTours onNavigate={onNavigate} />} />
+          <Route path="/shop/observation-bottle" element={<ObservationBottle onNavigate={onNavigate} />} />
           <Route path="/conditions" element={<Conditions onNavigate={onNavigate} />} />
           <Route path="/faqs" element={<FAQs onNavigate={onNavigate} />} />
           <Route path="/about" element={<About onNavigate={onNavigate} />} />

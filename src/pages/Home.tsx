@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { Anchor, Award, Calendar, Clock, Loader2, Shield, Star, Volume2, VolumeX } from 'lucide-react';
 import SmartImage from '../components/ui/SmartImage';
 import LaunchCountdown from '../components/LaunchCountdown';
+import ObservationBottlePromo from '../components/ObservationBottlePromo';
 import { formatBestViewingWindow, getLaunchConfidence } from '../lib/launchFormat';
 import { getBookingWindow } from '../lib/launchBookingWindow';
 import { env } from '../config/env.js';
@@ -536,6 +537,15 @@ export default function Home({ onNavigate }: HomeProps) {
               </div>
             </div>
           </div>
+        </div>
+      </section>
+
+      <section
+        className="lz-home-section border-t border-cyan-500/10 py-10 md:py-12"
+        aria-label="Featured product"
+      >
+        <div className="lz-home-inner max-w-4xl">
+          <ObservationBottlePromo variant="featured" />
         </div>
       </section>
 

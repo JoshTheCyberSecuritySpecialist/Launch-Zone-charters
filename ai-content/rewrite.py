@@ -34,8 +34,7 @@ from config import (
 from grounding import validate_rewritten_article
 from pipeline_metrics import record_if_requests_timeout
 from seo_evergreen import (
-    BALANCED_GROUNDING_SEO_HUB,
-    build_seo_hub_engine,
+    build_paraphrase_first_engine,
     detect_seo_template,
 )
 from scraper import (
@@ -56,6 +55,7 @@ ALLOWED_INTERNAL_MARKDOWN_PATHS: frozenset[str] = frozenset(
     {
         "/",
         "/about",
+        "/bioluminescence",
         "/bioluminescent-tours",
         "/boat-rentals",
         "/boat-rentals/daytona",
@@ -67,6 +67,7 @@ ALLOWED_INTERNAL_MARKDOWN_PATHS: frozenset[str] = frozenset(
         "/faqs",
         "/launches",
         "/pricing",
+        "/shop/observation-bottle",
     }
 )
 
@@ -720,8 +721,8 @@ MIN_WORDS_HARD = 400
 MIN_WORDS_TARGET = 400
 MAX_WORDS_TARGET = 700
 # SEO hub mode: long-form evergreen articles (see seo_evergreen.py + config PIPELINE_MIN_WORDS_SEO_HUB).
-MIN_WORDS_SEO_HUB = 1500
-MAX_WORDS_SEO_HUB = 2400
+MIN_WORDS_SEO_HUB = 350
+MAX_WORDS_SEO_HUB = 1200
 
 
 def _pipeline_max_output_words() -> int:
@@ -746,7 +747,7 @@ def _ollama_num_predict() -> int:
     """Token cap per /generate completion; aligns with bounded STEP 6 (single call, not multi-section requests)."""
     if OLLAMA_NUM_PREDICT > 0:
         return OLLAMA_NUM_PREDICT
-    return 5500 if PIPELINE_SEO_HUB_MODE else 2400
+    return 4000 if PIPELINE_SEO_HUB_MODE else 2400
 
 
 def truncate_text(text: str, max_words: int = 200) -> str:
@@ -1327,15 +1328,12 @@ READABILITY (scan-friendly):
 """
 
 SEARCH_INTENT_READABILITY_HUB = """
-READABILITY (long-form SEO hub):
-- Follow STEP 6 template outline exactly: one `##` headline, intro, then all `###` sections in order.
-- Minimum **1,500 words** total; do not stop early.
-- Each `###` block: **only** that section's content — no pasted FAQ or Final Thoughts inside other sections.
-- One bullet per line in Safety Tips when using lists; `- ` prefix on each line.
-- Short sentences; captain's voice — not wire-copy summary.
-- Do not repeat the TITLE line verbatim anywhere except once as the ## headline (reword slightly).
-- No travel-blog adjectives (sparkling, pristine, nestled).
-- Work semantic keywords naturally: rocket launch Titusville, Florida Space Coast, boat launch viewing, Indian River Lagoon.
+READABILITY (paraphrase-first):
+- Follow STEP 3 exactly: ## headline, news paraphrase FIRST, then boating appendix sections.
+- News paraphrase must use original wording drawn from SOURCE FACTS BODY — not generic filler.
+- Boating sections come only after the news paraphrase is complete.
+- Do not repeat the TITLE line verbatim in every section.
+- No placeholder phrases (Key details are limited, plan conservatively, etc.).
 """
 
 
@@ -1712,7 +1710,9 @@ def _fallback_checklist_from_source(excerpt: str, title: str = "") -> list[str]:
                 fallback = re.sub(r"\s+", " ", s).strip()
                 break
         if not fallback:
-            fallback = "Review the latest source update before departure."
+            fallback = (
+                "Use only facts stated above when planning your trip on the Indian River Lagoon."
+            )
         if fallback:
             bullets.append(fallback[:180])
     return bullets
@@ -1900,7 +1900,7 @@ RESPONSE FORMAT (required for the CMS):
 
 
 def _pipeline_source_blob(article: dict[str, Any]) -> str:
-    """Title + summary (primary) plus optional scraped body for the local content engine."""
+    """Title + summary + required scraped body for paraphrase-first rewrite."""
     title = (article.get("title") or "").strip()
     summary = (article.get("summary") or "").strip()
     body = _clean_source_for_prompt((article.get("content") or "").strip())
@@ -1910,7 +1910,7 @@ def _pipeline_source_blob(article: dict[str, Any]) -> str:
     if summary:
         parts.append(f"SUMMARY:\n{summary}")
     if body:
-        parts.append(f"BODY (optional facts from publisher):\n{body}")
+        parts.append(f"BODY (required — paraphrase this publisher text):\n{body}")
     return "\n\n".join(parts).strip()
 
 
@@ -1930,9 +1930,13 @@ def rewrite_pipeline_article(article: dict[str, Any]) -> dict[str, Any] | None:
 
         summary_raw = (article.get("summary") or "").strip()
         body_clean = _clean_source_for_prompt((article.get("content") or "").strip())
+        if _word_count(body_clean) < 80:
+            raise RewriteFailedError(
+                f"Source body too short for paraphrase ({_word_count(body_clean)} words)"
+            )
         blob = _pipeline_source_blob(article)
-        if not blob:
-            raise RewriteFailedError("Empty title, summary, and body — nothing to write from")
+        if not blob or "BODY (required" not in blob:
+            raise RewriteFailedError("Missing publisher body — cannot paraphrase")
 
         fallback_title = _fallback_seo_title(title, cat)
         hub = PIPELINE_SEO_HUB_MODE
@@ -1945,40 +1949,41 @@ def rewrite_pipeline_article(article: dict[str, Any]) -> dict[str, Any] | None:
             body=body_clean,
         )
         engine = (
-            build_seo_hub_engine(
-                template=seo_template,
+            build_paraphrase_first_engine(
                 allowed_paths=ALLOWED_INTERNAL_PATHS_PROMPT_LIST,
                 writer_conventions=PIPELINE_WRITER_CONVENTIONS,
+                min_words=MIN_WORDS_SEO_HUB,
             )
             if hub
             else LOCAL_CONTENT_ENGINE
         )
         vb = _search_intent_prompt_block(title, keyword_topic, hub=hub)
         step6_line = (
-            f"## headline, intro, then all ### sections for `{seo_template}` template in strict order"
+            "## headline, news paraphrase first, then ### What This Means For Your Space Coast Boat Trip, then ### Before You Go"
             if hub
             else "## headline, intro, five required ### sections in strict order (optional sixth: Questions Readers Ask)"
         )
-        grounding_block = BALANCED_GROUNDING_SEO_HUB if hub else f"{SOURCE_FIDELITY_ABSOLUTE}\n\n{STRICT_SOURCE_GROUNDING}"
+        grounding_block = f"{SOURCE_FIDELITY_ABSOLUTE}\n\n{STRICT_SOURCE_GROUNDING}"
         print(
             json.dumps(
                 {
                     "stage": "pipeline_mode",
                     "seo_hub": hub,
                     "seo_template": seo_template if hub else None,
+                    "source_url": (article.get("source_url") or "")[:200],
                     "source_words_cap": max_src_words,
+                    "source_body_words": _word_count(body_clean),
                     "max_output_words": _pipeline_max_output_words(),
                     "min_output_words": MIN_WORDS_SEO_HUB if hub else MIN_WORDS_TARGET,
                     "ollama_num_predict": _ollama_num_predict(),
                     "source_summary_words": len(summary_raw.split()),
-                    "source_body_words": len(body_clean.split()),
                     "source_has_body": bool(body_clean),
                 },
                 ensure_ascii=False,
             )
         )
         prompt = f"""
-You are a local captain writing a long-form Captain's Log post for Launch Zone Charters.
+You are an editor paraphrasing a news article for Launch Zone Charters Captain's Log.
 
 {engine}
 
@@ -1992,26 +1997,22 @@ You are a local captain writing a long-form Captain's Log post for Launch Zone C
 
 ---
 
-SOURCE FACTS (headline + summary primary; body optional):
+SOURCE FACTS (paraphrase the BODY; use HEADLINE/SUMMARY for context only):
 {article_text}
 
 ---
 RESPONSE FORMAT (required for the CMS):
-- First line: TITLE: <SEO title — topic + Space Coast location + search intent; no vague stubs>
+- First line: TITLE: <SEO title>
 - Blank line
-- Markdown body: follow STEP 6 exactly ({step6_line}). {"Target minimum 1,500 words with original Space Coast boating expertise." if hub else "Prefer tighter sections when SOURCE FACTS are thin."} No Summary/min read/bylines. No images or phone numbers. Internal markdown links per STEP 6; no bare http(s) in prose. Do not add separate booking CTA blocks.
+- Markdown body: follow STEP 3 exactly ({step6_line}).
+- News paraphrase MUST come before any boating-context sections.
+- No placeholder filler. No images or phone numbers. Internal markdown links in Before You Go only.
 """
         response_text = _ollama_stream_generate(prompt)
-        used_structured_fallback = False
-        combined_for_fallback = "\n\n".join(
-            x for x in (title, summary_raw, body_clean) if x
-        )
-        if not response_text or len(response_text.split()) < 40:
-            print("[AI] weak output → fallback")
-            response_text = fallback_rewrite(
-                combined_for_fallback or article_text, title, cat
+        if not response_text or len(response_text.split()) < 80:
+            raise RewriteFailedError(
+                "Ollama rewrite too short or empty — refusing placeholder fallback"
             )
-            used_structured_fallback = True
         if not (response_text or "").strip():
             raise RewriteFailedError(
                 f"Ollama rewrite failed after {OLLAMA_REQUEST_ATTEMPTS} attempts (empty output)"
@@ -2024,10 +2025,7 @@ RESPONSE FORMAT (required for the CMS):
             if not rewritten_content.strip():
                 raise RewriteFailedError("Ollama returned TITLE/body but body parsed empty")
             seo_title = ((parsed_title or "").strip() or fallback_title)[:500]
-            if used_structured_fallback:
-                seo_title = _sanitize_fallback_title(seo_title, blob)[:500]
-            else:
-                seo_title = _ensure_title_seo_shape(seo_title, blob)[:500]
+            seo_title = _ensure_title_seo_shape(seo_title, blob)[:500]
 
             rewritten_content = _ensure_local_place_mention(rewritten_content, cat)
             rewritten_content = _append_booster_if_short(rewritten_content)
@@ -2043,49 +2041,23 @@ RESPONSE FORMAT (required for the CMS):
                 blob,
                 seo_title,
                 rewritten_content,
-                min_token_overlap=0.025 if hub else None,
-                max_suspicious_numbers=6 if hub else 3,
             )
             article["_pipeline_source_blob"] = blob
             article["_grounding_meta"] = meta_qc
             print(
                 json.dumps(
-                    {"stage": "grounding_qc", "ok": ok_qc, "reason": reason_qc, **meta_qc},
+                    {
+                        "stage": "grounding_qc",
+                        "ok": ok_qc,
+                        "reason": reason_qc,
+                        "generated_word_count": _word_count(rewritten_content),
+                        **meta_qc,
+                    },
                     ensure_ascii=False,
                 )
             )
             if not ok_qc:
-                print(
-                    json.dumps(
-                        {
-                            "stage": "pipeline_audit",
-                            "event": "grounding_fallback",
-                            "prior_risk": "model_output_failed_qc",
-                            "reason": reason_qc,
-                        },
-                        ensure_ascii=False,
-                    )
-                )
-                fb = pipeline_fallback_from_source(
-                    combined_for_fallback or article_text,
-                    title,
-                    cat,
-                )
-                _fb_t = (fb.get("title") or fallback_title)[:500]
-                article["title"] = _sanitize_fallback_title(
-                    _fb_t,
-                    combined_for_fallback or article_text,
-                )[:500]
-                article["image_alt"] = seo_image_alt_from_title(
-                    article["title"],
-                    (fb.get("content") or "")[:600],
-                )
-                article["content"] = finalize_pipeline_body_for_cms(
-                    _ensure_final_content_floor((fb.get("content") or "").strip())
-                )
-                article["category"] = cat
-                article["_grounding_meta"] = {**meta_qc, "fallback": True, "fallback_reason": reason_qc}
-                return article
+                raise RewriteFailedError(f"Grounding QC failed: {reason_qc}")
 
         except RewriteFailedError:
             raise

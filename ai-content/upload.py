@@ -66,6 +66,7 @@ from config import (
     PIPELINE_MAX_ATTEMPTS_PER_RUN,
     PIPELINE_EXCERPT_SIMILARITY_THRESHOLD,
     PIPELINE_MIN_WORDS_FINAL,
+    PIPELINE_MIN_SOURCE_WORDS,
     PIPELINE_MIN_WORDS_SEO_HUB,
     PIPELINE_SEO_HUB_MODE,
     PIPELINE_TITLE_SIMILARITY_THRESHOLD,
@@ -73,11 +74,12 @@ from config import (
     SUPABASE_URL,
 )
 from final_formatter import apply_final_article_enhancer
-from seo_evergreen import (
-    BANNED_FILLER_PHRASES,
-    append_missing_evergreen_sections,
-    detect_seo_template,
-    validate_seo_hub_structure,
+from seo_evergreen import BANNED_FILLER_PHRASES
+from source_gate import (
+    contains_placeholder_content,
+    resolve_publishable_source,
+    validate_paraphrase_first_article,
+    word_count as source_word_count,
 )
 from image_seo import record_published_image_alt
 from images import process_image_strict, reset_image_run_dedupe
@@ -583,16 +585,9 @@ def _combined_scrape_blob(article: dict[str, Any], title: str) -> str:
 
 
 def _apply_pipeline_rewrite_fallback(article: dict[str, Any], title: str) -> None:
-    """Replace title/body with source-only excerpt formatting (no LLM)."""
-    cat = _normalize_category(str(article.get("category") or "Boating Tips"))
-    blob = _combined_scrape_blob(article, title)
-    fb = pipeline_fallback_from_source(
-        blob,
-        (article.get("title") or title or "").strip() or "Update",
-        cat,
-    )
-    article["title"] = fb["title"]
-    article["content"] = fb["content"]
+    """Deprecated — pipeline no longer publishes deterministic placeholder fallbacks."""
+    _ = article, title
+    raise RewriteFailedError("Rewrite failed — placeholder fallback disabled")
 
 
 def _pipeline_json_line(obj: dict[str, Any]) -> None:
@@ -704,39 +699,34 @@ def validate_article(
     category: str = "",
     keyword_topic: str = "",
 ) -> tuple[bool, str]:
-    """
-    Gate before captains_log insert — local relevance, anti-filler, min words, image URL rules.
-    Grounding QC runs in rewrite_pipeline_article (see grounding module).
-    """
+    """Gate before captains_log insert — rejects placeholders, thin paraphrase, missing image."""
     if not (content or "").strip():
         return False, "empty_content"
-    wc = len(re.findall(r"\b[\w'-]+\b", content))
     mw = min_words if min_words is not None else PIPELINE_MIN_WORDS_FINAL
-    if wc < mw:
-        # No "reject" log here — upload.py may pad and re-validate (avoid looking like a failed insert).
-        return False, f"below_min_words:{wc}"
+
+    placeholder = contains_placeholder_content(content)
+    if placeholder:
+        return False, f"placeholder:{placeholder}"
+
+    if seo_hub_mode:
+        ok_pf, reason_pf, _meta = validate_paraphrase_first_article(
+            content,
+            title=seo_title,
+            min_words=mw,
+        )
+        if not ok_pf:
+            return False, reason_pf
+    else:
+        wc = len(re.findall(r"\b[\w'-]+\b", content))
+        if wc < mw:
+            return False, f"below_min_words:{wc}"
+
     if not LOCAL_REF_RE.search(content):
         return False, "no_local_reference"
     low = content.lower()
     for fp in FILLER_PHRASES:
         if fp in low:
             return False, f"filler:{fp}"
-    if seo_hub_mode:
-        template = detect_seo_template(
-            category=category,
-            keyword_topic=keyword_topic,
-            title=seo_title,
-            body=content,
-        )
-        ok_seo, reason_seo, _meta = validate_seo_hub_structure(
-            content,
-            template=template,
-            title=seo_title,
-            min_words=mw,
-            min_sections=8,
-        )
-        if not ok_seo:
-            return False, reason_seo
     u = (public_image_url or "").strip()
     if not u:
         return False, "no_image"
@@ -1017,6 +1007,7 @@ def run_pipeline() -> dict[str, Any]:
                 "stage": "pipeline_audit",
                 "event": "config",
                 "min_words_final": PIPELINE_MIN_WORDS_FINAL,
+                "min_source_words": PIPELINE_MIN_SOURCE_WORDS,
                 "grounding_min_token_overlap": GROUNDING_MIN_TOKEN_OVERLAP,
                 "pipeline_fast": PIPELINE_FAST,
                 "seo_hub_mode": PIPELINE_SEO_HUB_MODE,
@@ -1246,26 +1237,20 @@ def run_pipeline() -> dict[str, Any]:
                 except Exception as ex:
                     print("[WARN] scrape_article_for_pipeline (image):", ex)
 
-            topic_body = _load_pipeline_article_body(article)
-            article["content"] = topic_body
-            print(f"[DEBUG] Raw content length: {len(article.get('content', '').split())}")
-            print(f"[DEBUG] Raw content preview: {article.get('content', '')[:300]}")
+            source_ok, source_body, source_meta = resolve_publishable_source(article, url)
+            _pipeline_json_line({"stage": "source_extraction", **source_meta})
+            if not source_ok:
+                print(f"[SKIP] source_extraction: {source_meta.get('reason')} → {url[:200]}")
+                delta["skipped_validation"] += 1
+                _merge_stats(stats, delta)
+                continue
 
-            raw_body = (article.get("content") or "").strip()
-            summary_s = str(article.get("summary") or "")
-            if not raw_body:
-                print("[WARN] fallback content used (title/summary only, no invented copy)")
-                article["content"] = _minimal_body_from_scrape_only(
-                    article.get("title") or title,
-                    summary_s,
-                )
-            elif _word_count(raw_body) < 40:
-                print("[WARN] short scrape — merge RSS summary + headline for rewrite signal")
-                article["content"] = _ensure_min_words_for_rewrite(
-                    raw_body,
-                    article.get("title") or title,
-                    summary_s,
-                )
+            article["content"] = source_body
+            article["_source_extraction"] = source_meta
+            print(
+                f"[PIPELINE] source body ready: {source_meta.get('extracted_word_count')} words "
+                f"from {url[:120]}"
+            )
 
             tid = str(article.get("topic_id") or "").strip()
             check_title = (article.get("title") or title or "").strip()
@@ -1335,22 +1320,26 @@ def run_pipeline() -> dict[str, Any]:
             try:
                 rewritten = rewrite_pipeline_article(article)
                 if rewritten is None:
-                    print("[WARN] rewrite returned None — source-only excerpt fallback")
-                    _apply_pipeline_rewrite_fallback(article, title)
-                else:
-                    print(
-                        f"[DEBUG] Rewritten content preview: {rewritten.get('content', '')[:300]}"
-                    )
-                    article = rewritten
-                    print("[REWRITE SUCCESS]")
-                    print("✅ REWRITE COMPLETE:", (article.get("title") or title)[:220])
+                    print("[SKIP] rewrite returned None")
+                    delta["skipped_ai"] += 1
+                    _merge_stats(stats, delta)
+                    continue
+                print(
+                    f"[DEBUG] Rewritten content preview: {rewritten.get('content', '')[:300]}"
+                )
+                article = rewritten
+                print("[REWRITE SUCCESS]")
+                print("✅ REWRITE COMPLETE:", (article.get("title") or title)[:220])
             except (TopicMismatchError, RewriteFailedError) as e:
-                print("[WARN] rewrite bypass — source-only excerpt fallback:", e)
-                _apply_pipeline_rewrite_fallback(article, title)
+                print(f"[SKIP] rewrite failed: {e}")
+                delta["skipped_ai"] += 1
+                _merge_stats(stats, delta)
+                continue
             except Exception as e:
-                print(f"[ERROR] rewrite failed → {e}")
-                print("[WARN] rewrite bypass — source-only excerpt fallback")
-                _apply_pipeline_rewrite_fallback(article, title)
+                print(f"[SKIP] rewrite error: {e}")
+                delta["skipped_ai"] += 1
+                _merge_stats(stats, delta)
+                continue
 
             # Legacy structure gate runs before image processing (SEO hub defers until after enhancer).
             content_for_audit = (article.get("content") or "").strip()
@@ -1583,69 +1572,32 @@ def run_pipeline() -> dict[str, Any]:
                 article["content"] = content
 
             if PIPELINE_SEO_HUB_MODE and structure_enforce:
-                audit_ok, audit_issues, audit_meta = audit_article_structure(
-                    seo_title,
+                pf_ok, pf_reason, pf_meta = validate_paraphrase_first_article(
                     content,
-                    seo_hub_mode=True,
-                    category=article_category,
-                    keyword_topic=article_keyword_topic,
+                    title=seo_title,
+                    min_words=PIPELINE_MIN_WORDS_SEO_HUB,
                 )
                 structure_audit_checked += 1
-                block_issues = blocking_structure_issues(audit_issues, seo_hub_mode=True)
-                if not audit_ok:
+                if not pf_ok:
                     structure_audit_failures += 1
                 print(
                     json.dumps(
                         {
                             "stage": "structure_audit_post_enhancer",
-                            "ok": audit_ok,
-                            "issues": audit_issues[:6],
-                            "blocking_issues": block_issues[:6],
-                            **audit_meta,
+                            "ok": pf_ok,
+                            "reason": pf_reason,
+                            "generated_word_count": pf_meta.get("word_count"),
+                            "news_word_count": pf_meta.get("news_word_count"),
+                            **pf_meta,
                         },
                         ensure_ascii=False,
                     )
                 )
-                if block_issues:
-                    template = detect_seo_template(
-                        category=article_category,
-                        keyword_topic=article_keyword_topic,
-                        title=seo_title,
-                        body=content,
-                    )
-                    content = append_missing_evergreen_sections(
-                        content,
-                        template=template,
-                        min_words=PIPELINE_MIN_WORDS_SEO_HUB,
-                    )
-                    article["content"] = content
-                    audit_ok2, audit_issues2, audit_meta2 = audit_article_structure(
-                        seo_title,
-                        content,
-                        seo_hub_mode=True,
-                        category=article_category,
-                        keyword_topic=article_keyword_topic,
-                    )
-                    structure_audit_checked += 1
-                    block_issues2 = blocking_structure_issues(audit_issues2, seo_hub_mode=True)
-                    print(
-                        json.dumps(
-                            {
-                                "stage": "structure_audit_post_enhancer",
-                                "ok": audit_ok2,
-                                "repair_attempt": True,
-                                "issues": audit_issues2[:6],
-                                "blocking_issues": block_issues2[:6],
-                                **audit_meta2,
-                            },
-                            ensure_ascii=False,
-                        )
-                    )
-                    if block_issues2 and not audit_ok2:
-                        print(f"[SKIP] SEO hub structure gate failed → {block_issues2[:3]}")
-                        delta["skipped_validation"] += 1
-                        _merge_stats(stats, delta)
-                        continue
+                if not pf_ok:
+                    print(f"[SKIP] paraphrase_quality: {pf_reason}")
+                    delta["skipped_validation"] += 1
+                    _merge_stats(stats, delta)
+                    continue
 
             def _validate_current() -> tuple[bool, str]:
                 return validate_article(
@@ -1659,41 +1611,19 @@ def run_pipeline() -> dict[str, Any]:
                 )
 
             ok, reason = _validate_current()
-            if not ok and PIPELINE_SEO_HUB_MODE and (
-                reason.startswith("below_min_words") or reason.startswith("missing_sections")
-            ):
-                wc0 = reason.split(":", 1)[-1] if ":" in reason else "?"
+            if not ok:
                 print(
-                    f"[INFO] SEO hub finalize ({reason}) — expanding evergreen sections "
-                    f"(currently {wc0} words/sections)"
+                    json.dumps(
+                        {
+                            "stage": "publish_validation",
+                            "ok": False,
+                            "reason": reason,
+                            "generated_word_count": source_word_count(content),
+                            "source_url": (source_url_db or "")[:200],
+                        },
+                        ensure_ascii=False,
+                    )
                 )
-                template = detect_seo_template(
-                    category=article_category,
-                    keyword_topic=article_keyword_topic,
-                    title=seo_title,
-                    body=content,
-                )
-                content = append_missing_evergreen_sections(
-                    content,
-                    template=template,
-                    min_words=PIPELINE_MIN_WORDS_SEO_HUB,
-                )
-                article["content"] = content
-                ok, reason = _validate_current()
-            elif not ok and reason.startswith("below_min_words"):
-                wc0 = reason.split(":", 1)[-1] if ":" in reason else "?"
-                print(
-                    f"[INFO] Word count under {PIPELINE_MIN_WORDS_FINAL} ({wc0} words) — "
-                    "padding with source-safe text, then re-checking"
-                )
-                content = _expand_short_content_for_validation(
-                    content,
-                    seo_title,
-                    str(article.get("summary") or ""),
-                    PIPELINE_MIN_WORDS_FINAL,
-                )
-                article["content"] = content
-                ok, reason = _validate_current()
             if not ok and reason == "no_local_reference":
                 print("[WARN] local reference appended for validation")
                 content = (
@@ -1712,8 +1642,12 @@ def run_pipeline() -> dict[str, Any]:
             print(
                 json.dumps(
                     {
+                        "stage": "publish_ready",
                         "title": seo_title,
-                        "content_words": len(re.findall(r"\b[\w'-]+\b", content)),
+                        "generated_word_count": source_word_count(content),
+                        "source_word_count": (article.get("_source_extraction") or {}).get(
+                            "extracted_word_count"
+                        ),
                         "image": (public_image_url or "")[:120],
                     },
                     ensure_ascii=False,

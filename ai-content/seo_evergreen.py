@@ -244,9 +244,10 @@ _EVERGREEN: dict[str, dict[str, str]] = {
             "glows blue-green in the Indian River Lagoon and Mosquito Lagoon. Bioluminescence "
             "tours near Titusville feel otherworldly—fish leave comet trails and dolphins "
             "become shadows sparkled with light. Peak season varies with salinity, temperature, "
-            "and recent rain, so flexible planning wins. A guided night charter keeps you in "
-            "known shallow lanes and away from busy channels while you experience one of "
-            "Florida's most memorable water adventures."
+            "and recent rain, so flexible planning wins. For science, seasons, and responsible "
+            "observation, see the [Florida bioluminescence guide](/bioluminescence). A guided "
+            "night charter keeps you in known shallow lanes and away from busy channels while "
+            "you experience one of Florida's most memorable water adventures."
         ),
         "Why Night Tours on the Lagoon Matter": (
             "Land-based visitors rarely see the full show; depth and distance kill the effect. "
@@ -259,17 +260,19 @@ _EVERGREEN: dict[str, dict[str, str]] = {
         "Best Times and Conditions": (
             "New-moon weeks offer the darkest skies. Calm wind and minimal chop improve "
             "visibility; heavy rain upstream can dilute blooms. Summer months often produce "
-            "stronger displays but also thunderstorms—flexible booking helps. Check "
-            "[Marine Conditions](/conditions) for wind and storm trends before a night run. "
-            "Operators may reschedule when lightning or small-craft advisories threaten "
-            "guest comfort and safety."
+            "stronger displays but also thunderstorms—flexible booking helps. The "
+            "[Florida bioluminescence guide](/bioluminescence) covers moon phase, seasonality, "
+            "and lagoon ethics in more detail. Check [Marine Conditions](/conditions) for wind "
+            "and storm trends before a night run. Operators may reschedule when lightning or "
+            "small-craft advisories threaten guest comfort and safety."
         ),
         "Best Viewing From a Boat": (
             "Slow speeds maximize glow—fast planing washes out the effect. Many guests "
             "dip hands or nets gently (where permitted) to swirl light pools. Anchoring in "
             "shallow grass flats can be spectacular when tides cooperate. A Titusville "
             "bioluminescence charter handles launch timing, lighting rules, and the mundane "
-            "work of finding dark water away from shoreline sodium lights."
+            "work of finding dark water away from shoreline sodium lights—"
+            "[book a night tour](/bioluminescent-tours) when forecasts look calm."
         ),
         "Marine Conditions at Night": (
             "Night boating demands sharp situational awareness: navigation lights, chart "
@@ -313,19 +316,24 @@ _EVERGREEN: dict[str, dict[str, str]] = {
         "Frequently Asked Questions": (
             "**Q:** When is bioluminescence strongest near Titusville?\n\n"
             "**A:** Dark moonless nights in warm months, after calm days without heavy runoff—"
-            "but blooms vary; operators monitor conditions daily.\n\n"
+            "but blooms vary; operators monitor conditions daily. See the "
+            "[Florida bioluminescence guide](/bioluminescence) for season, moon, and safety "
+            "basics.\n\n"
             "**Q:** Is it safe for kids?\n\n"
             "**A:** With life jackets, calm weather, and a reputable charter, yes—choose "
             "trips matched to your group's comfort on the water at night.\n\n"
             "**Q:** Can I combine bio and launch viewing?\n\n"
-            "**A:** Sometimes, on multi-day visits—ask about [bioluminescence tours]"
-            "(/bioluminescent-tours) and [launch charters](/launches) when planning."
+            "**A:** Sometimes, on multi-day visits—read the "
+            "[Florida bioluminescence guide](/bioluminescence) for timing basics, then ask "
+            "about [bioluminescence tours](/bioluminescent-tours) and "
+            "[launch charters](/launches) when planning."
         ),
         "Final Thoughts": (
             "Bioluminescence on the Indian River Lagoon is a bucket-list Florida experience "
             "best seen from the water. Book when forecasts look calm, stay flexible if "
-            "operators reschedule, and explore [Book Now](/booking) and [Pricing](/pricing) "
-            "at Launch Zone Charters for your next night on the lagoon."
+            "operators reschedule, and explore [bioluminescence tours](/bioluminescent-tours), "
+            "[Book Now](/booking), and [Pricing](/pricing) at Launch Zone Charters for your "
+            "next night on the lagoon."
         ),
         "_top_up": (
             "Visitors often underestimate how dark the lagoon feels once you leave shoreline "
@@ -726,6 +734,94 @@ VOICE:
 SEMANTIC KEYWORDS (natural, not stuffed):
 - Work in phrases like rocket launch Titusville, Cape Canaveral launch, Florida Space Coast, boat launch viewing, launch viewing charter, bioluminescence tours where relevant.
 """
+
+
+def build_paraphrase_first_engine(*, allowed_paths: str, writer_conventions: str, min_words: int = 350) -> str:
+    """Prompt engine: paraphrase full source first, boating context only after."""
+    return f"""
+PARAPHRASE-FIRST CAPTAIN'S LOG ENGINE
+
+GROUNDING (mandatory — automated QC rejects violations):
+- The NEWS portion must PARAPHRASE ONLY from SOURCE FACTS (especially BODY). Reorder and reword; do NOT add facts.
+- Do NOT invent schedules, payloads, quotes, statistics, or named places not in SOURCE FACTS.
+- Do NOT write from the headline alone when BODY provides more detail — use the full BODY.
+- NEVER output: "Key details are limited", "Use available source details", "Plan conservatively",
+  "Check for the latest source update", or similar placeholder filler.
+
+VOICE:
+- News sections: neutral editor paraphrasing the publisher story.
+- Boating appendix: local captain tone for Launch Zone Charters (Titusville, Indian River Lagoon, Space Coast).
+
+{writer_conventions}
+
+STEP 1 — READ SOURCE FACTS completely before writing.
+
+STEP 2 — TITLE (required)
+First output line: TITLE: <SEO title with topic + Space Coast location when supported by source>
+
+STEP 3 — ARTICLE STRUCTURE (mandatory order)
+After TITLE:, the markdown body MUST use:
+
+  1) `##` + one reader-facing headline (NOT identical to TITLE line; do not repeat it in other headings).
+
+  2) NEWS PARAPHRASE (comes first — target **≥{max(min_words - 120, 180)} words**):
+     - Paraphrase the publisher story from SOURCE FACTS in original wording.
+     - Use `###` subheadings only when the source supports distinct topics (do not invent sections).
+     - Short paragraphs; preserve who/what/when/where/why from the source.
+     - Do NOT add Launch Zone marketing or boating advice in this portion.
+
+  3) `### What This Means For Your Space Coast Boat Trip` (AFTER the news paraphrase):
+     - Practical boating/charter context: timing, marine conditions, viewing from the water, lagoon routes.
+     - General Space Coast expertise allowed; no new facts about the news event.
+
+  4) `### Before You Go`
+     - 3–5 bullet checklist (`- ` lines only).
+     - Optional internal markdown links (paths only): {allowed_paths}
+
+MINIMUM total length: **~{min_words} words** (news paraphrase must be the majority).
+
+FORBIDDEN:
+- Placeholder filler, headline repeated in every section, "Summary" sections, booking CTA blocks.
+- Images, phone numbers, bare URLs in prose.
+"""
+
+
+def append_boating_context_section(content: str, *, template: str = "launch") -> str:
+    """
+    Append only the boating-context + Before You Go sections when the model omitted them.
+    Does not replace or pad the news paraphrase.
+    """
+    body = (content or "").strip()
+    if not body:
+        return body
+    present = existing_section_titles(body)
+    additions: list[str] = []
+
+    boating_heading = "What This Means For Your Space Coast Boat Trip"
+    if _norm_heading(boating_heading) not in present:
+        para = (_EVERGREEN.get(template) or _EVERGREEN.get(TEMPLATE_LAUNCH) or {}).get(
+            "Why Watch From a Boat",
+            "",
+        ).strip()
+        if not para:
+            para = (
+                "If you are planning time on the Indian River Lagoon near Titusville, factor marine "
+                "weather and ramp traffic into your day. Watching from a boat can beat shore crowds "
+                "when conditions allow — check [Marine Conditions](/conditions) before you go."
+            )
+        additions.append(f"### {boating_heading}\n\n{para}")
+
+    if _norm_heading("Before You Go") not in present:
+        additions.append(
+            "### Before You Go\n\n"
+            "- Check [Marine Conditions](/conditions) and small-craft advisories before departure.\n"
+            "- Confirm life jackets and navigation lights for your planned hours.\n"
+            "- See [Rocket Launch Charters](/launches), [Pricing](/pricing), and [Book Now](/booking)."
+        )
+
+    if not additions:
+        return body
+    return f"{body}\n\n" + "\n\n".join(additions).strip()
 
 
 def build_seo_hub_step6(template: str, allowed_paths: str) -> str:

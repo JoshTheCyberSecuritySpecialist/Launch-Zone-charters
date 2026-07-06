@@ -23,7 +23,9 @@ const ROUTES = {
   adminStaffBooking: '/admin/staff-booking',
   adminCalendar: '/admin/calendar',
   verify: '/verify',
+  bioluminescenceGuide: '/bioluminescence',
   bioluminescentTours: '/bioluminescent-tours',
+  observationBottle: '/shop/observation-bottle',
   insuranceRequired: '/insurance-required',
 } as const;
 
@@ -66,7 +68,9 @@ const PAGE_TO_PATH: Record<string, string> = {
   'admin-staff-booking': ROUTES.adminStaffBooking,
   'admin-calendar': ROUTES.adminCalendar,
   verify: ROUTES.verify,
+  bioluminescence: ROUTES.bioluminescenceGuide,
   'bioluminescent-tours': ROUTES.bioluminescentTours,
+  'observation-bottle': ROUTES.observationBottle,
   'insurance-required': ROUTES.insuranceRequired,
 };
 
@@ -80,6 +84,7 @@ export function pathFromPageKey(pageKey: string): string {
 
 export function pageKeyFromPath(pathname: string): string {
   const path = pathname.replace(/\/+$/, '') || '/';
+  if (path.startsWith('/shop/')) return 'observation-bottle';
   if (path === ROUTES.captainsLog) return 'captains-log';
   if (path === ROUTES.verify) return 'verify';
   if (path.startsWith('/log/')) return 'log-article';

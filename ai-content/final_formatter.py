@@ -9,10 +9,8 @@ import re
 
 from rewrite import markdown_internal_link_allowed, markdown_trusted_authority_link_allowed
 from seo_evergreen import (
-    append_missing_evergreen_sections,
+    append_boating_context_section,
     detect_seo_template,
-    template_section_headings,
-    word_count,
 )
 
 _H3_RE = re.compile(r"(?mi)^#{2,3}\s+(.+?)\s*$")
@@ -199,10 +197,34 @@ _AUTHORITY_POOLS: dict[str, tuple[tuple[str, str], ...]] = {
 }
 
 # Explicit internal routes only (subset of rewrite.ALLOWED_INTERNAL_MARKDOWN_PATHS).
+_INTERNAL_LINK_LABELS: dict[str, str] = {
+    "/booking": "Book now",
+    "/launches": "Launch viewing resources",
+    "/conditions": "Marine conditions",
+    "/bioluminescence": "Florida bioluminescence guide",
+    "/bioluminescent-tours": "Book bioluminescence tours",
+    "/faqs": "FAQs",
+    "/pricing": "Pricing",
+    "/captains-log": "Captain's Log",
+    "/boat-rentals": "Boat rentals",
+    "/boat-rentals/daytona": "Daytona rentals",
+    "/boat-rentals/titusville": "Titusville rentals",
+    "/about": "About us",
+    "/shop/observation-bottle": "Observation Bottle",
+}
+
 _INTERNAL_ROUTES_BY_TOPIC: dict[str, tuple[str, ...]] = {
     "regulations_compliance": ("/faqs", "/booking", "/boat-rentals"),
     "rocket_launch": ("/launches", "/conditions", "/pricing", "/booking", "/about"),
-    "bioluminescence_night": ("/bioluminescent-tours", "/booking", "/conditions", "/pricing", "/about"),
+    "bioluminescence_night": (
+        "/bioluminescence",
+        "/bioluminescent-tours",
+        "/shop/observation-bottle",
+        "/booking",
+        "/conditions",
+        "/pricing",
+        "/about",
+    ),
     "marine_weather": ("/conditions", "/faqs", "/booking", "/pricing", "/about"),
     "boating_safety": ("/faqs", "/booking", "/boat-rentals"),
     "first_time_renter": ("/faqs", "/pricing", "/booking"),
@@ -569,7 +591,13 @@ def _rank_internal_paths(
                 x in blob for x in ("launch", "rocket", "spacex", "canaveral")
             ):
                 w += 2
-            if "bio" in pl or "bioluminescent" in pl:
+            if p == "/bioluminescence" and any(
+                x in blob for x in ("bioluminescence", "bioluminescent", "dinoflagellate", "glow", "night paddle")
+            ):
+                w += 5
+            if p == "/bioluminescent-tours":
+                if any(x in blob for x in ("book", "charter", "tour", "reserve", "rent")):
+                    w += 4
                 if any(x in blob for x in ("bioluminescence", "bioluminescent", "night paddle")):
                     w += 2
             if "conditions" in pl and any(
@@ -679,12 +707,12 @@ def apply_seo_longform_enhancer(
     category: str = "",
     keyword_topic: str = "",
     source_url: str = "",
-    min_words: int = 1500,
+    min_words: int = 350,
     max_internal_links: int = 5,
 ) -> str:
     """
-    SEO hub last pass: fill missing template sections from evergreen library,
-    add authority/internal links, and reach minimum word count.
+    Post-rewrite pass: append missing boating-context sections only (never replace news paraphrase).
+    Adds authority links and internal routes — does not pad with generic evergreen filler.
     """
     body = (content or "").strip()
     if not body:
@@ -696,7 +724,7 @@ def apply_seo_longform_enhancer(
         title=seo_title,
         body=body,
     )
-    body = append_missing_evergreen_sections(body, template=template, min_words=min_words)
+    body = append_boating_context_section(body, template=template)
 
     primary, secondary = _finalize_classification(
         title=seo_title,
@@ -712,8 +740,7 @@ def apply_seo_longform_enhancer(
         source_url=source_url,
     )
 
-    # Ensure Final Thoughts has internal links if model omitted them.
-    if _norm("Final Thoughts") in {_norm(x) for x in _H3_RE.findall(body)}:
+    if _norm("Before You Go") in {_norm(x) for x in _H3_RE.findall(body)}:
         paths = _rank_internal_paths(
             primary,
             secondary,
@@ -725,9 +752,10 @@ def apply_seo_longform_enhancer(
             "/booking": "Book Now",
             "/launches": "Rocket Launch Charters",
             "/conditions": "Marine Conditions",
+            "/bioluminescence": "Florida bioluminescence guide",
+            "/bioluminescent-tours": "Book bioluminescence tours",
             "/pricing": "Pricing",
             "/about": "About Us",
-            "/bioluminescent-tours": "Bioluminescence tours",
         }
         link_bits = [
             f"[{labels.get(p, 'Learn more')}]({p})"
@@ -737,13 +765,9 @@ def apply_seo_longform_enhancer(
         if link_bits and not re.search(r"\]\(/(?:launches|booking|pricing|about|conditions)", body):
             body = _append_to_section(
                 body,
-                "Final Thoughts",
+                "Before You Go",
                 "Plan your trip: " + " · ".join(link_bits) + ".",
             )
-
-    # Top up if still short after evergreen append.
-    if word_count(body) < min_words:
-        body = append_missing_evergreen_sections(body, template=template, min_words=min_words)
 
     return body.strip()
 
@@ -872,22 +896,25 @@ def apply_final_article_enhancer(
                 slug=slug,
                 body=body,
             )
+            if primary == "bioluminescence_night":
+                bio_cta_order = (
+                    "/bioluminescent-tours",
+                    "/bioluminescence",
+                    "/booking",
+                    "/conditions",
+                    "/pricing",
+                )
+                merged: list[str] = [
+                    p for p in bio_cta_order if markdown_internal_link_allowed(p)
+                ]
+                for p in paths:
+                    if p not in merged:
+                        merged.append(p)
+                paths = merged
             cap = max(0, max_internal_links)
             pieces: list[str] = []
-            labels = {
-                "/booking": "Book now",
-                "/launches": "Launch viewing resources",
-                "/conditions": "Marine conditions",
-                "/bioluminescent-tours": "Bioluminescence tours",
-                "/faqs": "FAQs",
-                "/pricing": "Pricing",
-                "/captains-log": "Captain's Log",
-                "/boat-rentals": "Boat rentals",
-                "/boat-rentals/daytona": "Daytona rentals",
-                "/boat-rentals/titusville": "Titusville rentals",
-            }
             for p in paths[:cap]:
-                label = labels.get(p, "Learn more")
+                label = _INTERNAL_LINK_LABELS.get(p, "Learn more")
                 pieces.append(f"[{label}]({p})")
             if pieces:
                 cta_line += " " + " · ".join(pieces) + "."

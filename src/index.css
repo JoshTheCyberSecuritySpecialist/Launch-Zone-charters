@@ -2280,3 +2280,28 @@ body:has(.contact-page) {
     background-position: center 54%;
   }
 }
+
+/* Bioluminescence authority guide — print-friendly */
+@media print {
+  .bio-guide-page {
+    background: #fff !important;
+    color: #111 !important;
+  }
+
+  .bio-guide-page .text-white,
+  .bio-guide-page .text-slate-200,
+  .bio-guide-page .text-slate-300,
+  .bio-guide-page .text-cyan-100,
+  .bio-guide-page .text-cyan-200,
+  .bio-guide-page .text-cyan-300 {
+    color: #111 !important;
+  }
+
+  .bio-guide-page header img {
+    max-height: 240px !important;
+  }
+
+  .bio-guide-page .print\\:hidden {
+    display: none !important;
+  }
+}

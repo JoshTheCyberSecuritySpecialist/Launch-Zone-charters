@@ -3,11 +3,17 @@ import { Helmet } from 'react-helmet-async';
 import { Link, useNavigate } from 'react-router-dom';
 import { Loader2, Check, Phone, AlertTriangle, Info, XCircle } from 'lucide-react';
 import { parseAiGoNoGo } from '../lib/aiDecision';
-import { fetchWithRetry } from '../lib/fetchWithRetry';
+import {
+  fetchBioluminescence,
+  normalizeRating,
+  type GlowCheckResponse,
+  type GlowFetchError,
+  type GlowStatus,
+} from '../lib/bioluminescenceApi';
 import WeeklyForecast from '../components/WeeklyForecast';
+import ObservationBottlePromo from '../components/ObservationBottlePromo';
 import SubscribeAlerts from '../components/SubscribeAlerts';
 import Logo from '../components/ui/Logo';
-import { env } from '../config/env.js';
 import { beginAsyncInteraction, wrapRouterNavigate, wrapSyncClick } from '../lib/clickPerf';
 
 const BIO_HERO_IMAGE =
@@ -23,94 +29,7 @@ interface BioluminescentToursProps {
   onNavigate: (page: string) => void;
 }
 
-type GlowStatus = 'perfect' | 'good' | 'poor' | 'unknown';
-
-/** Normalized view model for GET /api/bioluminescence when status === OK */
-interface GlowCheckResponse {
-  success: boolean;
-  status: GlowStatus;
-  message: string;
-  explanation?: string;
-  score?: number;
-  aiSummary?: string;
-  wind?: number;
-  clouds?: number;
-  rating?: GlowRatingLabel | 'Unavailable';
-  conditions?: string[];
-  reasoning?: GlowReasonLine[];
-  nextNewMoon?: { daysFromNow: number; dateLabel: string } | null;
-  airTempF?: number;
-  waterTempF?: number | null;
-  waterTempSource?: string;
-  hardFailed?: boolean;
-  hardFailReasons?: string[];
-  data?: {
-    wind?: number;
-    clouds?: number;
-    moonPhase?: number;
-    moonIlluminationPercent?: number;
-    moonLabel?: string;
-    tideSummary?: string;
-    tideExtremes?: unknown;
-  };
-}
-
-type GlowRatingLabel = 'HIGH' | 'MEDIUM' | 'LOW' | 'High' | 'Moderate' | 'Low';
-
-interface GlowReasonLine {
-  kind: 'good' | 'bad' | 'warn' | 'info';
-  text: string;
-}
-
-interface GlowApiOk {
-  status: 'OK';
-  data: {
-    glowStatus: GlowStatus;
-    score: number;
-    message: string;
-    explanation?: string;
-    wind: number;
-    clouds: number;
-    moonPhase: number;
-    moonLabel: string;
-    moonIlluminationPercent: number;
-    tideSummary: string;
-    tideExtremes?: unknown;
-    rating: GlowRatingLabel;
-    conditions: string[];
-    reasoning?: GlowReasonLine[];
-    nextNewMoon?: { daysFromNow: number; dateLabel: string } | null;
-    airTempF?: number;
-    waterTempF?: number | null;
-    waterTempSource?: string;
-    waterTempEstimate?: boolean;
-    hardFailed?: boolean;
-    hardFailReasons?: string[];
-    inDinoSeason?: boolean;
-  };
-  analysis: { text: string } | null;
-}
-
-interface GlowApiUnavailable {
-  status: 'UNAVAILABLE';
-  message: string;
-}
-
-type GlowFetchError = null | 'live' | 'format';
-
 type GlowTier = 'high' | 'moderate' | 'poor';
-
-function normalizeRating(r: string | undefined): 'HIGH' | 'MEDIUM' | 'LOW' | undefined {
-  if (!r || r === 'Unavailable') return undefined;
-  if (r === 'High') return 'HIGH';
-  if (r === 'Moderate') return 'MEDIUM';
-  if (r === 'Low') return 'LOW';
-  const u = r.toUpperCase();
-  if (u === 'HIGH') return 'HIGH';
-  if (u === 'MEDIUM') return 'MEDIUM';
-  if (u === 'LOW') return 'LOW';
-  return undefined;
-}
 
 function glowTierFromResult(r: GlowCheckResponse | null): GlowTier | null {
   if (!r?.success) return null;
@@ -133,38 +52,6 @@ function ratingAccentClass(rating: string | undefined) {
     return 'border-rose-500/45 bg-rose-950/35 text-rose-50 shadow-[0_0_20px_rgba(244,63,94,0.12)]';
   }
   return 'border-slate-500/50 bg-slate-950/50 text-slate-200 shadow-[inset_0_0_20px_rgba(0,0,0,0.35)]';
-}
-
-function mapApiOkToGlowResult(payload: GlowApiOk): GlowCheckResponse {
-  const d = payload.data;
-  return {
-    success: true,
-    status: d.glowStatus,
-    message: d.message,
-    explanation: d.explanation,
-    score: d.score,
-    wind: d.wind,
-    clouds: d.clouds,
-    rating: d.rating,
-    conditions: d.conditions,
-    reasoning: d.reasoning,
-    nextNewMoon: d.nextNewMoon,
-    airTempF: d.airTempF,
-    waterTempF: d.waterTempF ?? undefined,
-    waterTempSource: d.waterTempSource,
-    hardFailed: d.hardFailed,
-    hardFailReasons: d.hardFailReasons,
-    aiSummary: payload.analysis?.text ?? '',
-    data: {
-      wind: d.wind,
-      clouds: d.clouds,
-      moonPhase: d.moonPhase,
-      moonIlluminationPercent: d.moonIlluminationPercent,
-      moonLabel: d.moonLabel,
-      tideSummary: d.tideSummary,
-      tideExtremes: d.tideExtremes,
-    },
-  };
 }
 
 const accent = '#00cfff';
@@ -198,92 +85,23 @@ export default function BioluminescentTours({ onNavigate }: BioluminescentToursP
 
   const checkTonightsGlow = useCallback(async () => {
     const perf = beginAsyncInteraction('bio_tonights_glow_check');
-    let outcome = 'completed';
     setGlowLoading(true);
     setGlowFetchError(null);
     setGlowResult(null);
     setGlowUnavailableMessage(null);
 
-    try {
-      if (!env.apiUrlConfigured || !env.apiUrl) {
-        setGlowUnavailableMessage('Live glow data is unavailable (API URL not configured).');
-        setGlowFetchError('live');
-        outcome = 'no_api';
-        return;
-      }
-      perf.markNetworkStart();
-      const res = await fetchWithRetry(`${env.apiUrl}/api/bioluminescence`, { method: 'GET' });
+    perf.markNetworkStart();
+    const res = await fetchBioluminescence();
 
-      let raw: unknown;
-      try {
-        raw = await res.json();
-      } catch {
-        if (import.meta.env.DEV) {
-          console.error('Glow check failed: invalid JSON body');
-        }
-        setGlowFetchError('format');
-        outcome = 'bad_json';
-        return;
-      }
-
-      const body = raw as GlowApiOk | GlowApiUnavailable | Record<string, unknown>;
-
-      if (body && typeof body === 'object' && 'status' in body && body.status === 'UNAVAILABLE') {
-        const msg =
-          typeof (body as GlowApiUnavailable).message === 'string'
-            ? (body as GlowApiUnavailable).message
-            : 'Live environmental data unavailable';
-        setGlowUnavailableMessage(msg);
-        outcome = 'unavailable';
-        return;
-      }
-
-      if (!res.ok) {
-        if (import.meta.env.DEV) {
-          console.error('Glow check failed:', res.status, body);
-        }
-        setGlowFetchError('live');
-        outcome = 'http_error';
-        return;
-      }
-
-      if (
-        body &&
-        typeof body === 'object' &&
-        'status' in body &&
-        body.status === 'OK' &&
-        'data' in body &&
-        'analysis' in body
-      ) {
-        const ok = body as GlowApiOk;
-        if (!ok.data?.rating || !Array.isArray(ok.data.conditions)) {
-          if (import.meta.env.DEV) {
-            console.error('Glow check failed: invalid OK payload');
-          }
-          setGlowFetchError('format');
-          outcome = 'bad_payload';
-          return;
-        }
-        setGlowResult(mapApiOkToGlowResult(ok));
-        outcome = 'success';
-        return;
-      }
-
-      if (import.meta.env.DEV) {
-        console.error('Glow check failed: unexpected response shape');
-      }
-      setGlowFetchError('format');
-      outcome = 'unexpected_shape';
-    } catch (err) {
-      if (import.meta.env.DEV) {
-        console.error('Glow check failed:', err);
-      }
-      setGlowFetchError('live');
-      outcome = 'error';
-    } finally {
-      setGlowLoading(false);
-      perf.end(outcome);
+    if (res.ok) {
+      setGlowResult(res.data);
+      perf.end('success');
+    } else {
+      setGlowFetchError(res.error);
+      if (res.message) setGlowUnavailableMessage(res.message);
+      perf.end(res.error ?? 'error');
     }
+    setGlowLoading(false);
   }, []);
 
   const glowCardClass = (() => {
@@ -493,6 +311,16 @@ export default function BioluminescentTours({ onNavigate }: BioluminescentToursP
         aria-labelledby="bio-seo-heading"
       >
         <div className="mx-auto max-w-2xl px-4 sm:px-6 lg:max-w-3xl lg:px-8">
+          <p className="mb-5 text-center text-xs leading-relaxed text-slate-500 sm:text-sm">
+            New to lagoon glow?{' '}
+            <Link
+              to="/bioluminescence"
+              className="font-medium text-cyan-300/90 underline decoration-cyan-500/30 underline-offset-2 transition hover:text-cyan-200"
+            >
+              Read the full Florida bioluminescence guide
+            </Link>
+            .
+          </p>
           <h2
             id="bio-seo-heading"
             className="font-display text-balance text-center text-lg font-bold tracking-tight text-white sm:text-xl md:text-2xl"
@@ -552,10 +380,17 @@ export default function BioluminescentTours({ onNavigate }: BioluminescentToursP
             Indian River Lagoon and bioluminescence: what to expect
           </h3>
           <p className="mt-3 text-pretty text-left text-sm leading-relaxed text-slate-300 sm:text-base">
-            Peak glow varies with season, rain, and moonlight, so we publish a live score and weekly outlook. When
-            conditions align, the water behind the motor can flash electric blue and green; fish and manatees may leave
-            glowing trails. It&apos;s a real Florida estuary at night, best on a stable boat with a licensed operator.
+            Peak glow varies with season, rain, and moonlight, so we publish a live score and weekly outlook. New to
+            the science and seasons? Read our{' '}
+            <Link to="/bioluminescence" className="font-semibold text-cyan-300 underline-offset-2 hover:text-cyan-200">
+              Florida bioluminescence guide
+            </Link>{' '}
+            for responsible observation tips. When conditions align, the water behind the motor can flash electric blue
+            and green; fish and manatees may leave glowing trails. It&apos;s a real Florida estuary at night, best on a
+            stable boat with a licensed operator.
           </p>
+
+          <ObservationBottlePromo variant="callout" />
 
           <h3 className="font-display mt-10 text-center text-base font-bold tracking-tight text-cyan-200/95 sm:text-lg">
             Before you book (rental or charter)

@@ -12,7 +12,9 @@ const footerMiniLinks = [
   { label: 'Titusville Boat Rentals', path: 'fleet-titusville' as const },
   { label: 'Pricing', path: 'pricing' as const },
   { label: 'Launches', path: 'launches' as const },
+  { label: 'Bio Guide', path: 'bioluminescence' as const },
   { label: 'Bio Tours', path: 'bioluminescent-tours' as const },
+  { label: 'Observation Bottle', path: 'observation-bottle' as const },
   { label: "Captain's Log", path: 'captains-log' as const },
   { label: 'About', path: 'about' as const },
   { label: 'Contact', path: 'contact' as const },
@@ -92,6 +94,15 @@ export default function Footer({ onNavigate }: FooterProps) {
                   className="transition-colors hover:text-amber-400"
                 >
                   Rocket Launches
+                </button>
+              </li>
+              <li>
+                <button
+                  type="button"
+                  onClick={wrapNavigateClick('footer', 'observation-bottle', onNavigate)}
+                  className="transition-colors hover:text-amber-400"
+                >
+                  Observation Bottle
                 </button>
               </li>
             </ul>

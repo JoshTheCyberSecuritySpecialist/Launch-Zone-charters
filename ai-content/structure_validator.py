@@ -11,11 +11,8 @@ import re
 from typing import Any
 
 from config import PIPELINE_SEO_HUB_MODE
-from seo_evergreen import (
-    detect_seo_template,
-    template_section_headings,
-    validate_seo_hub_structure,
-)
+from source_gate import validate_paraphrase_first_article
+from seo_evergreen import detect_seo_template
 
 _H2_RE = re.compile(r"(?mi)^##\s+(.+?)\s*$")
 _H3_RE = re.compile(r"(?mi)^###\s+(.+?)\s*$")
@@ -138,69 +135,26 @@ def _audit_seo_hub_structure(
     keyword_topic: str = "",
     min_sections: int = 6,
 ) -> tuple[bool, list[str], dict[str, Any]]:
-    """Long-form template schema — flexible section count, enforced after enhancer."""
-    t = (title or "").strip()
-    c = (content or "").strip()
-    issues: list[str] = []
-
-    h2 = [m.group(1).strip() for m in _H2_RE.finditer(c)]
-    h3 = [m.group(1).strip() for m in _H3_RE.finditer(c)]
-    h2n = [_norm(x) for x in h2]
-
-    if not t:
-        issues.append("missing_title")
-    if not c:
-        issues.append("missing_content")
-    if not h2:
-        issues.append("missing_h2_headline")
-
-    for b in _BANNED_H2:
-        if b in h2n:
-            issues.append(f"banned_h2:{b}")
-
-    template = detect_seo_template(
-        category=category,
-        keyword_topic=keyword_topic,
-        title=title,
-        body=content,
-    )
-    required = template_section_headings(template)
-    h3n = {_norm(x) for x in h3}
-    matched = sum(1 for sec in required if _norm(sec) in h3n)
-    if matched < min_sections:
-        issues.append(f"missing_sections:{matched}/{len(required)}")
-
-    if len(h3) < min_sections:
-        issues.append(f"section_count_out_of_bounds:{len(h3)}")
-
-    seen: dict[str, int] = {}
-    for s in h3n:
-        seen[s] = seen.get(s, 0) + 1
-    dups = [k for k, v in seen.items() if v > 1]
-    if dups:
-        issues.append(f"duplicate_h3:{','.join(dups[:6])}")
-
-    ok_seo, reason_seo, seo_meta = validate_seo_hub_structure(
-        c,
-        template=template,
+    """Paraphrase-first schema — enforced after enhancer."""
+    _ = min_sections
+    ok, reason, meta = validate_paraphrase_first_article(
+        content,
         title=title,
         min_words=0,
-        min_sections=min_sections,
+        min_news_words=80,
     )
-    if not ok_seo and reason_seo.startswith("headline_repeated"):
-        issues.append(reason_seo)
-    if not ok_seo and reason_seo.startswith("filler:"):
-        issues.append(reason_seo)
-
-    meta: dict[str, Any] = {
-        "schema_detected": "seo_hub",
-        "template": template,
-        "h2_count": len(h2),
-        "h3_count": len(h3),
-        "sections_matched": matched,
-        "sections_required": len(required),
-        "word_count": len(_WORD_RE.findall(c)),
-        **seo_meta,
+    issues: list[str] = []
+    if not ok:
+        issues.append(reason)
+    meta = {
+        **meta,
+        "schema_detected": "paraphrase_first",
+        "template": detect_seo_template(
+            category=category,
+            keyword_topic=keyword_topic,
+            title=title,
+            body=content,
+        ),
     }
     return len(issues) == 0, issues, meta
 
@@ -241,12 +195,14 @@ def blocking_structure_issues(issues: list[str], *, seo_hub_mode: bool | None = 
     for i in issues:
         if hub:
             if (
-                i.startswith("missing_sections:")
+                i.startswith("missing_boating_context_section")
+                or i.startswith("news_section_too_short")
+                or i.startswith("placeholder:")
+                or i.startswith("below_min_words:")
+                or i.startswith("headline_repeated")
                 or i.startswith("duplicate_h3:")
                 or i.startswith("banned_h2:")
                 or i == "missing_h2_headline"
-                or i.startswith("headline_repeated")
-                or i.startswith("filler:")
             ):
                 out.append(i)
             continue

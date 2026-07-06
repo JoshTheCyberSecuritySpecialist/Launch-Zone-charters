@@ -194,7 +194,10 @@ PIPELINE_MAX_ATTEMPTS_PER_RUN: int = int(os.environ.get("PIPELINE_MAX_ATTEMPTS_P
 
 # Quality control — Captain's Log insert gate (grounding + SEO)
 PIPELINE_MIN_WORDS_STANDARD: int = int(os.environ.get("PIPELINE_MIN_WORDS_FINAL", "220"))
-PIPELINE_MIN_WORDS_SEO_HUB: int = int(os.environ.get("PIPELINE_MIN_WORDS_SEO_HUB", "1500"))
+# Published article floor (paraphrased news + boating appendix) — not padded filler.
+PIPELINE_MIN_WORDS_SEO_HUB: int = int(os.environ.get("PIPELINE_MIN_WORDS_SEO_HUB", "350"))
+# Full publisher HTML must meet this before rewrite (see source_gate.py).
+PIPELINE_MIN_SOURCE_WORDS: int = int(os.environ.get("PIPELINE_MIN_SOURCE_WORDS", "100"))
 GROUNDING_MIN_TOKEN_OVERLAP: float = float(os.environ.get("GROUNDING_MIN_TOKEN_OVERLAP", "0.055"))
 
 # Near-duplicate gate: SequenceMatcher ratio vs recent titles/excerpts (upload.py).

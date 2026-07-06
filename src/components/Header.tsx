@@ -43,6 +43,8 @@ const MENU_SECTIONS: MenuSection[] = [
     title: 'Information',
     items: [
       { kind: 'link', name: 'Marine Conditions', path: 'conditions' },
+      { kind: 'link', name: 'Bioluminescence Guide', path: 'bioluminescence' },
+      { kind: 'link', name: 'Observation Bottle', path: 'observation-bottle' },
       { kind: 'link', name: "Captain's Log", path: 'captains-log' },
       { kind: 'link', name: 'FAQs', path: 'faqs' },
     ],

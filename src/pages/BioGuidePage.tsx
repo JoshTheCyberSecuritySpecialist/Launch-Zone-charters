@@ -106,8 +106,8 @@ export default function BioGuidePage({ onNavigate }: BioGuidePageProps) {
         <meta name="twitter:title" content={BIO_GUIDE_META.title} />
         <meta name="twitter:description" content={BIO_GUIDE_META.description} />
         <meta name="twitter:image" content={`${siteOrigin()}${BIO_GUIDE_HERO_IMAGE}`} />
-        <BioSchema canonicalUrl={canonicalUrl} wordCount={totalWordCount} />
       </Helmet>
+      <BioSchema canonicalUrl={canonicalUrl} wordCount={totalWordCount} />
 
       <ReadingProgressBar />
       <BioFloatingTocHighlight activeTitle={activeTocTitle} />

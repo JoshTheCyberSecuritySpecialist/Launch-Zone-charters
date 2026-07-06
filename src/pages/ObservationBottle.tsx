@@ -121,15 +121,15 @@ export default function ObservationBottle({ onNavigate }: ObservationBottleProps
             </p>
           </div>
           <div className="order-1 lg:order-2">
-            <div className="relative mx-auto aspect-square max-w-md overflow-hidden rounded-2xl border border-cyan-400/20 bg-[#050a14] shadow-[0_0_48px_rgba(0,207,255,0.15)] lg:max-w-none">
+            <div className="relative mx-auto w-full max-w-xl overflow-hidden rounded-2xl border border-cyan-400/20 bg-[#050a14] shadow-[0_0_48px_rgba(0,207,255,0.15)] lg:max-w-none">
               <SmartImage
                 src={OBSERVATION_BOTTLE.imagePath}
                 alt={OBSERVATION_BOTTLE.imageAlt}
                 priority
-                width={800}
-                height={800}
+                width={1535}
+                height={1024}
                 sizes="(min-width: 1024px) 480px, 90vw"
-                className="h-full w-full object-contain p-6 sm:p-8"
+                className="block h-auto w-full !object-contain"
               />
             </div>
           </div>

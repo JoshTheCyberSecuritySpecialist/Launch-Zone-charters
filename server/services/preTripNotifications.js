@@ -4,6 +4,7 @@
 
 const { sendSMS } = require('./sms');
 const { publicAppBase } = require('./verificationReminder');
+const bookingCommunications = require('./bookingCommunications');
 
 function escapeHtml(s) {
   return String(s)
@@ -235,6 +236,16 @@ You are not cleared for departure until we mark you Ready for Departure.
     console.error('[pre-trip-notify] booking confirmation:', result.error);
     return { sent: false, reason: 'resend_error' };
   }
+
+  await bookingCommunications.logAutomatedCommunication(supabase, {
+    bookingId: id,
+    channel: 'email',
+    messageType: 'automated_pre_trip_confirmation',
+    recipient: email,
+    subject,
+    body: textBody,
+    providerMessageId: result.data?.id || null,
+  });
 
   const stamp = { waivers_docs_confirmation_sent_at: new Date().toISOString() };
   await supabase.from('bookings').update(stamp).eq('id', id).is('waivers_docs_confirmation_sent_at', null);

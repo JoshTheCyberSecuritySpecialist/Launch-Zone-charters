@@ -190,6 +190,7 @@ export default function AdminOperationsDashboard() {
             ['New Staff Booking', '/admin/staff-booking'],
             ['Calendar', '/admin/calendar'],
             ['Outbox', '/admin/outbox'],
+            ['Disputes', '/admin/disputes'],
             ['Shop Orders', '/admin/shop-orders'],
             ["Today's Trips", '#today-trips'],
             ['Customers', '/admin/bookings'],

@@ -5,6 +5,7 @@
  */
 
 const { sendSMS } = require('./sms');
+const bookingCommunications = require('./bookingCommunications');
 
 const DEFAULT_MSG =
   'Reminder: Rental insurance must be completed before your trip. — Launch Zone Charters';
@@ -115,12 +116,33 @@ async function runTripInsuranceReminders(opts) {
           html,
         });
         if (r.error) out.errors.push(`email24:${row.id}:${r.error.message || 'resend'}`);
-        else anyDelivery = true;
+        else {
+          anyDelivery = true;
+          await bookingCommunications.logAutomatedCommunication(supabase, {
+            bookingId: row.id,
+            channel: 'email',
+            messageType: 'automated_insurance_reminder_24h',
+            recipient: email,
+            subject: 'Insurance required before your trip — Launch Zone Charters',
+            body: textBody,
+            providerMessageId: r.data?.id || null,
+          });
+        }
       }
 
       const smsRes = await sendSMS(phone, textBody);
-      if (smsRes.ok) anyDelivery = true;
-      else if (!smsRes.skipped) out.errors.push(`sms24:${row.id}`);
+      if (smsRes.ok) {
+        anyDelivery = true;
+        await bookingCommunications.logAutomatedCommunication(supabase, {
+          bookingId: row.id,
+          channel: 'sms',
+          messageType: 'automated_insurance_reminder_24h',
+          recipient: phone,
+          subject: 'Insurance reminder SMS (24h)',
+          body: textBody,
+          providerMessageId: smsRes.sid || null,
+        });
+      } else if (!smsRes.skipped) out.errors.push(`sms24:${row.id}`);
 
       if (anyDelivery) {
         const patch24 = { insurance_reminder_24h_sent_at: new Date().toISOString() };
@@ -149,12 +171,33 @@ async function runTripInsuranceReminders(opts) {
           html,
         });
         if (r.error) out.errors.push(`email2:${row.id}:${r.error.message || 'resend'}`);
-        else anyDelivery = true;
+        else {
+          anyDelivery = true;
+          await bookingCommunications.logAutomatedCommunication(supabase, {
+            bookingId: row.id,
+            channel: 'email',
+            messageType: 'automated_insurance_reminder_2h',
+            recipient: email,
+            subject: 'Reminder: complete rental insurance before departure',
+            body: textBody,
+            providerMessageId: r.data?.id || null,
+          });
+        }
       }
 
       const smsRes = await sendSMS(phone, textBody);
-      if (smsRes.ok) anyDelivery = true;
-      else if (!smsRes.skipped) out.errors.push(`sms2:${row.id}`);
+      if (smsRes.ok) {
+        anyDelivery = true;
+        await bookingCommunications.logAutomatedCommunication(supabase, {
+          bookingId: row.id,
+          channel: 'sms',
+          messageType: 'automated_insurance_reminder_2h',
+          recipient: phone,
+          subject: 'Insurance reminder SMS (2h)',
+          body: textBody,
+          providerMessageId: smsRes.sid || null,
+        });
+      } else if (!smsRes.skipped) out.errors.push(`sms2:${row.id}`);
 
       if (anyDelivery) {
         const patch2 = { insurance_reminder_2h_sent_at: new Date().toISOString() };

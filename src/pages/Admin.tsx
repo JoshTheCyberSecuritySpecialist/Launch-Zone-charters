@@ -2000,6 +2000,18 @@ export default function Admin({ onNavigate }: AdminProps) {
                 Manage boats
               </Link>
               <Link
+                to="/admin/outbox"
+                className="rounded-lg bg-indigo-700 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-indigo-600"
+              >
+                Outbox
+              </Link>
+              <Link
+                to="/admin/disputes"
+                className="rounded-lg bg-rose-700 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-rose-600"
+              >
+                Disputes
+              </Link>
+              <Link
                 to="/admin/shop-orders"
                 className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-teal-600"
               >

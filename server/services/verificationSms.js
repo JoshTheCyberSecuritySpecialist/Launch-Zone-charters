@@ -3,6 +3,7 @@
  */
 
 const sms = require('./sms');
+const bookingCommunications = require('./bookingCommunications');
 
 function verifyLink(bookingId, publicAppBase) {
   const base = publicAppBase.replace(/\/$/, '');
@@ -80,6 +81,16 @@ async function maybeSendVerificationSms(opts) {
   if (!result.ok) {
     return;
   }
+
+  await bookingCommunications.logAutomatedCommunication(supabaseAdmin, {
+    bookingId: id,
+    channel: 'sms',
+    messageType: 'automated_verification_sms',
+    recipient: String(phone).trim(),
+    subject: 'Verification SMS',
+    body: message,
+    providerMessageId: result.sid || null,
+  });
 
   const stamp = { verification_sms_sent_at: new Date().toISOString() };
   const markSent = () =>

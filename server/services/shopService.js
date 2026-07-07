@@ -30,7 +30,7 @@ const SHOP_ORDER_STATUSES = [
   'cancelled',
 ];
 
-const SHOP_CHECKOUT_TTL_MS = 30 * 60 * 1000;
+const SHOP_CHECKOUT_TTL_MS = 35 * 60 * 1000;
 
 function roundMoney(v) {
   const n = Number(v);
@@ -42,6 +42,15 @@ function getPublicBaseUrl() {
   return String(process.env.APP_PUBLIC_URL || process.env.FRONTEND_URL || '')
     .trim()
     .replace(/\/$/, '');
+}
+
+function normalizeCheckoutBaseUrl(domain) {
+  const raw = String(domain || '').trim().replace(/\/$/, '');
+  if (!raw) return '';
+  if (raw.startsWith('http://') && !/^http:\/\/(localhost|127\.0\.0\.1)/i.test(raw)) {
+    return `https://${raw.slice('http://'.length)}`;
+  }
+  return raw;
 }
 
 function formatOrderNumber(id) {
@@ -112,48 +121,75 @@ async function createShopCheckoutSession({ stripe, supabase, quantity: quantityR
     throw err;
   }
 
-  const domain = getPublicBaseUrl();
+  const domain = normalizeCheckoutBaseUrl(getPublicBaseUrl());
   if (!domain) {
     const err = new Error('APP_PUBLIC_URL or FRONTEND_URL must be configured for Stripe redirects.');
     err.statusCode = 503;
     throw err;
   }
+  if (!domain.startsWith('https://') && !/^https?:\/\/(localhost|127\.0\.0\.1)/i.test(domain)) {
+    const err = new Error('APP_PUBLIC_URL must use HTTPS for live Stripe Checkout.');
+    err.statusCode = 503;
+    throw err;
+  }
 
-  const imageUrl = `${domain}${OBSERVATION_BOTTLE_PRODUCT.imagePath}`;
-
-  const session = await stripe.checkout.sessions.create({
-    payment_method_types: ['card'],
-    mode: 'payment',
-    expires_at: Math.floor((Date.now() + SHOP_CHECKOUT_TTL_MS) / 1000),
-    allow_promotion_codes: true,
-    phone_number_collection: { enabled: true },
-    shipping_address_collection: { allowed_countries: ['US'] },
-    line_items: [
-      {
-        price_data: {
-          currency: OBSERVATION_BOTTLE_PRODUCT.currency,
-          unit_amount: OBSERVATION_BOTTLE_PRODUCT.priceCents,
-          product_data: {
-            name: OBSERVATION_BOTTLE_PRODUCT.name,
-            description: `${OBSERVATION_BOTTLE_PRODUCT.tagline} · Free standard shipping (United States)`,
-            images: [imageUrl],
-            metadata: {
-              brand: OBSERVATION_BOTTLE_PRODUCT.brand,
-              product_slug: OBSERVATION_BOTTLE_PRODUCT.slug,
+  let session;
+  try {
+    // Match booking checkout shape: no product images (ours is 2.24MB > Stripe 2MB cap).
+    session = await stripe.checkout.sessions.create({
+      payment_method_types: ['card'],
+      mode: 'payment',
+      expires_at: Math.floor((Date.now() + SHOP_CHECKOUT_TTL_MS) / 1000),
+      allow_promotion_codes: true,
+      phone_number_collection: { enabled: true },
+      shipping_address_collection: { allowed_countries: ['US'] },
+      shipping_options: [
+        {
+          shipping_rate_data: {
+            type: 'fixed_amount',
+            fixed_amount: {
+              amount: 0,
+              currency: OBSERVATION_BOTTLE_PRODUCT.currency,
+            },
+            display_name: 'Free standard shipping (United States)',
+            delivery_estimate: {
+              minimum: { unit: 'business_day', value: 12 },
+              maximum: { unit: 'business_day', value: 16 },
             },
           },
         },
-        quantity,
+      ],
+      line_items: [
+        {
+          price_data: {
+            currency: OBSERVATION_BOTTLE_PRODUCT.currency,
+            unit_amount: OBSERVATION_BOTTLE_PRODUCT.priceCents,
+            product_data: {
+              name: OBSERVATION_BOTTLE_PRODUCT.name,
+              metadata: {
+                brand: OBSERVATION_BOTTLE_PRODUCT.brand,
+                product_slug: OBSERVATION_BOTTLE_PRODUCT.slug,
+              },
+            },
+          },
+          quantity,
+        },
+      ],
+      success_url: `${domain}${OBSERVATION_BOTTLE_PRODUCT.successRoute}?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${domain}${OBSERVATION_BOTTLE_PRODUCT.route}`,
+      metadata: {
+        order_type: 'shop',
+        product_slug: OBSERVATION_BOTTLE_PRODUCT.slug,
+        quantity: String(quantity),
       },
-    ],
-    success_url: `${domain}${OBSERVATION_BOTTLE_PRODUCT.successRoute}?session_id={CHECKOUT_SESSION_ID}`,
-    cancel_url: `${domain}${OBSERVATION_BOTTLE_PRODUCT.route}`,
-    metadata: {
-      order_type: 'shop',
-      product_slug: OBSERVATION_BOTTLE_PRODUCT.slug,
-      quantity: String(quantity),
-    },
-  });
+    });
+    console.info('[shop/create-checkout-session] created', session.id, 'success_url=', `${domain}${OBSERVATION_BOTTLE_PRODUCT.successRoute}`);
+  } catch (stripeErr) {
+    console.error('[shop/create-checkout-session] Stripe error:', stripeErr?.message || stripeErr);
+    const err = new Error(stripeErr?.message || 'Stripe could not create checkout session');
+    err.statusCode = 502;
+    throw err;
+  }
 
   if (!session?.id || !session?.url) {
     const err = new Error('No checkout URL');
@@ -174,13 +210,15 @@ async function createShopCheckoutSession({ stripe, supabase, quantity: quantityR
   );
 
   if (insertErr) {
-    await stripe.checkout.sessions.expire(session.id).catch(() => {});
-    const err = new Error(insertErr.message || 'Could not save shop order');
-    err.statusCode = 500;
-    throw err;
+    // Do not expire the Stripe session — payment can still complete; webhook/finalize upserts the row.
+    console.error('[shop/create-checkout-session] shop_orders insert failed (checkout proceeds):', insertErr.message);
   }
 
-  return { url: session.url, sessionId: session.id };
+  return {
+    url: session.url,
+    sessionId: session.id,
+    dbWarning: insertErr?.message || null,
+  };
 }
 
 /**

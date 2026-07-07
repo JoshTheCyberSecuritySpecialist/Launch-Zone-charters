@@ -22,6 +22,9 @@ const documentUrlValidation = require('./services/documentUrlValidation');
 const bookingReliability = require('./services/bookingReliability');
 const bookingCommunications = require('./services/bookingCommunications');
 const shopService = require('./services/shopService');
+const disputeService = require('./services/disputeService');
+const disputeEvidenceService = require('./services/disputeEvidenceService');
+const disputeExportService = require('./services/disputeExportService');
 const { getBioConditions } = require('./services/bioluminescenceService');
 const { getRocketConditions } = require('./services/rocketService');
 const { getLaunchSchedulePreview } = require('./services/rocketScheduleService');
@@ -1436,6 +1439,40 @@ async function processStripeWebhookEvent(event) {
       booking_id: booking?.id || null,
     });
     return { ok: true };
+  }
+
+  if (eventType.startsWith('charge.dispute.')) {
+    const dispute = event.data.object;
+    try {
+      const out = await disputeService.upsertDisputeFromStripe(supabase, dispute);
+      await bookingReliability.updateWebhookEventStatus(supabase, eventId, 'processed', {
+        booking_id: out.bookingId || null,
+        error: null,
+      });
+      if (out.bookingId) {
+        await bookingReliability.insertActivity(supabase, {
+          booking_id: out.bookingId,
+          payment_intent_id: ids.paymentIntentId || out.dispute?.payment_intent_id || null,
+          event_type: 'stripe_dispute',
+          message: `Stripe dispute ${eventType.replace('charge.dispute.', '')}: ${String(dispute.status || 'updated')}`,
+          payload: {
+            event_id: eventId,
+            event_type: eventType,
+            stripe_dispute_id: dispute.id,
+            reason: dispute.reason || null,
+            status: dispute.status || null,
+          },
+        });
+      }
+      console.log('[stripe-webhook] dispute', dispute.id, eventType, out.created ? '(created)' : '(updated)');
+      return { ok: true, disputeId: out.dispute?.id || null };
+    } catch (err) {
+      console.error('[stripe-webhook] dispute:', err.message || err);
+      await bookingReliability.updateWebhookEventStatus(supabase, eventId, 'failed', {
+        error: err.message || 'Dispute webhook failed',
+      });
+      return { ok: false, error: err };
+    }
   }
 
   await bookingReliability.updateWebhookEventStatus(supabase, eventId, 'ignored');
@@ -3047,6 +3084,237 @@ app.patch('/api/admin/outbox/:id/reviewed', async (req, res) => {
   } catch (err) {
     console.error('[admin-outbox:reviewed]', err);
     return res.status(err.statusCode || 500).json({ error: err.message || 'Could not update review status.' });
+  }
+});
+
+app.get('/api/admin/disputes/summary', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const summary = await disputeService.getDisputeSummary(supabase);
+    return res.json(summary);
+  } catch (err) {
+    console.error('[admin-disputes:summary]', err);
+    return res.status(500).json({ error: err.message || 'Could not load dispute summary.' });
+  }
+});
+
+app.get('/api/admin/disputes', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const items = await disputeService.listDisputes(supabase, {
+      status: cleanText(req.query.status, 40),
+      search: cleanText(req.query.search, 200),
+      limit: req.query.limit,
+    });
+    return res.json({ items });
+  } catch (err) {
+    console.error('[admin-disputes:list]', err);
+    return res.status(500).json({ error: err.message || 'Could not load disputes.' });
+  }
+});
+
+app.get('/api/admin/disputes/:id', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const id = cleanText(req.params.id, 80);
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid dispute id.' });
+    const detail = await disputeService.loadDisputeDetail(supabase, id);
+    if (!detail) return res.status(404).json({ error: 'Dispute not found.' });
+    return res.json(detail);
+  } catch (err) {
+    console.error('[admin-disputes:get]', err);
+    return res.status(500).json({ error: err.message || 'Could not load dispute.' });
+  }
+});
+
+app.get('/api/admin/bookings/:id/dispute', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const id = cleanText(req.params.id, 80);
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid booking id.' });
+    const detail = await disputeService.getDisputeForBooking(supabase, id);
+    return res.json(detail || { dispute: null, notes: [] });
+  } catch (err) {
+    console.error('[admin-booking-dispute:get]', err);
+    return res.status(500).json({ error: err.message || 'Could not load booking dispute.' });
+  }
+});
+
+app.post('/api/admin/disputes/:id/notes', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const id = cleanText(req.params.id, 80);
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid dispute id.' });
+    const { data: existing, error: existingError } = await supabase
+      .from('stripe_disputes')
+      .select('id')
+      .eq('id', id)
+      .maybeSingle();
+    if (existingError) throw existingError;
+    if (!existing?.id) return res.status(404).json({ error: 'Dispute not found.' });
+    const note = await disputeService.addDisputeNote(supabase, {
+      disputeId: id,
+      adminId: adminUser.id,
+      noteText: req.body?.note_text || req.body?.noteText || req.body?.text,
+    });
+    return res.json({ ok: true, note });
+  } catch (err) {
+    console.error('[admin-disputes:note]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not add note.' });
+  }
+});
+
+app.get('/api/admin/disputes/:id/evidence-summary', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const id = cleanText(req.params.id, 80);
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid dispute id.' });
+    const result = await disputeEvidenceService.buildEvidenceSummary(supabase, stripe, { disputeId: id });
+    return res.json(result);
+  } catch (err) {
+    console.error('[admin-disputes:evidence]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not generate evidence summary.' });
+  }
+});
+
+app.get('/api/admin/bookings/:id/evidence-summary', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const id = cleanText(req.params.id, 80);
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid booking id.' });
+    const linked = await disputeService.getDisputeForBooking(supabase, id);
+    const result = await disputeEvidenceService.buildEvidenceSummary(supabase, stripe, {
+      disputeId: linked?.dispute?.id || null,
+      bookingId: id,
+    });
+    return res.json(result);
+  } catch (err) {
+    console.error('[admin-booking-evidence]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not generate evidence summary.' });
+  }
+});
+
+app.get('/api/admin/disputes/:id/evidence-pdf', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const id = cleanText(req.params.id, 80);
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid dispute id.' });
+    const pkg = await disputeExportService.loadEvidencePackage(supabase, stripe, { disputeId: id });
+    const pdfBuffer = await disputeExportService.buildEvidencePdf(pkg);
+    await disputeExportService.recordEvidenceExport(supabase, {
+      disputeId: id,
+      bookingId: pkg.bookingId,
+      adminId: adminUser.id,
+      format: 'pdf',
+    });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="dispute-evidence-${id.slice(0, 8)}.pdf"`);
+    return res.send(pdfBuffer);
+  } catch (err) {
+    console.error('[admin-disputes:evidence-pdf]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not generate evidence PDF.' });
+  }
+});
+
+app.get('/api/admin/disputes/:id/evidence-zip', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const id = cleanText(req.params.id, 80);
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid dispute id.' });
+    const pkg = await disputeExportService.loadEvidencePackage(supabase, stripe, { disputeId: id });
+    const zipBuffer = await disputeExportService.buildEvidenceZip(supabase, pkg);
+    await disputeExportService.recordEvidenceExport(supabase, {
+      disputeId: id,
+      bookingId: pkg.bookingId,
+      adminId: adminUser.id,
+      format: 'zip',
+    });
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="dispute-evidence-${id.slice(0, 8)}.zip"`);
+    return res.send(zipBuffer);
+  } catch (err) {
+    console.error('[admin-disputes:evidence-zip]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not generate evidence ZIP.' });
+  }
+});
+
+app.post('/api/admin/disputes/:id/submit-stripe-evidence', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const id = cleanText(req.params.id, 80);
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid dispute id.' });
+    const result = await disputeExportService.submitEvidenceToStripe(stripe, supabase, {
+      disputeId: id,
+      adminId: adminUser.id,
+    });
+    return res.json(result);
+  } catch (err) {
+    console.error('[admin-disputes:submit-stripe-evidence]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not submit evidence to Stripe.' });
+  }
+});
+
+app.get('/api/admin/bookings/:id/evidence-pdf', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const id = cleanText(req.params.id, 80);
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid booking id.' });
+    const linked = await disputeService.getDisputeForBooking(supabase, id);
+    const pkg = await disputeExportService.loadEvidencePackage(supabase, stripe, {
+      disputeId: linked?.dispute?.id || null,
+      bookingId: id,
+    });
+    const pdfBuffer = await disputeExportService.buildEvidencePdf(pkg);
+    await disputeExportService.recordEvidenceExport(supabase, {
+      disputeId: linked?.dispute?.id || null,
+      bookingId: id,
+      adminId: adminUser.id,
+      format: 'pdf',
+    });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="booking-evidence-${id.slice(0, 8)}.pdf"`);
+    return res.send(pdfBuffer);
+  } catch (err) {
+    console.error('[admin-booking-evidence-pdf]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not generate evidence PDF.' });
+  }
+});
+
+app.get('/api/admin/bookings/:id/evidence-zip', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const id = cleanText(req.params.id, 80);
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid booking id.' });
+    const linked = await disputeService.getDisputeForBooking(supabase, id);
+    const pkg = await disputeExportService.loadEvidencePackage(supabase, stripe, {
+      disputeId: linked?.dispute?.id || null,
+      bookingId: id,
+    });
+    const zipBuffer = await disputeExportService.buildEvidenceZip(supabase, pkg);
+    await disputeExportService.recordEvidenceExport(supabase, {
+      disputeId: linked?.dispute?.id || null,
+      bookingId: id,
+      adminId: adminUser.id,
+      format: 'zip',
+    });
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="booking-evidence-${id.slice(0, 8)}.zip"`);
+    return res.send(zipBuffer);
+  } catch (err) {
+    console.error('[admin-booking-evidence-zip]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not generate evidence ZIP.' });
   }
 });
 
@@ -4700,6 +4968,21 @@ async function sendBookingConfirmationInternal({ bookingId, email, source = 'ser
   if (adminResult.error) {
     console.error('[send-booking-confirmation] admin notify Resend error:', adminResult.error);
   }
+
+  await bookingCommunications.logAutomatedCommunication(supabase, {
+    bookingId: bookingIdSafe,
+    channel: 'email',
+    messageType: 'automated_booking_confirmation',
+    recipient: emailSafe,
+    subject: 'Your Launch Zone Booking Confirmation',
+    body: [
+      'Thank you for booking with Launch Zone Rentals.',
+      `Booking ID: ${bookingIdSafe}`,
+      'We will follow up with pickup details and next steps.',
+      'If you have questions, call 803-542-1761.',
+    ].join('\n'),
+    providerMessageId: customerResult.data?.id || null,
+  });
 
   try {
     await verificationReminder.maybeSendVerificationReminder({

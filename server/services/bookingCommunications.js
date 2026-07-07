@@ -188,6 +188,31 @@ async function logCommunication(supabase, entry) {
   return data;
 }
 
+async function logAutomatedCommunication(
+  supabase,
+  { bookingId, channel = 'email', messageType, recipient, subject, body, status = 'sent', providerMessageId = null, errorMessage = null }
+) {
+  if (!supabase || !bookingId || !messageType) return null;
+  try {
+    return await logCommunication(supabase, {
+      booking_id: bookingId,
+      channel,
+      message_type: messageType,
+      recipient: String(recipient || '').trim(),
+      subject: subject || null,
+      body: body || '',
+      sent_by: null,
+      sent_at: status === 'sent' ? new Date().toISOString() : null,
+      status,
+      provider_message_id: providerMessageId || null,
+      error_message: errorMessage || null,
+    });
+  } catch (err) {
+    console.warn('[booking-communications] automated log failed:', err.message || err);
+    return null;
+  }
+}
+
 async function sendEmail({ supabase, resend, resendFrom, bookingId, adminUserId, preview }) {
   const recipient = preview.recipients.email;
   if (!recipient) {
@@ -274,6 +299,7 @@ module.exports = {
   templateFor,
   smsConfigured,
   recentSuccessfulCommunication,
+  logAutomatedCommunication,
   sendEmail,
   sendSms,
 };

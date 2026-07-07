@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Copy, Printer, Save } from 'lucide-react';
+import { ArrowLeft, Copy, Download, FileArchive, FileText, Printer, Save } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/useAuth';
 import FullPageLoader from '../components/FullPageLoader';
@@ -50,6 +50,26 @@ type DetailPayload = {
   lifetimeBookings: number;
   timeline: TimelineEvent[];
   communications?: CommunicationRow[];
+};
+
+type BookingDispute = {
+  id: string;
+  stripe_dispute_id: string;
+  status: string;
+  reason: string | null;
+  amount: number;
+  currency: string;
+  evidence_due_by: string | null;
+  outcome: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type DisputeNote = {
+  id: string;
+  admin_id: string | null;
+  note_text: string;
+  created_at: string;
 };
 
 const statusOptions = ['hold', 'pending', 'pending_verification', 'confirmed', 'ready_for_departure', 'completed', 'cancelled'];
@@ -118,6 +138,27 @@ function communicationStatusClass(status: string) {
   return 'bg-amber-100 text-amber-900';
 }
 
+function disputeStatusClass(status: string) {
+  const s = status.toLowerCase();
+  if (s === 'won') return 'bg-green-100 text-green-800';
+  if (['lost', 'charge_refunded'].includes(s)) return 'bg-red-100 text-red-800';
+  if (['needs_response', 'warning_needs_response'].includes(s)) return 'bg-amber-100 text-amber-900';
+  return 'bg-slate-100 text-slate-700';
+}
+
+function disputeDeadlineLabel(dueBy: string | null | undefined) {
+  if (!dueBy) return 'No deadline';
+  const due = new Date(dueBy).getTime();
+  if (!Number.isFinite(due)) return 'No deadline';
+  const diffMs = due - Date.now();
+  if (diffMs <= 0) return 'Past due';
+  const hours = Math.floor(diffMs / (1000 * 60 * 60));
+  const days = Math.floor(hours / 24);
+  if (days > 0) return `${days}d ${hours % 24}h left`;
+  if (hours > 0) return `${hours}h left`;
+  return `${Math.floor(diffMs / (1000 * 60))}m left`;
+}
+
 export default function AdminBookingDetails() {
   const { id = '' } = useParams();
   const navigate = useNavigate();
@@ -144,6 +185,14 @@ export default function AdminBookingDetails() {
   const [customEmail, setCustomEmail] = useState({ to: '', subject: '', message: '' });
   const [customEmailPreview, setCustomEmailPreview] = useState<CustomEmailPreview | null>(null);
   const [customEmailLoading, setCustomEmailLoading] = useState<'config' | 'preview' | 'send' | null>(null);
+  const [bookingDispute, setBookingDispute] = useState<BookingDispute | null>(null);
+  const [disputeNotes, setDisputeNotes] = useState<DisputeNote[]>([]);
+  const [disputeNoteText, setDisputeNoteText] = useState('');
+  const [disputeLoading, setDisputeLoading] = useState(false);
+  const [evidenceSummary, setEvidenceSummary] = useState('');
+  const [evidenceModalOpen, setEvidenceModalOpen] = useState(false);
+  const [evidenceLoading, setEvidenceLoading] = useState(false);
+  const [exportLoading, setExportLoading] = useState<'pdf' | 'zip' | 'stripe' | null>(null);
 
   const booking = detail?.booking;
 
@@ -169,18 +218,26 @@ export default function AdminBookingDetails() {
     if (!isAdmin || !id) return;
     setLoading(true);
     try {
-      const [bookingRes, boatsRes, emailConfigRes] = await Promise.all([
+      const [bookingRes, boatsRes, emailConfigRes, disputeRes] = await Promise.all([
         authedFetch(`/api/admin/bookings/${id}`),
         fetch(`${env.apiUrl}/api/boats`),
         authedFetch('/api/admin/email/config-check'),
+        authedFetch(`/api/admin/bookings/${id}/dispute`),
       ]);
       const bookingPayload = (await bookingRes.json().catch(() => ({}))) as DetailPayload & { error?: string };
       if (!bookingRes.ok) throw new Error(bookingPayload.error || 'Could not load booking.');
       const boatsPayload = (await boatsRes.json().catch(() => ({}))) as { boats?: BoatRow[] };
       const emailConfigPayload = (await emailConfigRes.json().catch(() => ({}))) as EmailConfig;
+      const disputePayload = (await disputeRes.json().catch(() => ({}))) as {
+        dispute?: BookingDispute | null;
+        notes?: DisputeNote[];
+      };
       setDetail(bookingPayload);
       setBoats(Array.isArray(boatsPayload.boats) ? boatsPayload.boats : []);
       if (emailConfigRes.ok) setEmailConfig(emailConfigPayload);
+      setBookingDispute(disputePayload.dispute || null);
+      setDisputeNotes(Array.isArray(disputePayload.notes) ? disputePayload.notes : []);
+      setDisputeNoteText('');
       const b = bookingPayload.booking;
       const start = new Date(String(b.start_time || ''));
       const end = new Date(String(b.end_time || ''));
@@ -223,6 +280,99 @@ export default function AdminBookingDetails() {
       setLoading(false);
     }
   }, [authedFetch, id, isAdmin]);
+
+  const addDisputeNote = async () => {
+    if (!bookingDispute?.id || !disputeNoteText.trim()) return;
+    setDisputeLoading(true);
+    try {
+      const res = await authedFetch(`/api/admin/disputes/${encodeURIComponent(bookingDispute.id)}/notes`, {
+        method: 'POST',
+        body: JSON.stringify({ note_text: disputeNoteText.trim() }),
+      });
+      const payload = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) throw new Error(payload.error || 'Could not add note.');
+      setNotice({ variant: 'success', text: 'Dispute note added.' });
+      await load();
+    } catch (err) {
+      setNotice({ variant: 'error', text: err instanceof Error ? err.message : 'Could not add note.' });
+    } finally {
+      setDisputeLoading(false);
+    }
+  };
+
+  const generateEvidence = async () => {
+    if (!id) return;
+    setEvidenceLoading(true);
+    try {
+      const res = await authedFetch(`/api/admin/bookings/${encodeURIComponent(id)}/evidence-summary`);
+      const payload = (await res.json().catch(() => ({}))) as { summary?: string; error?: string };
+      if (!res.ok) throw new Error(payload.error || 'Could not generate evidence summary.');
+      setEvidenceSummary(typeof payload.summary === 'string' ? payload.summary : '');
+      setEvidenceModalOpen(true);
+    } catch (err) {
+      setNotice({ variant: 'error', text: err instanceof Error ? err.message : 'Could not generate evidence summary.' });
+    } finally {
+      setEvidenceLoading(false);
+    }
+  };
+
+  const copyEvidence = async () => {
+    if (!evidenceSummary) return;
+    try {
+      await navigator.clipboard.writeText(evidenceSummary);
+      setNotice({ variant: 'success', text: 'Evidence summary copied to clipboard.' });
+    } catch {
+      setNotice({ variant: 'error', text: 'Could not copy to clipboard.' });
+    }
+  };
+
+  const downloadExport = async (path: string, filename: string, kind: 'pdf' | 'zip') => {
+    setExportLoading(kind);
+    try {
+      const res = await authedFetch(path);
+      if (!res.ok) {
+        const payload = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(payload.error || 'Download failed.');
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = filename;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      setNotice({ variant: 'success', text: `${kind.toUpperCase()} downloaded.` });
+    } catch (err) {
+      setNotice({ variant: 'error', text: err instanceof Error ? err.message : 'Download failed.' });
+    } finally {
+      setExportLoading(null);
+    }
+  };
+
+  const submitStripeEvidence = async () => {
+    if (!bookingDispute?.id) return;
+    if (
+      !window.confirm(
+        'Submit the generated evidence summary text to Stripe for this dispute? Review the summary first.'
+      )
+    ) {
+      return;
+    }
+    setExportLoading('stripe');
+    try {
+      const res = await authedFetch(`/api/admin/disputes/${encodeURIComponent(bookingDispute.id)}/submit-stripe-evidence`, {
+        method: 'POST',
+        body: '{}',
+      });
+      const payload = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) throw new Error(payload.error || 'Could not submit to Stripe.');
+      setNotice({ variant: 'success', text: 'Evidence submitted to Stripe.' });
+    } catch (err) {
+      setNotice({ variant: 'error', text: err instanceof Error ? err.message : 'Could not submit to Stripe.' });
+    } finally {
+      setExportLoading(null);
+    }
+  };
 
   useEffect(() => {
     void load();
@@ -667,6 +817,165 @@ export default function AdminBookingDetails() {
             <h2 className="text-xl font-black">Payment</h2>
             <p className="mt-3 text-3xl font-black">${money(form.finalPrice)}</p>
             <p className="text-sm capitalize text-slate-600">{String(form.paymentStatus || 'pending').replace(/_/g, ' ')}</p>
+            <div className="mt-4 space-y-1 text-xs text-slate-600">
+              <div><span className="font-bold">Payment Intent:</span> {booking.payment_intent_id || '-'}</div>
+              <div><span className="font-bold">Checkout Session:</span> {booking.checkout_session_id || booking.stripe_payment_id || '-'}</div>
+              <div><span className="font-bold">Charge:</span> {booking.stripe_charge_id || '-'}</div>
+            </div>
+          </div>
+
+          <div className="rounded-2xl bg-white p-5 shadow">
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-xl font-black">Dispute</h2>
+              <Link to="/admin/disputes" className="text-sm font-bold text-amber-700 hover:underline">
+                All Disputes
+              </Link>
+            </div>
+            {!bookingDispute ? (
+              <div className="mt-4 space-y-3">
+                <p className="text-sm text-slate-500">No Stripe dispute linked to this booking.</p>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    disabled={evidenceLoading}
+                    onClick={() => void generateEvidence()}
+                    className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-bold text-white disabled:opacity-50"
+                  >
+                    <FileText className="h-4 w-4" />
+                    {evidenceLoading ? 'Generating...' : 'Generate Evidence Summary'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={exportLoading != null}
+                    onClick={() =>
+                      void downloadExport(
+                        `/api/admin/bookings/${encodeURIComponent(id)}/evidence-pdf`,
+                        `booking-evidence-${id.slice(0, 8)}.pdf`,
+                        'pdf'
+                      )
+                    }
+                    className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-800 disabled:opacity-50"
+                  >
+                    <Download className="h-4 w-4" />
+                    {exportLoading === 'pdf' ? 'Downloading...' : 'Download PDF'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={exportLoading != null}
+                    onClick={() =>
+                      void downloadExport(
+                        `/api/admin/bookings/${encodeURIComponent(id)}/evidence-zip`,
+                        `booking-evidence-${id.slice(0, 8)}.zip`,
+                        'zip'
+                      )
+                    }
+                    className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-800 disabled:opacity-50"
+                  >
+                    <FileArchive className="h-4 w-4" />
+                    {exportLoading === 'zip' ? 'Downloading...' : 'Download ZIP'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="mt-4 space-y-4">
+                <div className="flex flex-wrap gap-2">
+                  <span className={`rounded-full px-2 py-1 text-xs font-bold ${disputeStatusClass(bookingDispute.status)}`}>
+                    {bookingDispute.status.replace(/_/g, ' ')}
+                  </span>
+                  {bookingDispute.evidence_due_by ? (
+                    <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-bold text-amber-900">
+                      {disputeDeadlineLabel(bookingDispute.evidence_due_by)}
+                    </span>
+                  ) : null}
+                </div>
+                <div className="space-y-1 text-sm text-slate-700">
+                  <div><span className="font-bold">Amount:</span> ${money(bookingDispute.amount)} {bookingDispute.currency?.toUpperCase()}</div>
+                  <div><span className="font-bold">Reason:</span> {bookingDispute.reason?.replace(/_/g, ' ') || '-'}</div>
+                  <div><span className="font-bold">Stripe Dispute:</span> {bookingDispute.stripe_dispute_id}</div>
+                  <div><span className="font-bold">Evidence due:</span> {bookingDispute.evidence_due_by ? new Date(bookingDispute.evidence_due_by).toLocaleString() : '-'}</div>
+                </div>
+                <div>
+                  <h3 className="text-sm font-black uppercase tracking-wide text-slate-500">Dispute Notes</h3>
+                  <div className="mt-2 max-h-40 space-y-2 overflow-y-auto">
+                    {disputeNotes.length === 0 ? (
+                      <p className="mt-2 text-sm text-slate-500">No dispute notes yet.</p>
+                    ) : (
+                      disputeNotes.map((note) => (
+                        <div key={note.id} className="rounded-lg border border-slate-200 p-3 text-sm">
+                          <div className="whitespace-pre-wrap">{note.note_text}</div>
+                          <div className="mt-1 text-xs text-slate-400">{new Date(note.created_at).toLocaleString()}</div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                  <textarea
+                    className={`${inputClass} mt-3 min-h-[90px]`}
+                    placeholder="Add a dispute note..."
+                    value={disputeNoteText}
+                    onChange={(e) => setDisputeNoteText(e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    disabled={disputeLoading || !disputeNoteText.trim()}
+                    onClick={() => void addDisputeNote()}
+                    className="mt-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-bold text-white disabled:opacity-50"
+                  >
+                    {disputeLoading ? 'Saving...' : 'Add Dispute Note'}
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  disabled={evidenceLoading}
+                  onClick={() => void generateEvidence()}
+                  className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-3 font-bold text-white disabled:opacity-50"
+                >
+                  <FileText className="h-4 w-4" />
+                  {evidenceLoading ? 'Generating...' : 'Generate Evidence Summary'}
+                </button>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    disabled={exportLoading != null}
+                    onClick={() =>
+                      void downloadExport(
+                        `/api/admin/bookings/${encodeURIComponent(id)}/evidence-pdf`,
+                        `booking-evidence-${id.slice(0, 8)}.pdf`,
+                        'pdf'
+                      )
+                    }
+                    className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-800 disabled:opacity-50"
+                  >
+                    <Download className="h-4 w-4" />
+                    {exportLoading === 'pdf' ? 'Downloading...' : 'Download PDF'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={exportLoading != null}
+                    onClick={() =>
+                      void downloadExport(
+                        `/api/admin/bookings/${encodeURIComponent(id)}/evidence-zip`,
+                        `booking-evidence-${id.slice(0, 8)}.zip`,
+                        'zip'
+                      )
+                    }
+                    className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-800 disabled:opacity-50"
+                  >
+                    <FileArchive className="h-4 w-4" />
+                    {exportLoading === 'zip' ? 'Downloading...' : 'Download ZIP'}
+                  </button>
+                  {bookingDispute?.id ? (
+                    <button
+                      type="button"
+                      disabled={exportLoading != null}
+                      onClick={() => void submitStripeEvidence()}
+                      className="inline-flex items-center gap-2 rounded-lg bg-rose-700 px-4 py-2 text-sm font-bold text-white hover:bg-rose-600 disabled:opacity-50"
+                    >
+                      {exportLoading === 'stripe' ? 'Submitting...' : 'Submit to Stripe'}
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="rounded-2xl bg-white p-5 shadow">
@@ -1049,6 +1358,36 @@ export default function AdminBookingDetails() {
                 className="rounded-lg bg-green-700 px-5 py-3 font-bold text-white disabled:opacity-50"
               >
                 Send Both
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {evidenceModalOpen ? (
+        <div className="fixed inset-0 z-[130] flex items-center justify-center bg-slate-950/70 p-4">
+          <div className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-2xl font-black">Evidence Summary</h2>
+                <p className="mt-1 text-sm text-slate-600">Copy this into Stripe Dashboard dispute evidence or your response workflow.</p>
+              </div>
+              <button type="button" onClick={() => setEvidenceModalOpen(false)} className="rounded-lg bg-slate-100 px-3 py-2 font-bold text-slate-800">
+                Close
+              </button>
+            </div>
+            <textarea
+              readOnly
+              value={evidenceSummary}
+              className="mt-5 min-h-[420px] w-full rounded-xl border border-slate-300 bg-slate-50 p-4 font-mono text-xs leading-relaxed text-slate-800"
+            />
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button type="button" onClick={() => void copyEvidence()} className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-3 font-bold text-white">
+                <Copy className="h-4 w-4" />
+                Copy to Clipboard
+              </button>
+              <button type="button" onClick={() => setEvidenceModalOpen(false)} className="rounded-lg border border-slate-300 px-4 py-3 font-bold text-slate-800">
+                Close
               </button>
             </div>
           </div>

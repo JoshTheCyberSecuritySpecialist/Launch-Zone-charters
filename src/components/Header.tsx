@@ -228,6 +228,13 @@ export default function Header({ onNavigate, currentPage }: HeaderProps) {
                 >
                   Calendar
                 </button>
+                <button
+                  type="button"
+                  onClick={() => handleNavigation('admin-disputes')}
+                  className="lz-nav-drawer__link lz-nav-drawer__link--admin"
+                >
+                  Disputes
+                </button>
               </div>
             )}
           </nav>

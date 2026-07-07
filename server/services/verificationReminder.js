@@ -3,6 +3,8 @@
  * Future: delayed job can call maybeSendVerificationReminder with the same guards.
  */
 
+const bookingCommunications = require('./bookingCommunications');
+
 function escapeHtml(s) {
   return String(s)
     .replace(/&/g, '&amp;')
@@ -120,6 +122,16 @@ ${verifyUrl}`;
       console.error('[verification-reminder] Resend error:', result.error);
       return { sent: false, reason: 'resend_error' };
     }
+
+    await bookingCommunications.logAutomatedCommunication(supabaseAdmin, {
+      bookingId: id,
+      channel: 'email',
+      messageType: 'automated_verification_reminder',
+      recipient: emailNorm,
+      subject,
+      body: textBody,
+      providerMessageId: result.data?.id || null,
+    });
 
     const stamp = { verification_reminder_sent_at: new Date().toISOString() };
     const markSent = () =>

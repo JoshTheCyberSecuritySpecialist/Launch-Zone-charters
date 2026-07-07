@@ -114,6 +114,16 @@ function extractEventIds(event) {
       currency: obj.currency || 'usd',
     };
   }
+  if (event?.type?.startsWith('charge.dispute.')) {
+    return {
+      checkoutSessionId: null,
+      paymentIntentId: extractPaymentIntentId(obj.payment_intent),
+      chargeId: typeof obj.charge === 'string' ? obj.charge : obj.charge?.id || null,
+      amount: amountFromCents(obj.amount),
+      currency: obj.currency || 'usd',
+      disputeId: obj.id || null,
+    };
+  }
   return {};
 }
 

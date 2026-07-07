@@ -5,6 +5,7 @@
 
 const { sendSMS } = require('./sms');
 const { waiversInsuranceUrl, bookingNeedsRentalDocs } = require('./preTripNotifications');
+const bookingCommunications = require('./bookingCommunications');
 
 function publicAppBase() {
   return (process.env.APP_PUBLIC_URL || process.env.FRONTEND_URL || '').trim().replace(/\/$/, '');
@@ -107,7 +108,18 @@ Finish here: ${statusUrl}`;
       `;
       const r = await resend.emails.send({ from: resendFrom, to: email, subject, text: textBody, html });
       if (r.error) out.errors.push(`email:${row.id}:${r.error.message || 'resend'}`);
-      else anyDelivery = true;
+      else {
+        anyDelivery = true;
+        await bookingCommunications.logAutomatedCommunication(supabase, {
+          bookingId: row.id,
+          channel: 'email',
+          messageType: 'automated_waivers_docs_reminder',
+          recipient: email,
+          subject,
+          body: textBody,
+          providerMessageId: r.data?.id || null,
+        });
+      }
     }
 
     const smsRes = await sendSMS(phone, textBody);

@@ -1241,10 +1241,17 @@ async function processStripeWebhookEvent(event) {
           message: 'Stripe shop payment succeeded and order finalization completed.',
           payload: { event_id: eventId, order_id: out.orderId, alreadyFinalized: out.alreadyFinalized },
         });
-        console.log('[stripe-webhook] finalized shop order', out.orderId, out.alreadyFinalized ? '(idempotent)' : '');
+        console.log(
+          '[stripe-webhook] finalized shop order',
+          out.orderId,
+          session.id,
+          out.alreadyFinalized ? '(idempotent)' : '',
+          'email=',
+          out.email || '-'
+        );
         return { ok: true, orderId: out.orderId };
       } catch (err) {
-        console.error('[stripe-webhook] shop finalize:', err.message || err);
+        console.error('[stripe-webhook] shop finalize:', session.id, err.message || err);
         await bookingReliability.updateWebhookEventStatus(supabase, eventId, 'failed', {
           error: err.message || 'Shop webhook finalization failed',
         });
@@ -1296,7 +1303,7 @@ async function processStripeWebhookEvent(event) {
 
     const { data: shopOrder } = await supabase
       .from('shop_orders')
-      .select('id, status')
+      .select('id, status, stripe_session_id, payment_intent_id, amount_paid')
       .or(
         [
           ids.paymentIntentId ? `payment_intent_id.eq.${ids.paymentIntentId}` : '',
@@ -1307,6 +1314,22 @@ async function processStripeWebhookEvent(event) {
       )
       .maybeSingle();
     if (shopOrder?.id) {
+      const shopSessionId = checkoutSessionId || shopOrder.stripe_session_id || null;
+      if (!shopService.isShopOrderPaid(shopOrder) && shopSessionId) {
+        try {
+          const out = await shopService.finalizeShopOrderFromSession({
+            stripe,
+            supabase,
+            resend,
+            resendFrom,
+            sessionId: shopSessionId,
+            source: 'stripe_webhook_payment_intent',
+          });
+          console.log('[stripe-webhook] finalized shop order via payment_intent', out.orderId, shopSessionId);
+        } catch (err) {
+          console.error('[stripe-webhook] shop finalize via payment_intent:', shopSessionId, err.message || err);
+        }
+      }
       await bookingReliability.updateWebhookEventStatus(supabase, eventId, 'processed', {
         error: null,
       });
@@ -1369,11 +1392,11 @@ async function processStripeWebhookEvent(event) {
   if (eventType === 'checkout.session.expired') {
     const session = event.data.object;
     if (String(session.metadata?.order_type || '').trim().toLowerCase() === 'shop') {
-      await supabase
-        .from('shop_orders')
-        .update({ status: 'cancelled', updated_at: new Date().toISOString() })
-        .eq('stripe_session_id', session.id)
-        .eq('status', 'pending');
+      await shopService.markShopOrderAbandoned({
+        supabase,
+        stripeSessionId: session.id,
+        source: 'stripe_session_expired',
+      });
     }
     await bookingReliability.createOrUpdateBookingDraft(supabase, {
       checkout_session_id: session.id,
@@ -3850,25 +3873,42 @@ app.get('/api/admin/shop-orders', async (req, res) => {
   const adminUser = await verifyAdminRequest(req, res);
   if (!adminUser) return;
   try {
-    const status = shopService.normalizeShopStatus(req.query.status);
-    let query = supabase
-      .from('shop_orders')
-      .select(
-        'id, stripe_session_id, customer_name, email, phone, quantity, shipping_name, shipping_address, amount_paid, currency, status, product_slug, confirmation_email_sent_at, created_at, updated_at'
-      )
-      .order('created_at', { ascending: false })
-      .limit(200);
-    if (status) query = query.eq('status', status);
-    const { data, error } = await query;
-    if (error) throw error;
-    const orders = (Array.isArray(data) ? data : []).map((row) => ({
-      ...row,
-      order_number: shopService.formatOrderNumber(row.id),
-    }));
-    return res.json({ orders });
+    const filter = req.query.filter != null ? String(req.query.filter) : null;
+    const status = req.query.status != null ? String(req.query.status) : null;
+    const out = await shopService.listShopOrdersForAdmin({ supabase, filter, status });
+    return res.json(out);
   } catch (err) {
     console.error('[admin/shop-orders]', err);
     return res.status(500).json({ error: 'Could not load shop orders.' });
+  }
+});
+
+app.get('/api/admin/shop-orders/:id', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const id = String(req.params.id || '').trim();
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid order id.' });
+    const { data, error } = await supabase
+      .from('shop_orders')
+      .select(
+        'id, stripe_session_id, payment_intent_id, stripe_charge_id, customer_name, email, phone, quantity, shipping_name, shipping_address, amount_paid, currency, status, product_slug, confirmation_email_sent_at, paid_at, fulfilled_at, canceled_at, abandoned_at, metadata, created_at, updated_at'
+      )
+      .eq('id', id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'Order not found.' });
+    return res.json({
+      order: {
+        ...data,
+        order_number: shopService.formatOrderNumber(data.id),
+        is_paid: shopService.isShopOrderPaid(data),
+        is_unpaid: shopService.isShopOrderUnpaid(data),
+      },
+    });
+  } catch (err) {
+    console.error('[admin/shop-orders:get]', err);
+    return res.status(500).json({ error: 'Could not load shop order.' });
   }
 });
 
@@ -3884,20 +3924,12 @@ app.patch('/api/admin/shop-orders/:id', async (req, res) => {
         error: `Invalid status. Allowed: ${shopService.SHOP_ORDER_STATUSES.join(', ')}`,
       });
     }
-    const { data, error } = await supabase
-      .from('shop_orders')
-      .update({ status: nextStatus, updated_at: new Date().toISOString() })
-      .eq('id', id)
-      .select('*')
-      .single();
-    if (error) throw error;
-    if (!data) return res.status(404).json({ error: 'Order not found.' });
-    return res.json({
-      order: { ...data, order_number: shopService.formatOrderNumber(data.id) },
-    });
+    const order = await shopService.updateShopOrderStatus({ supabase, orderId: id, nextStatus });
+    return res.json({ order });
   } catch (err) {
     console.error('[admin/shop-orders:patch]', err);
-    return res.status(500).json({ error: 'Could not update shop order.' });
+    const code = err.statusCode || 500;
+    return res.status(code).json({ error: err.message || 'Could not update shop order.' });
   }
 });
 

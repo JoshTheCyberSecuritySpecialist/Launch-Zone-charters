@@ -21,13 +21,31 @@ const OBSERVATION_BOTTLE_PRODUCT = {
 };
 
 const SHOP_ORDER_STATUSES = [
+  'incomplete',
   'pending',
+  'abandoned',
   'paid',
   'processing',
   'shipped',
   'delivered',
   'refunded',
   'cancelled',
+];
+
+/** Admin fulfillment queue: paid orders still needing ship/fulfill action. */
+const SHOP_FULFILLMENT_QUEUE_STATUSES = ['paid', 'processing'];
+
+const SHOP_FULFILLED_STATUSES = ['shipped', 'delivered'];
+
+const SHOP_ADMIN_FILTERS = [
+  'queue',
+  'all',
+  'incomplete',
+  'pending',
+  'paid',
+  'fulfilled',
+  'cancelled',
+  'abandoned',
 ];
 
 const SHOP_CHECKOUT_TTL_MS = 35 * 60 * 1000;
@@ -65,6 +83,28 @@ function normalizeShopStatus(value) {
     .trim()
     .toLowerCase();
   return SHOP_ORDER_STATUSES.includes(s) ? s : null;
+}
+
+function normalizeShopAdminFilter(value) {
+  const f = String(value || '')
+    .trim()
+    .toLowerCase();
+  return SHOP_ADMIN_FILTERS.includes(f) ? f : null;
+}
+
+function isShopOrderPaid(row) {
+  if (!row) return false;
+  const status = String(row.status || '').toLowerCase();
+  if (['paid', 'processing', 'shipped', 'delivered'].includes(status)) return true;
+  const amount = Number(row.amount_paid);
+  return Number.isFinite(amount) && amount > 0 && Boolean(row.payment_intent_id);
+}
+
+function isShopOrderUnpaid(row) {
+  if (!row) return true;
+  if (isShopOrderPaid(row)) return false;
+  const status = String(row.status || '').toLowerCase();
+  return ['incomplete', 'pending', 'abandoned', 'cancelled'].includes(status);
 }
 
 function shippingPayloadFromSession(session) {
@@ -201,7 +241,7 @@ async function createShopCheckoutSession({ stripe, supabase, quantity: quantityR
     {
       stripe_session_id: session.id,
       quantity,
-      status: 'pending',
+      status: 'incomplete',
       product_slug: OBSERVATION_BOTTLE_PRODUCT.slug,
       currency: OBSERVATION_BOTTLE_PRODUCT.currency,
       updated_at: new Date().toISOString(),
@@ -212,6 +252,8 @@ async function createShopCheckoutSession({ stripe, supabase, quantity: quantityR
   if (insertErr) {
     // Do not expire the Stripe session — payment can still complete; webhook/finalize upserts the row.
     console.error('[shop/create-checkout-session] shop_orders insert failed (checkout proceeds):', insertErr.message);
+  } else {
+    console.info('[shop/create-checkout-session] incomplete order placeholder', session.id, 'qty=', quantity);
   }
 
   return {
@@ -325,9 +367,12 @@ async function finalizeShopOrderFromSession({
     amount_paid: amountPaid,
     currency,
     status: 'paid',
+    paid_at: new Date().toISOString(),
     product_slug: String(session.metadata?.product_slug || OBSERVATION_BOTTLE_PRODUCT.slug),
     updated_at: new Date().toISOString(),
   };
+
+  console.info('[shop/finalize]', source, sid, 'email=', email, 'amount=', amountPaid, 'qty=', quantity);
 
   const { data: orderRow, error: upsertErr } = await supabase
     .from('shop_orders')
@@ -443,7 +488,7 @@ async function getShopOrderStatus(supabase, sessionId) {
     return { status: 'error', error: error.message };
   }
   if (!order?.id) {
-    return { status: 'pending' };
+    return { status: 'incomplete' };
   }
   if (['paid', 'processing', 'shipped', 'delivered'].includes(String(order.status))) {
     return {
@@ -457,18 +502,148 @@ async function getShopOrderStatus(supabase, sessionId) {
       confirmationEmailSent: Boolean(order.confirmation_email_sent_at),
     };
   }
-  return { status: String(order.status || 'pending'), orderId: order.id };
+  return { status: String(order.status || 'incomplete'), orderId: order.id };
+}
+
+/**
+ * Mark an unpaid shop checkout as abandoned (Stripe session expired or admin action).
+ * @param {{ supabase: object, stripeSessionId: string, source?: string }} deps
+ */
+async function markShopOrderAbandoned({ supabase, stripeSessionId, source = 'expired' }) {
+  const sid = String(stripeSessionId || '').trim();
+  if (!sid) return { updated: false };
+
+  const { data: existing } = await supabase
+    .from('shop_orders')
+    .select('id, status, payment_intent_id, amount_paid')
+    .eq('stripe_session_id', sid)
+    .maybeSingle();
+
+  if (!existing?.id) {
+    console.warn('[shop/abandon] no shop_order for session', sid, source);
+    return { updated: false, reason: 'not_found' };
+  }
+  if (isShopOrderPaid(existing)) {
+    console.info('[shop/abandon] skip paid order', existing.id, sid);
+    return { updated: false, reason: 'already_paid', orderId: existing.id };
+  }
+
+  const now = new Date().toISOString();
+  const { error } = await supabase
+    .from('shop_orders')
+    .update({
+      status: 'abandoned',
+      abandoned_at: now,
+      updated_at: now,
+    })
+    .eq('id', existing.id)
+    .in('status', ['incomplete', 'pending', 'cancelled']);
+
+  if (error) {
+    console.error('[shop/abandon] update failed', sid, error.message);
+    return { updated: false, reason: 'update_error', error: error.message };
+  }
+
+  console.info('[shop/abandon] marked abandoned', existing.id, sid, source);
+  return { updated: true, orderId: existing.id };
+}
+
+const SHOP_ORDER_ADMIN_COLUMNS =
+  'id, stripe_session_id, payment_intent_id, stripe_charge_id, customer_name, email, phone, quantity, shipping_name, shipping_address, amount_paid, currency, status, product_slug, confirmation_email_sent_at, paid_at, fulfilled_at, canceled_at, abandoned_at, metadata, created_at, updated_at';
+
+/**
+ * @param {{ supabase: object, filter?: string, status?: string|null, limit?: number }} deps
+ */
+async function listShopOrdersForAdmin({ supabase, filter: filterRaw, status: statusRaw, limit = 200 }) {
+  const explicitStatus = normalizeShopStatus(statusRaw);
+  const filter = normalizeShopAdminFilter(filterRaw) || (explicitStatus ? 'all' : 'queue');
+
+  let query = supabase.from('shop_orders').select(SHOP_ORDER_ADMIN_COLUMNS).order('created_at', { ascending: false }).limit(limit);
+
+  if (explicitStatus) {
+    query = query.eq('status', explicitStatus);
+  } else if (filter === 'queue') {
+    query = query.in('status', SHOP_FULFILLMENT_QUEUE_STATUSES);
+  } else if (filter === 'incomplete') {
+    query = query.in('status', ['incomplete', 'pending']);
+  } else if (filter === 'fulfilled') {
+    query = query.in('status', SHOP_FULFILLED_STATUSES);
+  } else if (filter !== 'all') {
+    query = query.eq('status', filter);
+  }
+
+  const { data, error } = await query;
+  if (error) throw error;
+
+  return {
+    filter,
+    orders: (Array.isArray(data) ? data : []).map((row) => ({
+      ...row,
+      order_number: formatOrderNumber(row.id),
+      is_paid: isShopOrderPaid(row),
+      is_unpaid: isShopOrderUnpaid(row),
+    })),
+  };
+}
+
+/**
+ * @param {{ supabase: object, orderId: string, nextStatus: string }} deps
+ */
+async function updateShopOrderStatus({ supabase, orderId, nextStatus }) {
+  const id = String(orderId || '').trim();
+  const status = normalizeShopStatus(nextStatus);
+  if (!id || !status) {
+    const err = new Error('Invalid order id or status');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const now = new Date().toISOString();
+  const patch = { status, updated_at: now };
+  if (status === 'shipped' || status === 'delivered') {
+    patch.fulfilled_at = now;
+  }
+  if (status === 'cancelled') {
+    patch.canceled_at = now;
+  }
+  if (status === 'abandoned') {
+    patch.abandoned_at = now;
+  }
+
+  const { data, error } = await supabase.from('shop_orders').update(patch).eq('id', id).select(SHOP_ORDER_ADMIN_COLUMNS).single();
+  if (error) throw error;
+  if (!data) {
+    const err = new Error('Order not found');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  return {
+    ...data,
+    order_number: formatOrderNumber(data.id),
+    is_paid: isShopOrderPaid(data),
+    is_unpaid: isShopOrderUnpaid(data),
+  };
 }
 
 module.exports = {
   OBSERVATION_BOTTLE_PRODUCT,
   SHOP_ORDER_STATUSES,
+  SHOP_FULFILLMENT_QUEUE_STATUSES,
+  SHOP_FULFILLED_STATUSES,
+  SHOP_ADMIN_FILTERS,
   SHOP_CHECKOUT_TTL_MS,
   formatOrderNumber,
   normalizeShopStatus,
+  normalizeShopAdminFilter,
+  isShopOrderPaid,
+  isShopOrderUnpaid,
   getPublicBaseUrl,
   createShopCheckoutSession,
   finalizeShopOrderFromSession,
+  markShopOrderAbandoned,
+  listShopOrdersForAdmin,
+  updateShopOrderStatus,
   sendShopOrderConfirmationEmail,
   getShopOrderStatus,
 };

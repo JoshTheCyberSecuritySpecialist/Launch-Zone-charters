@@ -1,16 +1,20 @@
 import { useMemo, useState } from 'react';
 import { Helmet } from 'react-helmet-async';
 import { Link } from 'react-router-dom';
-import { Check, ChevronDown, Droplets, Leaf, Sparkles } from 'lucide-react';
+import { Check, ChevronDown, CreditCard, Droplets, Leaf, Loader2, Minus, Plus, ShieldCheck, Sparkles } from 'lucide-react';
 import SmartImage from '../components/ui/SmartImage';
 import { siteOrigin } from '../lib/siteOrigin';
+import { createObservationBottleCheckout } from '../lib/shopApi';
+import { wrapSyncClick } from '../lib/clickPerf';
 import {
   OBSERVATION_BOTTLE,
+  OBSERVATION_BOTTLE_CHECKOUT_FEATURES,
   OBSERVATION_BOTTLE_CONSERVATION,
   OBSERVATION_BOTTLE_FAQS,
   OBSERVATION_BOTTLE_FEATURES,
   OBSERVATION_BOTTLE_HOW_TO_USE,
   OBSERVATION_BOTTLE_RELATED_LINKS,
+  OBSERVATION_BOTTLE_SHIPPING_NOTICE,
 } from '../content/observationBottle';
 
 interface ObservationBottleProps {
@@ -20,6 +24,14 @@ interface ObservationBottleProps {
 export default function ObservationBottle({ onNavigate }: ObservationBottleProps) {
   void onNavigate;
   const [openFaq, setOpenFaq] = useState<number | null>(0);
+  const [quantity, setQuantity] = useState(1);
+  const [checkoutLoading, setCheckoutLoading] = useState(false);
+  const [checkoutError, setCheckoutError] = useState('');
+
+  const lineTotal = useMemo(
+    () => (OBSERVATION_BOTTLE.priceUsd * quantity).toFixed(2),
+    [quantity]
+  );
 
   const canonicalUrl = useMemo(
     () => `${siteOrigin()}${OBSERVATION_BOTTLE.route}`,
@@ -44,7 +56,14 @@ export default function ObservationBottle({ onNavigate }: ObservationBottleProps
             '@type': 'Brand',
             name: OBSERVATION_BOTTLE.brand,
           },
-          // TODO(commerce): add offers.price, offers.priceCurrency, sku, and availability when storefront is live.
+          offers: {
+            '@type': 'Offer',
+            url: canonicalUrl,
+            priceCurrency: 'USD',
+            price: OBSERVATION_BOTTLE.priceUsd.toFixed(2),
+            availability: 'https://schema.org/InStock',
+            itemCondition: 'https://schema.org/NewCondition',
+          },
         },
         {
           '@type': 'FAQPage',
@@ -59,8 +78,20 @@ export default function ObservationBottle({ onNavigate }: ObservationBottleProps
         },
       ],
     }),
-    [ogImage]
+    [ogImage, canonicalUrl]
   );
+
+  const handleBuyNow = async () => {
+    setCheckoutError('');
+    setCheckoutLoading(true);
+    try {
+      const out = await createObservationBottleCheckout(quantity);
+      window.location.href = out.url!;
+    } catch (err) {
+      setCheckoutError(err instanceof Error ? err.message : 'Checkout could not start.');
+      setCheckoutLoading(false);
+    }
+  };
 
   const metaDescription =
     'Launch Zone Observation Bottle — catch the glow, return the magic. A reusable 16 oz borosilicate bottle for brief, responsible bioluminescence observation on Florida\'s Space Coast lagoon.';
@@ -107,18 +138,117 @@ export default function ObservationBottle({ onNavigate }: ObservationBottleProps
               Designed for the brief observation of Florida&apos;s naturally glowing lagoon waters —
               then returning the magic exactly where you found it.
             </p>
-            {/* TODO(commerce): replace with purchase CTA when price, SKU, and inventory are implemented. */}
-            <p className="mt-6 rounded-xl border border-cyan-400/20 bg-cyan-950/25 px-4 py-3 text-sm text-slate-300">
-              Available on select bioluminescence experiences.{' '}
-              <Link to="/bioluminescent-tours" className="font-semibold text-cyan-300 underline-offset-2 hover:underline">
-                Book a tour
-              </Link>{' '}
-              or{' '}
-              <Link to="/contact" className="font-semibold text-cyan-300 underline-offset-2 hover:underline">
-                contact us
-              </Link>{' '}
-              for availability.
-            </p>
+
+            <div className="mt-8 rounded-2xl border border-cyan-400/20 bg-slate-950/60 p-5 sm:p-6">
+              <p className="text-3xl font-bold text-white">
+                ${OBSERVATION_BOTTLE.priceUsd.toFixed(2)}{' '}
+                <span className="text-base font-medium text-slate-400">{OBSERVATION_BOTTLE.currency}</span>
+              </p>
+              <p className="mt-1 text-sm text-slate-400">Free standard shipping within the United States</p>
+
+              <div className="mt-5">
+                <label htmlFor="observation-bottle-qty" className="text-sm font-semibold text-slate-200">
+                  Quantity
+                </label>
+                <div className="mt-2 flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={wrapSyncClick('observation_bottle_qty_dec', () =>
+                      setQuantity((q) => Math.max(OBSERVATION_BOTTLE.minQuantity, q - 1))
+                    )}
+                    disabled={quantity <= OBSERVATION_BOTTLE.minQuantity || checkoutLoading}
+                    className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-white/10 text-white transition hover:border-cyan-400/40 disabled:opacity-40 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/50"
+                    aria-label="Decrease quantity"
+                  >
+                    <Minus className="h-4 w-4" aria-hidden />
+                  </button>
+                  <input
+                    id="observation-bottle-qty"
+                    type="number"
+                    min={OBSERVATION_BOTTLE.minQuantity}
+                    max={OBSERVATION_BOTTLE.maxQuantity}
+                    value={quantity}
+                    onChange={(e) => {
+                      const next = Math.round(Number(e.target.value));
+                      if (!Number.isFinite(next)) return;
+                      setQuantity(
+                        Math.min(
+                          OBSERVATION_BOTTLE.maxQuantity,
+                          Math.max(OBSERVATION_BOTTLE.minQuantity, next)
+                        )
+                      );
+                    }}
+                    className="w-16 rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-center text-white focus:border-cyan-400/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/50"
+                    aria-label="Quantity"
+                  />
+                  <button
+                    type="button"
+                    onClick={wrapSyncClick('observation_bottle_qty_inc', () =>
+                      setQuantity((q) => Math.min(OBSERVATION_BOTTLE.maxQuantity, q + 1))
+                    )}
+                    disabled={quantity >= OBSERVATION_BOTTLE.maxQuantity || checkoutLoading}
+                    className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-white/10 text-white transition hover:border-cyan-400/40 disabled:opacity-40 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/50"
+                    aria-label="Increase quantity"
+                  >
+                    <Plus className="h-4 w-4" aria-hidden />
+                  </button>
+                  <span className="text-sm text-slate-400">
+                    Subtotal: <span className="font-semibold text-white">${lineTotal}</span>
+                  </span>
+                </div>
+              </div>
+
+              <ul className="mt-5 space-y-2">
+                {OBSERVATION_BOTTLE_CHECKOUT_FEATURES.map((feature) => (
+                  <li key={feature} className="flex items-start gap-2 text-sm text-slate-300">
+                    <Check className="mt-0.5 h-4 w-4 shrink-0 text-cyan-400" aria-hidden />
+                    {feature}
+                  </li>
+                ))}
+              </ul>
+
+              <button
+                type="button"
+                onClick={wrapSyncClick('observation_bottle_buy_now', () => void handleBuyNow())}
+                disabled={checkoutLoading}
+                className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[var(--lz-cta)] px-6 py-3.5 text-sm font-bold uppercase tracking-[0.14em] text-slate-950 transition hover:brightness-110 disabled:cursor-wait disabled:opacity-70 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/50 sm:w-auto"
+              >
+                {checkoutLoading ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden />
+                    Redirecting to secure checkout…
+                  </>
+                ) : (
+                  'Buy Now'
+                )}
+              </button>
+
+              {checkoutError ? (
+                <p className="mt-3 text-sm text-amber-200" role="alert">
+                  {checkoutError}
+                </p>
+              ) : null}
+
+              <div className="mt-4 flex flex-wrap items-center gap-3 text-xs text-slate-400">
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/25 bg-emerald-950/20 px-3 py-1 text-emerald-100">
+                  <ShieldCheck className="h-3.5 w-3.5" aria-hidden />
+                  Secure Stripe Checkout
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                  <CreditCard className="h-3.5 w-3.5 text-slate-500" aria-hidden />
+                  Visa · Mastercard · Amex · Apple Pay
+                </span>
+              </div>
+
+              <p className="mt-4 text-xs leading-relaxed text-slate-500">{OBSERVATION_BOTTLE_SHIPPING_NOTICE}</p>
+              <p className="mt-3 text-xs text-slate-500">
+                Also available on select bioluminescence experiences —{' '}
+                <Link to="/bioluminescent-tours" className="text-cyan-300 underline-offset-2 hover:underline">
+                  book a tour
+                </Link>
+                .
+              </p>
+            </div>
           </div>
           <div className="order-1 lg:order-2">
             <div className="relative mx-auto w-full max-w-xl overflow-hidden rounded-2xl border border-cyan-400/20 bg-[#050a14] shadow-[0_0_48px_rgba(0,207,255,0.15)] lg:max-w-none">

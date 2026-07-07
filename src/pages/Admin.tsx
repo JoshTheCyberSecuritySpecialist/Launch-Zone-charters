@@ -1999,6 +1999,12 @@ export default function Admin({ onNavigate }: AdminProps) {
               >
                 Manage boats
               </Link>
+              <Link
+                to="/admin/shop-orders"
+                className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-teal-600"
+              >
+                Shop Orders
+              </Link>
               <button
                 type="button"
                 onClick={handleSignOut}

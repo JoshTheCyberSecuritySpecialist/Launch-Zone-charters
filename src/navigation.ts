@@ -26,6 +26,8 @@ const ROUTES = {
   bioluminescenceGuide: '/bioluminescence',
   bioluminescentTours: '/bioluminescent-tours',
   observationBottle: '/shop/observation-bottle',
+  shopOrderSuccess: '/shop/order-success',
+  adminShopOrders: '/admin/shop-orders',
   insuranceRequired: '/insurance-required',
 } as const;
 
@@ -71,6 +73,8 @@ const PAGE_TO_PATH: Record<string, string> = {
   bioluminescence: ROUTES.bioluminescenceGuide,
   'bioluminescent-tours': ROUTES.bioluminescentTours,
   'observation-bottle': ROUTES.observationBottle,
+  'shop-order-success': ROUTES.shopOrderSuccess,
+  'admin-shop-orders': ROUTES.adminShopOrders,
   'insurance-required': ROUTES.insuranceRequired,
 };
 

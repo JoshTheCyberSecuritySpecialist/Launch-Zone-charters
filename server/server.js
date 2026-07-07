@@ -21,6 +21,7 @@ const bookingAccess = require('./services/bookingAccess');
 const documentUrlValidation = require('./services/documentUrlValidation');
 const bookingReliability = require('./services/bookingReliability');
 const bookingCommunications = require('./services/bookingCommunications');
+const shopService = require('./services/shopService');
 const { getBioConditions } = require('./services/bioluminescenceService');
 const { getRocketConditions } = require('./services/rocketService');
 const { getLaunchSchedulePreview } = require('./services/rocketScheduleService');
@@ -1216,6 +1217,37 @@ async function processStripeWebhookEvent(event) {
 
   if (eventType === 'checkout.session.completed' || eventType === 'checkout.session.async_payment_succeeded') {
     const session = event.data.object;
+    const orderType = String(session.metadata?.order_type || '').trim().toLowerCase();
+    if (orderType === 'shop') {
+      try {
+        const out = await shopService.finalizeShopOrderFromSession({
+          stripe,
+          supabase,
+          resend,
+          resendFrom,
+          sessionId: session.id,
+          source: 'stripe_webhook',
+        });
+        await bookingReliability.updateWebhookEventStatus(supabase, eventId, 'processed', {
+          error: null,
+        });
+        await bookingReliability.insertActivity(supabase, {
+          checkout_session_id: session.id,
+          payment_intent_id: ids.paymentIntentId || null,
+          event_type: 'shop_order_paid',
+          message: 'Stripe shop payment succeeded and order finalization completed.',
+          payload: { event_id: eventId, order_id: out.orderId, alreadyFinalized: out.alreadyFinalized },
+        });
+        console.log('[stripe-webhook] finalized shop order', out.orderId, out.alreadyFinalized ? '(idempotent)' : '');
+        return { ok: true, orderId: out.orderId };
+      } catch (err) {
+        console.error('[stripe-webhook] shop finalize:', err.message || err);
+        await bookingReliability.updateWebhookEventStatus(supabase, eventId, 'failed', {
+          error: err.message || 'Shop webhook finalization failed',
+        });
+        return { ok: false, error: err };
+      }
+    }
     try {
       const out = await finalizeBookingFromSession(session.id, { requestIp: null, source: 'stripe_webhook' });
       await bookingReliability.updateWebhookEventStatus(supabase, eventId, 'processed', {
@@ -1258,6 +1290,26 @@ async function processStripeWebhookEvent(event) {
       });
     }
     const checkoutSessionId = ids.checkoutSessionId || session?.id || null;
+
+    const { data: shopOrder } = await supabase
+      .from('shop_orders')
+      .select('id, status')
+      .or(
+        [
+          ids.paymentIntentId ? `payment_intent_id.eq.${ids.paymentIntentId}` : '',
+          checkoutSessionId ? `stripe_session_id.eq.${checkoutSessionId}` : '',
+        ]
+          .filter(Boolean)
+          .join(',')
+      )
+      .maybeSingle();
+    if (shopOrder?.id) {
+      await bookingReliability.updateWebhookEventStatus(supabase, eventId, 'processed', {
+        error: null,
+      });
+      return { ok: true, orderId: shopOrder.id };
+    }
+
     const { data: booking } = await supabase
       .from('bookings')
       .select('id')
@@ -1313,6 +1365,13 @@ async function processStripeWebhookEvent(event) {
 
   if (eventType === 'checkout.session.expired') {
     const session = event.data.object;
+    if (String(session.metadata?.order_type || '').trim().toLowerCase() === 'shop') {
+      await supabase
+        .from('shop_orders')
+        .update({ status: 'cancelled', updated_at: new Date().toISOString() })
+        .eq('stripe_session_id', session.id)
+        .eq('status', 'pending');
+    }
     await bookingReliability.createOrUpdateBookingDraft(supabase, {
       checkout_session_id: session.id,
       payment_intent_id: ids.paymentIntentId || null,
@@ -1329,6 +1388,29 @@ async function processStripeWebhookEvent(event) {
   }
 
   if (eventType === 'charge.refunded' || eventType.startsWith('refund.')) {
+    const { data: shopOrder } = await supabase
+      .from('shop_orders')
+      .select('id')
+      .or(
+        [
+          ids.paymentIntentId ? `payment_intent_id.eq.${ids.paymentIntentId}` : '',
+          ids.chargeId ? `stripe_charge_id.eq.${ids.chargeId}` : '',
+        ]
+          .filter(Boolean)
+          .join(',')
+      )
+      .maybeSingle();
+    if (shopOrder?.id) {
+      await supabase
+        .from('shop_orders')
+        .update({ status: 'refunded', updated_at: new Date().toISOString() })
+        .eq('id', shopOrder.id);
+      await bookingReliability.updateWebhookEventStatus(supabase, eventId, 'processed', {
+        error: null,
+      });
+      return { ok: true, orderId: shopOrder.id };
+    }
+
     const { data: booking } = await supabase
       .from('bookings')
       .select('id')
@@ -3496,6 +3578,61 @@ function promoPayloadFromRequest(body, { partial = false } = {}) {
   return { payload: out, errors };
 }
 
+app.get('/api/admin/shop-orders', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const status = shopService.normalizeShopStatus(req.query.status);
+    let query = supabase
+      .from('shop_orders')
+      .select(
+        'id, stripe_session_id, customer_name, email, phone, quantity, shipping_name, shipping_address, amount_paid, currency, status, product_slug, confirmation_email_sent_at, created_at, updated_at'
+      )
+      .order('created_at', { ascending: false })
+      .limit(200);
+    if (status) query = query.eq('status', status);
+    const { data, error } = await query;
+    if (error) throw error;
+    const orders = (Array.isArray(data) ? data : []).map((row) => ({
+      ...row,
+      order_number: shopService.formatOrderNumber(row.id),
+    }));
+    return res.json({ orders });
+  } catch (err) {
+    console.error('[admin/shop-orders]', err);
+    return res.status(500).json({ error: 'Could not load shop orders.' });
+  }
+});
+
+app.patch('/api/admin/shop-orders/:id', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const id = String(req.params.id || '').trim();
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid order id.' });
+    const nextStatus = shopService.normalizeShopStatus(req.body?.status);
+    if (!nextStatus) {
+      return res.status(400).json({
+        error: `Invalid status. Allowed: ${shopService.SHOP_ORDER_STATUSES.join(', ')}`,
+      });
+    }
+    const { data, error } = await supabase
+      .from('shop_orders')
+      .update({ status: nextStatus, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .select('*')
+      .single();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'Order not found.' });
+    return res.json({
+      order: { ...data, order_number: shopService.formatOrderNumber(data.id) },
+    });
+  } catch (err) {
+    console.error('[admin/shop-orders:patch]', err);
+    return res.status(500).json({ error: 'Could not update shop order.' });
+  }
+});
+
 app.get('/api/admin/promo-codes', async (req, res) => {
   const adminUser = await verifyAdminRequest(req, res);
   if (!adminUser) return;
@@ -4074,6 +4211,64 @@ app.post('/api/finalize-checkout-session', async (req, res) => {
   } catch (err) {
     console.error('[finalize-checkout-session]', err);
     return res.status(err.statusCode || 500).json({ error: err.message || 'Failed to finalize booking' });
+  }
+});
+
+/** Shop: create Stripe Checkout for Observation Bottle (reuses shared Stripe client). */
+app.post('/api/shop/create-checkout-session', async (req, res) => {
+  try {
+    if (!supabaseConfigured) {
+      return res.status(503).json({ error: 'Server not configured' });
+    }
+    if (!stripe) {
+      return res.status(503).json({ error: 'Stripe not configured' });
+    }
+    const quantity = req.body?.quantity;
+    const out = await shopService.createShopCheckoutSession({ stripe, supabase, quantity });
+    return res.json(out);
+  } catch (err) {
+    console.error('[shop/create-checkout-session]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Failed to create checkout session' });
+  }
+});
+
+/** Shop: success-page finalization (idempotent; shared pattern with booking finalize). */
+app.post('/api/shop/finalize-checkout-session', async (req, res) => {
+  try {
+    if (!supabaseConfigured) {
+      return res.status(503).json({ error: 'Server not configured' });
+    }
+    const sessionId = req.body && req.body.sessionId ? String(req.body.sessionId).trim() : '';
+    const out = await shopService.finalizeShopOrderFromSession({
+      stripe,
+      supabase,
+      resend,
+      resendFrom,
+      sessionId,
+      source: 'success_page',
+    });
+    return res.json(out);
+  } catch (err) {
+    console.error('[shop/finalize-checkout-session]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Failed to finalize shop order' });
+  }
+});
+
+/** Shop: poll order status after redirect (fallback if finalize is slow). */
+app.get('/api/shop/order-status', async (req, res) => {
+  try {
+    if (!supabaseConfigured) {
+      return res.status(503).json({ status: 'error', error: 'Server not configured' });
+    }
+    const sessionId = String(req.query.sessionId || req.query.session_id || '').trim();
+    const out = await shopService.getShopOrderStatus(supabase, sessionId);
+    if (out.status === 'error') {
+      return res.status(400).json(out);
+    }
+    return res.json(out);
+  } catch (err) {
+    console.error('[shop/order-status]', err);
+    return res.status(500).json({ status: 'error', error: err.message || 'Could not load order status' });
   }
 });
 

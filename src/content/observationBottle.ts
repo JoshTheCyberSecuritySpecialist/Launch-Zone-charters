@@ -6,7 +6,26 @@ export const OBSERVATION_BOTTLE = {
   imageAlt:
     'Launch Zone Observation Bottle for responsibly observing Florida bioluminescent lagoon water.',
   route: '/shop/observation-bottle',
+  successRoute: '/shop/order-success',
+  priceUsd: 34.99,
+  currency: 'USD',
+  minQuantity: 1,
+  maxQuantity: 10,
 } as const;
+
+export const OBSERVATION_BOTTLE_CHECKOUT_FEATURES = [
+  'Premium Borosilicate Glass',
+  'Bamboo Lid',
+  'Leakproof Silicone Seal',
+  'BPA-Free',
+  'Reusable',
+  'Eco-Friendly',
+  'Observation Guide Included',
+  'Free Standard Shipping (United States)',
+] as const;
+
+export const OBSERVATION_BOTTLE_SHIPPING_NOTICE =
+  'This product is made to order. Please allow approximately 12–16 business days for processing and delivery. Tracking information will be emailed once your order ships.';
 
 export const OBSERVATION_BOTTLE_FEATURES = [
   '16 oz (473 mL)',

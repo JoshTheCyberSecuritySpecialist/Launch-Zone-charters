@@ -33,6 +33,8 @@ import CaptainsLog from './pages/CaptainsLog';
 import LogArticle from './pages/LogArticle';
 import BioluminescentTours from './pages/BioluminescentTours';
 import ObservationBottle from './pages/ObservationBottle';
+import ShopOrderSuccess from './pages/ShopOrderSuccess';
+import AdminShopOrders from './pages/AdminShopOrders';
 import { pageKeyFromPath, pathFromPageKey } from './navigation';
 import ScrollToTop from './components/ScrollToTop';
 import { SITE_FAVICON_PATH } from './constants/branding';
@@ -98,6 +100,7 @@ function AppLayout() {
           />
           <Route path="/bioluminescent-tours" element={<BioluminescentTours onNavigate={onNavigate} />} />
           <Route path="/shop/observation-bottle" element={<ObservationBottle onNavigate={onNavigate} />} />
+          <Route path="/shop/order-success" element={<ShopOrderSuccess onNavigate={onNavigate} />} />
           <Route path="/conditions" element={<Conditions onNavigate={onNavigate} />} />
           <Route path="/faqs" element={<FAQs onNavigate={onNavigate} />} />
           <Route path="/about" element={<About onNavigate={onNavigate} />} />
@@ -113,6 +116,7 @@ function AppLayout() {
           <Route path="/admin/calendar" element={<AdminCalendar />} />
           <Route path="/admin/bookings/:id" element={<AdminBookingDetails />} />
           <Route path="/admin/outbox" element={<AdminOutbox />} />
+          <Route path="/admin/shop-orders" element={<AdminShopOrders />} />
           <Route path="/admin/boats" element={<AdminBoats onNavigate={onNavigate} />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

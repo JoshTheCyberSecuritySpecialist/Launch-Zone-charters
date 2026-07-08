@@ -57,6 +57,8 @@ type CalendarItem = {
   end_time: string;
   all_day: boolean;
   blocks_availability: boolean;
+  block_scope?: string | null;
+  block_source?: string | null;
   priority: 'low' | 'normal' | 'high';
   notes?: string | null;
   completed: boolean;
@@ -119,6 +121,24 @@ type ItemMenuState = {
   y: number;
 };
 
+type CharterCaptainConflict = {
+  id: string;
+  start_time: string;
+  end_time: string;
+  status: string;
+  charter_type?: string | null;
+  customer_name: string;
+};
+
+type CharterCaptainForm = {
+  step: number;
+  startDate: string;
+  endDate: string;
+  saving: boolean;
+  conflictCount: number;
+  conflicts: CharterCaptainConflict[];
+};
+
 const pad = (n: number) => String(n).padStart(2, '0');
 const ymd = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const addDays = (d: Date, days: number) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + days);
@@ -149,6 +169,22 @@ const blankItemForm = (itemType: 'blocked_time' | 'admin_duty', date = todayYmd(
 
 function todayYmd() {
   return new Date().toISOString().slice(0, 10);
+}
+
+function nextWeekCharterRange() {
+  const d = new Date();
+  const day = d.getDay();
+  const daysUntilMonday = day === 0 ? 1 : 8 - day;
+  const monday = addDays(startOfDay(d), daysUntilMonday);
+  const sunday = addDays(monday, 6);
+  return { startDate: ymd(monday), endDate: ymd(sunday) };
+}
+
+function nextMonthCharterRange() {
+  const d = new Date();
+  const first = new Date(d.getFullYear(), d.getMonth() + 1, 1);
+  const last = new Date(d.getFullYear(), d.getMonth() + 2, 0);
+  return { startDate: ymd(first), endDate: ymd(last) };
 }
 
 function viewRange(view: CalendarView, anchor: Date) {
@@ -259,6 +295,7 @@ export default function AdminCalendar() {
   const [itemForm, setItemForm] = useState<CalendarItemForm | null>(null);
   const [itemConflicts, setItemConflicts] = useState<any | null>(null);
   const [savingItem, setSavingItem] = useState(false);
+  const [captainForm, setCaptainForm] = useState<CharterCaptainForm | null>(null);
   const [undoMove, setUndoMove] = useState<{ booking: CalendarBooking; expiresAt: number } | null>(null);
   const undoTimer = useRef<number | null>(null);
   const [filters, setFilters] = useState({
@@ -637,6 +674,110 @@ export default function AdminCalendar() {
     }
   };
 
+  const openCaptainAvailabilityForm = (startDate = todayYmd(), endDate = todayYmd()) => {
+    setCaptainForm({
+      step: 1,
+      startDate,
+      endDate,
+      saving: false,
+      conflictCount: 0,
+      conflicts: [],
+    });
+  };
+
+  const previewCaptainAvailability = async () => {
+    if (!captainForm) return;
+    setCaptainForm((prev) => prev && { ...prev, saving: true });
+    try {
+      const res = await authedFetch('/api/admin/charter-captain-availability/preview', {
+        method: 'POST',
+        body: JSON.stringify({
+          startDate: captainForm.startDate,
+          endDate: captainForm.endDate,
+        }),
+      });
+      const payload = (await res.json().catch(() => ({}))) as {
+        conflictCount?: number;
+        conflicts?: CharterCaptainConflict[];
+        blockCount?: number;
+        error?: string;
+      };
+      if (!res.ok) throw new Error(payload.error || 'Could not preview charter availability.');
+      setCaptainForm((prev) =>
+        prev
+          ? {
+              ...prev,
+              step: 3,
+              saving: false,
+              conflictCount: Number(payload.conflictCount || 0),
+              conflicts: Array.isArray(payload.conflicts) ? payload.conflicts : [],
+            }
+          : prev
+      );
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : 'Could not preview charter availability.');
+      setCaptainForm((prev) => prev && { ...prev, saving: false });
+    }
+  };
+
+  const applyCaptainAvailability = async (saveAnyway = false) => {
+    if (!captainForm) return;
+    setCaptainForm((prev) => prev && { ...prev, saving: true });
+    try {
+      const res = await authedFetch('/api/admin/charter-captain-availability/apply', {
+        method: 'POST',
+        body: JSON.stringify({
+          startDate: captainForm.startDate,
+          endDate: captainForm.endDate,
+          saveAnyway,
+        }),
+      });
+      const payload = (await res.json().catch(() => ({}))) as {
+        inserted?: number;
+        conflictCount?: number;
+        conflicts?: CharterCaptainConflict[];
+        error?: string;
+      };
+      if (res.status === 409) {
+        setCaptainForm((prev) =>
+          prev
+            ? {
+                ...prev,
+                saving: false,
+                step: 3,
+                conflictCount: Number(payload.conflictCount || 0),
+                conflicts: Array.isArray(payload.conflicts) ? payload.conflicts : [],
+              }
+            : prev
+        );
+        throw new Error(payload.error || 'Charter bookings conflict with this schedule.');
+      }
+      if (!res.ok) throw new Error(payload.error || 'Could not apply charter availability.');
+      setCaptainForm(null);
+      setNotice(`Applied charter captain availability (${payload.inserted ?? 0} blocks created). Rentals are unaffected.`);
+      await loadBookings();
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : 'Could not apply charter availability.');
+      setCaptainForm((prev) => prev && { ...prev, saving: false });
+    }
+  };
+
+  const clearGeneratedCharterBlocks = async () => {
+    if (!window.confirm('Remove all auto-generated charter captain blocks? Manual blocks will stay.')) return;
+    try {
+      const res = await authedFetch('/api/admin/charter-captain-availability/clear', {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+      const payload = (await res.json().catch(() => ({}))) as { deleted?: number; error?: string };
+      if (!res.ok) throw new Error(payload.error || 'Could not clear generated charter blocks.');
+      setNotice(`Removed ${payload.deleted ?? 0} generated charter block${payload.deleted === 1 ? '' : 's'}.`);
+      await loadBookings();
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : 'Could not clear generated charter blocks.');
+    }
+  };
+
   const deleteCalendarItem = async (item: CalendarItem) => {
     const label = item.item_type === 'blocked_time' ? 'remove this blocked time' : 'delete this admin duty';
     if (!window.confirm(`Are you sure you want to ${label}?`)) return;
@@ -800,6 +941,9 @@ export default function AdminCalendar() {
   );
 
   const itemClass = (item: CalendarItem) => {
+    if (item.block_source === 'charter_captain_availability') {
+      return 'border-purple-300 bg-purple-100 text-purple-950';
+    }
     if (item.item_type === 'blocked_time') return 'border-slate-300 bg-slate-200 text-slate-900';
     if (item.completed) return 'border-green-200 bg-green-100 text-green-900';
     if (item.priority === 'high') return 'border-red-200 bg-red-100 text-red-900';
@@ -825,7 +969,7 @@ export default function AdminCalendar() {
       <div className="text-sm font-black">{compact ? `${hhmmFromIso(item.start_time)} ${item.title}` : item.title}</div>
       {!compact ? (
         <>
-          <div>{item.item_type === 'blocked_time' ? 'Blocked Time' : item.duty_type || 'Admin Duty'}</div>
+          <div>{item.item_type === 'blocked_time' ? (item.block_source === 'charter_captain_availability' ? 'Charter Captain Closed' : 'Blocked Time') : item.duty_type || 'Admin Duty'}</div>
           <div>{timeLabel(item.start_time, item.end_time)}</div>
           <div>{item.location || 'All locations'} · {item.boat_id ? boats.find((boat) => boat.id === item.boat_id)?.name || 'Selected boat' : 'All boats'}</div>
         </>
@@ -851,6 +995,9 @@ export default function AdminCalendar() {
             <button type="button" onClick={() => openItemForm('blocked_time')} className="rounded-lg bg-slate-700 px-5 py-4 text-lg font-black text-white hover:bg-slate-600">
               + Block Time
             </button>
+            <button type="button" onClick={() => openCaptainAvailabilityForm()} className="rounded-lg bg-purple-700 px-5 py-4 text-lg font-black text-white hover:bg-purple-600">
+              Apply Charter Captain Availability
+            </button>
             <button type="button" onClick={() => openItemForm('admin_duty')} className="rounded-lg bg-yellow-500 px-5 py-4 text-lg font-black text-slate-950 hover:bg-yellow-400">
               + Add Admin Duty
             </button>
@@ -859,6 +1006,39 @@ export default function AdminCalendar() {
               Dashboard
             </Link>
           </div>
+        </div>
+      </div>
+
+      <div className="border-b border-purple-200 bg-purple-50">
+        <div className="mx-auto flex max-w-7xl flex-wrap gap-2 px-4 py-3 sm:px-6 lg:px-8">
+          <span className="self-center text-sm font-black uppercase tracking-wide text-purple-900">Charter captain</span>
+          <button
+            type="button"
+            onClick={() => {
+              const range = nextWeekCharterRange();
+              openCaptainAvailabilityForm(range.startDate, range.endDate);
+            }}
+            className="rounded-lg bg-white px-4 py-2 text-sm font-bold text-purple-900 shadow-sm ring-1 ring-purple-200 hover:bg-purple-100"
+          >
+            Block Next Week (Charters)
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              const range = nextMonthCharterRange();
+              openCaptainAvailabilityForm(range.startDate, range.endDate);
+            }}
+            className="rounded-lg bg-white px-4 py-2 text-sm font-bold text-purple-900 shadow-sm ring-1 ring-purple-200 hover:bg-purple-100"
+          >
+            Block Next Month (Charters)
+          </button>
+          <button
+            type="button"
+            onClick={() => void clearGeneratedCharterBlocks()}
+            className="rounded-lg bg-white px-4 py-2 text-sm font-bold text-purple-900 shadow-sm ring-1 ring-purple-200 hover:bg-purple-100"
+          >
+            Clear Generated Charter Blocks
+          </button>
         </div>
       </div>
 
@@ -1363,6 +1543,148 @@ export default function AdminCalendar() {
             </div>
           </div>
         </>
+      ) : null}
+
+      {captainForm ? (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/70 p-4">
+          <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-2xl font-black text-purple-950">Apply Charter Captain Availability</h2>
+                <p className="mt-2 text-sm text-slate-600">
+                  Generates charter-only closed periods. Friday/Saturday 5:00 PM – 4:00 AM stay open. Boat rentals are not affected.
+                </p>
+              </div>
+              <button type="button" onClick={() => setCaptainForm(null)} className="rounded-lg bg-slate-100 px-4 py-2 font-bold">
+                Close
+              </button>
+            </div>
+
+            {captainForm.step === 1 ? (
+              <div className="mt-6">
+                <h3 className="text-xl font-black">Step 1: Start Date</h3>
+                <label className="mt-4 block text-lg font-bold">
+                  Start Date
+                  <input
+                    type="date"
+                    value={captainForm.startDate}
+                    onChange={(e) =>
+                      setCaptainForm((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              startDate: e.target.value,
+                              endDate: prev.endDate < e.target.value ? e.target.value : prev.endDate,
+                            }
+                          : prev
+                      )
+                    }
+                    className="mt-2 min-h-[54px] w-full rounded-xl border px-4 text-lg"
+                  />
+                </label>
+              </div>
+            ) : null}
+
+            {captainForm.step === 2 ? (
+              <div className="mt-6">
+                <h3 className="text-xl font-black">Step 2: End Date</h3>
+                <label className="mt-4 block text-lg font-bold">
+                  End Date (inclusive)
+                  <input
+                    type="date"
+                    min={captainForm.startDate}
+                    value={captainForm.endDate}
+                    onChange={(e) => setCaptainForm((prev) => prev && { ...prev, endDate: e.target.value })}
+                    className="mt-2 min-h-[54px] w-full rounded-xl border px-4 text-lg"
+                  />
+                </label>
+              </div>
+            ) : null}
+
+            {captainForm.step === 3 ? (
+              <div className="mt-6">
+                <h3 className="text-xl font-black">Step 3: Review</h3>
+                <div className="mt-4 rounded-xl bg-purple-50 p-4 text-lg">
+                  <p><strong>Range:</strong> {captainForm.startDate} – {captainForm.endDate}</p>
+                  <p><strong>Open for charters:</strong> Friday &amp; Saturday 5:00 PM – 4:00 AM</p>
+                  <p><strong>Rentals:</strong> unchanged</p>
+                </div>
+                {captainForm.conflictCount > 0 ? (
+                  <div className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-4">
+                    <h4 className="text-lg font-black text-amber-950">
+                      There {captainForm.conflictCount === 1 ? 'is' : 'are'} {captainForm.conflictCount} charter booking
+                      {captainForm.conflictCount === 1 ? '' : 's'} during this period.
+                    </h4>
+                    <div className="mt-3 space-y-2">
+                      {captainForm.conflicts.map((booking) => (
+                        <div key={booking.id} className="rounded-lg bg-white p-3">
+                          <div className="font-bold">{booking.customer_name}</div>
+                          <div>{timeLabel(booking.start_time, booking.end_time)}</div>
+                          <Link to={`/admin/bookings/${booking.id}`} className="font-bold text-amber-800 underline">
+                            View booking
+                          </Link>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <p className="mt-4 text-sm font-semibold text-green-700">No conflicting charter bookings found.</p>
+                )}
+              </div>
+            ) : null}
+
+            <div className="mt-6 flex flex-wrap justify-between gap-3">
+              <button type="button" onClick={() => setCaptainForm(null)} className="rounded-xl border border-slate-300 px-6 py-4 text-lg font-black">
+                Cancel
+              </button>
+              <div className="flex flex-wrap gap-3">
+                {captainForm.step > 1 ? (
+                  <button
+                    type="button"
+                    onClick={() => setCaptainForm((prev) => prev && { ...prev, step: prev.step - 1 })}
+                    className="rounded-xl bg-slate-200 px-6 py-4 text-lg font-black"
+                  >
+                    Back
+                  </button>
+                ) : null}
+                {captainForm.step < 3 ? (
+                  <button
+                    type="button"
+                    disabled={captainForm.saving}
+                    onClick={() => {
+                      if (captainForm.step === 2) void previewCaptainAvailability();
+                      else setCaptainForm((prev) => prev && { ...prev, step: prev.step + 1 });
+                    }}
+                    className="rounded-xl bg-purple-700 px-6 py-4 text-lg font-black text-white disabled:opacity-50"
+                  >
+                    {captainForm.step === 2 ? (captainForm.saving ? 'Checking…' : 'Review') : 'Next'}
+                  </button>
+                ) : (
+                  <>
+                    {captainForm.conflictCount > 0 ? (
+                      <button
+                        type="button"
+                        disabled={captainForm.saving}
+                        onClick={() => void applyCaptainAvailability(true)}
+                        className="rounded-xl bg-amber-600 px-6 py-4 text-lg font-black text-white disabled:opacity-50"
+                      >
+                        Continue anyway
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      disabled={captainForm.saving}
+                      onClick={() => void applyCaptainAvailability(false)}
+                      className="rounded-xl bg-purple-700 px-6 py-4 text-lg font-black text-white disabled:opacity-50"
+                    >
+                      {captainForm.saving ? 'Applying…' : 'Generate blocks'}
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
       ) : null}
     </div>
   );

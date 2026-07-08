@@ -79,11 +79,13 @@ async function fetchBlockedDateRanges(boatId, rangeStartIso, rangeEndIso) {
   const boat = String(boatId);
   const { data, error } = await supabase
     .from('blocked_dates')
-    .select('start_time, end_time, boat_id')
+    .select('start_time, end_time, boat_id, block_scope')
     .lt('start_time', rangeEndIso)
     .gt('end_time', rangeStartIso)
     .or(`boat_id.eq.${boat},boat_id.is.null`);
-  if (!error) return data || [];
+  if (!error) {
+    return (data || []).filter((row) => String(row.block_scope || 'all') !== 'charter');
+  }
 
   // Backward compatibility: some DBs use date-only columns (start_date/end_date).
   // Try fallback regardless of exact PostgREST wording for missing/invalid columns.
@@ -117,11 +119,16 @@ async function fetchBlockedDateRanges(boatId, rangeStartIso, rangeEndIso) {
 async function fetchFleetBlockedDateRanges(rangeStartIso, rangeEndIso) {
   const { data, error } = await supabase
     .from('blocked_dates')
-    .select('start_time, end_time, boat_id')
+    .select('start_time, end_time, boat_id, block_scope')
     .is('boat_id', null)
     .lt('start_time', rangeEndIso)
     .gt('end_time', rangeStartIso);
-  if (!error) return data || [];
+  if (!error) {
+    return (data || []).filter((row) => {
+      const scope = String(row.block_scope || 'all');
+      return scope === 'all' || scope === 'charter';
+    });
+  }
 
   const rangeStartDate = rangeStartIso.slice(0, 10);
   const rangeEndDateExclusive = rangeEndIso.slice(0, 10);

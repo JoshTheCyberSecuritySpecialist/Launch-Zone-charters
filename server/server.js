@@ -31,6 +31,7 @@ const { getLaunchSchedulePreview } = require('./services/rocketScheduleService')
 const { getWeeklyForecast } = require('./services/weeklyForecastService');
 const { getMarineConditions } = require('./services/marineConditionsService');
 const availabilityService = require('./services/availabilityService');
+const captainCharterAvailability = require('./services/captainCharterAvailability');
 const {
   applyPromoToExpectedTotals,
   incrementPromoUsage,
@@ -1892,7 +1893,7 @@ async function loadCalendarBlockedDates({ fromIso, toIso, boatId }) {
   const boat = cleanText(boatId, 80);
   let query = supabase
     .from('blocked_dates')
-    .select('id, boat_id, start_time, end_time, title, reason, location, all_day, notes, created_at, updated_at')
+    .select('id, boat_id, start_time, end_time, title, reason, location, all_day, notes, block_scope, block_source, created_at, updated_at')
     .lt('start_time', toIso)
     .gt('end_time', fromIso);
   if (boat) query = query.or(`boat_id.eq.${boat},boat_id.is.null`);
@@ -1940,6 +1941,8 @@ function normalizeCalendarBlock(row) {
     end_time: row.end_time,
     all_day: Boolean(row.all_day),
     blocks_availability: true,
+    block_scope: row.block_scope || 'all',
+    block_source: row.block_source || null,
     priority: 'normal',
     notes: row.notes || null,
     completed: false,
@@ -2356,6 +2359,170 @@ app.delete('/api/admin/calendar-items/:id', async (req, res) => {
     console.error('[admin-calendar-items:delete]', err);
     return res.status(err.statusCode || 500).json({ error: err.message || 'Could not delete calendar item.' });
   }
+});
+
+async function loadCharterBookingsInRange(fromIso, toIso) {
+  const { data, error } = await supabase
+    .from('bookings')
+    .select('id, start_time, end_time, status, expires_at, charter_type, booking_type, customers(full_name)')
+    .eq('booking_type', 'charter')
+    .lt('start_time', toIso)
+    .gt('end_time', fromIso)
+    .order('start_time', { ascending: true });
+  if (error) throw error;
+  return data || [];
+}
+
+async function previewCharterCaptainAvailability({ startDate, endDate }) {
+  const blocks = captainCharterAvailability.generateCharterCaptainBlocks(startDate, endDate);
+  if (blocks.length === 0) {
+    return { blocks, conflicts: [], conflictCount: 0 };
+  }
+  const rangeStartIso = blocks[0].startIso;
+  const rangeEndIso = blocks[blocks.length - 1].endIso;
+  const charterBookings = await loadCharterBookingsInRange(rangeStartIso, rangeEndIso);
+  const conflicts = captainCharterAvailability.findCharterConflictsForBlocks(blocks, charterBookings);
+  return { blocks, conflicts, conflictCount: conflicts.length };
+}
+
+app.post('/api/admin/charter-captain-availability/preview', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const body = req.body || {};
+    const startDate = cleanText(body.startDate || body.start_date, 20);
+    const endDate = cleanText(body.endDate || body.end_date, 20);
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: 'Start date and end date are required.' });
+    }
+    const preview = await previewCharterCaptainAvailability({ startDate, endDate });
+    return res.json({
+      startDate,
+      endDate,
+      blockCount: preview.blocks.length,
+      blocks: preview.blocks,
+      conflictCount: preview.conflictCount,
+      conflicts: preview.conflicts,
+    });
+  } catch (err) {
+    console.error('[admin-charter-captain-availability:preview]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not preview charter availability.' });
+  }
+});
+
+app.post('/api/admin/charter-captain-availability/apply', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const body = req.body || {};
+    const startDate = cleanText(body.startDate || body.start_date, 20);
+    const endDate = cleanText(body.endDate || body.end_date, 20);
+    const saveAnyway = Boolean(body.saveAnyway || body.save_anyway);
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: 'Start date and end date are required.' });
+    }
+
+    const preview = await previewCharterCaptainAvailability({ startDate, endDate });
+    if (preview.conflictCount > 0 && !saveAnyway) {
+      return res.status(409).json({
+        error: `There ${preview.conflictCount === 1 ? 'is' : 'are'} ${preview.conflictCount} charter booking${preview.conflictCount === 1 ? '' : 's'} during this period.`,
+        conflictCount: preview.conflictCount,
+        conflicts: preview.conflicts,
+        blockCount: preview.blocks.length,
+      });
+    }
+
+    const rangeStart = DateTime.fromISO(startDate, { zone: captainCharterAvailability.BUSINESS_TZ })
+      .startOf('day')
+      .toUTC()
+      .toISO();
+    const rangeEnd = DateTime.fromISO(endDate, { zone: captainCharterAvailability.BUSINESS_TZ })
+      .plus({ days: 1 })
+      .startOf('day')
+      .toUTC()
+      .toISO();
+
+    const { error: clearError } = await supabase
+      .from('blocked_dates')
+      .delete()
+      .eq('block_source', captainCharterAvailability.GENERATED_BLOCK_SOURCE)
+      .lt('start_time', rangeEnd)
+      .gt('end_time', rangeStart);
+    if (clearError) throw clearError;
+
+    if (preview.blocks.length === 0) {
+      return res.json({ ok: true, inserted: 0, conflictCount: preview.conflictCount });
+    }
+
+    const rows = preview.blocks.map((block) => ({
+      title: block.title,
+      reason: block.reason,
+      boat_id: null,
+      location: null,
+      start_time: block.startIso,
+      end_time: block.endIso,
+      all_day: false,
+      notes: block.notes,
+      block_scope: 'charter',
+      block_source: captainCharterAvailability.GENERATED_BLOCK_SOURCE,
+      created_by: null,
+    }));
+
+    const { data, error } = await supabase.from('blocked_dates').insert(rows).select('id');
+    if (error) throw error;
+
+    return res.json({
+      ok: true,
+      inserted: Array.isArray(data) ? data.length : rows.length,
+      conflictCount: preview.conflictCount,
+      startDate,
+      endDate,
+    });
+  } catch (err) {
+    console.error('[admin-charter-captain-availability:apply]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not apply charter availability.' });
+  }
+});
+
+app.post('/api/admin/charter-captain-availability/clear', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const body = req.body || {};
+    const startDate = cleanText(body.startDate || body.start_date, 20);
+    const endDate = cleanText(body.endDate || body.end_date, 20);
+
+    let query = supabase
+      .from('blocked_dates')
+      .delete()
+      .eq('block_source', captainCharterAvailability.GENERATED_BLOCK_SOURCE);
+
+    if (startDate && endDate) {
+      const rangeStart = DateTime.fromISO(startDate, { zone: captainCharterAvailability.BUSINESS_TZ })
+        .startOf('day')
+        .toUTC()
+        .toISO();
+      const rangeEnd = DateTime.fromISO(endDate, { zone: captainCharterAvailability.BUSINESS_TZ })
+        .plus({ days: 1 })
+        .startOf('day')
+        .toUTC()
+        .toISO();
+      query = query.lt('start_time', rangeEnd).gt('end_time', rangeStart);
+    }
+
+    const { data, error } = await query.select('id');
+    if (error) throw error;
+    return res.json({ ok: true, deleted: Array.isArray(data) ? data.length : 0 });
+  } catch (err) {
+    console.error('[admin-charter-captain-availability:clear]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not clear generated charter blocks.' });
+  }
+});
+
+app.get('/api/admin/charter-captain-availability/quick-ranges', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  return res.json(captainCharterAvailability.defaultQuickRanges());
 });
 
 async function loadAdminBookingDetail(id) {

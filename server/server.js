@@ -2969,6 +2969,50 @@ function customEmailHtml(message) {
     .join('');
 }
 
+async function logOutboxCommunication({
+  bookingId = null,
+  customerMessageId = null,
+  customerName = null,
+  adminUserId,
+  to,
+  subject,
+  message,
+  messageType = 'custom_email',
+  status,
+  provider = 'resend',
+  providerMessageId = null,
+  errorMessage = null,
+}) {
+  const insert = {
+    booking_id: bookingId || null,
+    customer_message_id: customerMessageId || null,
+    customer_name: customerName || null,
+    channel: 'email',
+    message_type: messageType,
+    recipient: to,
+    subject,
+    body: message,
+    sent_by: adminUserId,
+    sent_at: status === 'sent' ? new Date().toISOString() : null,
+    status,
+    provider,
+    provider_message_id: providerMessageId,
+    error_message: errorMessage,
+  };
+  const { data, error } = await supabase.from('booking_communications').insert(insert).select('*').single();
+  if (error) {
+    console.error('[outbox:insert-failed]', {
+      message: error.message,
+      details: error.details,
+      hint: error.hint,
+      code: error.code,
+      insert: { ...insert, body: `[${String(message || '').length} chars]` },
+    });
+    throw error;
+  }
+  return data;
+}
+
 async function logCustomEmailCommunication({
   bookingId,
   adminUserId,
@@ -2979,25 +3023,17 @@ async function logCustomEmailCommunication({
   providerMessageId = null,
   errorMessage = null,
 }) {
-  const { data, error } = await supabase
-    .from('booking_communications')
-    .insert({
-      booking_id: bookingId,
-      channel: 'email',
-      message_type: 'custom_email',
-      recipient: to,
-      subject,
-      body: message,
-      sent_by: adminUserId,
-      sent_at: status === 'sent' ? new Date().toISOString() : null,
-      status,
-      provider_message_id: providerMessageId,
-      error_message: errorMessage,
-    })
-    .select('*')
-    .single();
-  if (error) throw error;
-  return data;
+  return logOutboxCommunication({
+    bookingId,
+    adminUserId,
+    to,
+    subject,
+    message,
+    messageType: 'custom_email',
+    status,
+    providerMessageId,
+    errorMessage,
+  });
 }
 
 app.get('/api/admin/email/config-check', async (req, res) => {
@@ -3123,18 +3159,28 @@ app.post('/api/admin/bookings/:id/email-customer/send', async (req, res) => {
 function normalizeOutboxRow(row) {
   const booking = Array.isArray(row.bookings) ? row.bookings[0] : row.bookings || {};
   const customer = Array.isArray(booking.customers) ? booking.customers[0] : booking.customers || {};
+  const contactMessage = Array.isArray(row.contact_messages)
+    ? row.contact_messages[0]
+    : row.contact_messages || {};
   return {
     id: row.id,
     booking_id: row.booking_id,
+    customer_message_id: row.customer_message_id || null,
     booking_status: booking.status || null,
-    customer_name: customer.full_name || booking.name || 'Unknown customer',
-    customer_email: customer.email || booking.email || null,
+    customer_name:
+      row.customer_name ||
+      customer.full_name ||
+      contactMessage.full_name ||
+      booking.name ||
+      'Unknown customer',
+    customer_email: customer.email || contactMessage.email || booking.email || null,
     channel: row.channel,
     message_type: row.message_type,
     recipient: row.recipient,
     subject: row.subject,
     body: row.body,
     status: row.status,
+    provider: row.provider || null,
     sent_by: row.sent_by,
     sent_at: row.sent_at,
     created_at: row.created_at,
@@ -3149,6 +3195,9 @@ function outboxSelectColumns(includeBody = false) {
   return [
     'id',
     'booking_id',
+    'customer_message_id',
+    'customer_name',
+    'provider',
     'channel',
     'message_type',
     'recipient',
@@ -3163,6 +3212,7 @@ function outboxSelectColumns(includeBody = false) {
     'reviewed_at',
     'reviewed_by',
     'bookings(id, name, email, status, customers(full_name, email))',
+    'contact_messages(id, full_name, email)',
   ].filter(Boolean).join(', ');
 }
 
@@ -3269,31 +3319,73 @@ app.post('/api/admin/outbox/:id/resend', async (req, res) => {
         rawPhone: row.channel === 'sms' ? row.recipient : '',
       },
     };
-    const resent =
-      row.channel === 'email'
-        ? await bookingCommunications.sendEmail({
-            supabase,
-            resend,
-            resendFrom,
-            bookingId: row.booking_id,
-            adminUserId: adminUser.id,
-            preview,
-          })
-        : await bookingCommunications.sendSms({
-            supabase,
-            bookingId: row.booking_id,
-            adminUserId: adminUser.id,
-            preview,
-          });
 
-    await bookingReliability.insertActivity(supabase, {
-      booking_id: row.booking_id,
-      event_type: 'communication_resent',
-      actor_type: 'admin',
-      actor_id: adminUser.id,
-      message: `Admin resent ${row.message_type.replace(/_/g, ' ')} via ${row.channel}.`,
-      payload: { original_communication_id: row.id, resent_communication_id: resent.id },
-    });
+    let resent;
+    if (row.channel === 'email' && !row.booking_id) {
+      if (!resend || !resendFrom) {
+        resent = await logOutboxCommunication({
+          customerMessageId: row.customer_message_id,
+          customerName: row.customer_name,
+          adminUserId: adminUser.id,
+          to: row.recipient,
+          subject: preview.subject,
+          message: preview.emailBody,
+          messageType: row.message_type,
+          status: 'failed',
+          errorMessage: 'Email service is not configured.',
+        });
+      } else {
+        const result = await resend.emails.send({
+          from: resendFrom,
+          to: row.recipient,
+          subject: preview.subject,
+          text: preview.emailBody,
+          html: preview.emailHtml,
+        });
+        resent = await logOutboxCommunication({
+          customerMessageId: row.customer_message_id,
+          customerName: row.customer_name,
+          adminUserId: adminUser.id,
+          to: row.recipient,
+          subject: preview.subject,
+          message: preview.emailBody,
+          messageType: row.message_type,
+          status: result.error ? 'failed' : 'sent',
+          providerMessageId: result.data?.id || null,
+          errorMessage: result.error?.message || null,
+        });
+      }
+    } else if (row.channel === 'sms' && !row.booking_id) {
+      return res.status(400).json({ error: 'Cannot resend SMS without a linked booking.' });
+    } else {
+      resent =
+        row.channel === 'email'
+          ? await bookingCommunications.sendEmail({
+              supabase,
+              resend,
+              resendFrom,
+              bookingId: row.booking_id,
+              adminUserId: adminUser.id,
+              preview,
+            })
+          : await bookingCommunications.sendSms({
+              supabase,
+              bookingId: row.booking_id,
+              adminUserId: adminUser.id,
+              preview,
+            });
+    }
+
+    if (row.booking_id) {
+      await bookingReliability.insertActivity(supabase, {
+        booking_id: row.booking_id,
+        event_type: 'communication_resent',
+        actor_type: 'admin',
+        actor_id: adminUser.id,
+        message: `Admin resent ${row.message_type.replace(/_/g, ' ')} via ${row.channel}.`,
+        payload: { original_communication_id: row.id, resent_communication_id: resent.id },
+      });
+    }
 
     return res.json({ ok: true, item: resent });
   } catch (err) {
@@ -6828,15 +6920,28 @@ app.post('/api/admin/contact-messages/:id/reply/preview', async (req, res) => {
 app.post('/api/admin/contact-messages/:id/reply/send', async (req, res) => {
   const adminUser = await verifyAdminRequest(req, res);
   if (!adminUser) return;
+  const id = cleanText(req.params.id, 80);
+  let reply = null;
+  let messageRow = null;
   try {
-    const id = cleanText(req.params.id, 80);
     if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid message id.' });
-    const messageRow = await loadContactMessageForReply(id);
+    messageRow = await loadContactMessageForReply(id);
     if (!messageRow) return res.status(404).json({ error: 'Customer message not found.' });
-    const reply = validateContactReply(messageRow, req.body || {});
+    reply = validateContactReply(messageRow, req.body || {});
 
     if (!resend) {
-      return res.status(503).json({ error: 'Email service is not configured.' });
+      const row = await logOutboxCommunication({
+        customerMessageId: id,
+        customerName: messageRow.full_name || null,
+        adminUserId: adminUser.id,
+        to: reply.to,
+        subject: reply.subject,
+        message: reply.message,
+        messageType: 'admin_reply',
+        status: 'failed',
+        errorMessage: 'Email service is not configured.',
+      });
+      return res.status(503).json({ error: 'Email service is not configured.', communication: row });
     }
 
     const result = await resend.emails.send({
@@ -6848,13 +6953,63 @@ app.post('/api/admin/contact-messages/:id/reply/send', async (req, res) => {
     });
 
     if (result.error) {
-      return res.status(502).json({ error: result.error.message || 'Could not send reply.' });
+      const row = await logOutboxCommunication({
+        customerMessageId: id,
+        customerName: messageRow.full_name || null,
+        adminUserId: adminUser.id,
+        to: reply.to,
+        subject: reply.subject,
+        message: reply.message,
+        messageType: 'admin_reply',
+        status: 'failed',
+        errorMessage: result.error.message || 'Resend failed',
+      });
+      return res.status(502).json({ error: result.error.message || 'Could not send reply.', communication: row });
     }
 
-    await supabase.from('contact_messages').update({ is_read: true }).eq('id', id);
-    return res.json({ ok: true, providerMessageId: result.data?.id || null });
+    const row = await logOutboxCommunication({
+      customerMessageId: id,
+      customerName: messageRow.full_name || null,
+      adminUserId: adminUser.id,
+      to: reply.to,
+      subject: reply.subject,
+      message: reply.message,
+      messageType: 'admin_reply',
+      status: 'sent',
+      providerMessageId: result.data?.id || null,
+    });
+
+    const { error: readError } = await supabase.from('contact_messages').update({ is_read: true }).eq('id', id);
+    if (readError) {
+      console.error('[admin-contact-reply:mark-read-failed]', {
+        messageId: id,
+        message: readError.message,
+        details: readError.details,
+        hint: readError.hint,
+        code: readError.code,
+      });
+    }
+
+    return res.json({ ok: true, providerMessageId: result.data?.id || null, communication: row });
   } catch (err) {
     console.error('[admin-contact-reply:send]', err);
+    if (reply && messageRow && isBookingUuidParam(id)) {
+      try {
+        await logOutboxCommunication({
+          customerMessageId: id,
+          customerName: messageRow.full_name || null,
+          adminUserId: adminUser.id,
+          to: reply.to,
+          subject: reply.subject,
+          message: reply.message,
+          messageType: 'admin_reply',
+          status: 'failed',
+          errorMessage: err.message || 'Could not send reply.',
+        });
+      } catch (logErr) {
+        console.error('[admin-contact-reply:send:log-failed]', logErr);
+      }
+    }
     return res.status(err.statusCode || 500).json({ error: err.message || 'Could not send reply.' });
   }
 });

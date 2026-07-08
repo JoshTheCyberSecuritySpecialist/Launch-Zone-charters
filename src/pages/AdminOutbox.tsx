@@ -9,7 +9,8 @@ import { env } from '../config/env.js';
 
 type OutboxRow = {
   id: string;
-  booking_id: string;
+  booking_id: string | null;
+  customer_message_id?: string | null;
   customer_name: string;
   customer_email: string | null;
   channel: 'email' | 'sms';
@@ -18,6 +19,7 @@ type OutboxRow = {
   subject: string | null;
   body?: string | null;
   status: string;
+  provider?: string | null;
   sent_by: string | null;
   sent_at: string | null;
   created_at: string;
@@ -178,7 +180,7 @@ export default function AdminOutbox() {
             <Logo variant="admin" />
             <div>
               <h1 className="text-3xl font-bold">Communications Outbox</h1>
-              <p className="text-sm text-slate-400">Every booking email and SMS sent from the website</p>
+              <p className="text-sm text-slate-400">Booking emails, SMS, and contact inbox replies logged from admin</p>
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -250,7 +252,15 @@ export default function AdminOutbox() {
                   <tr key={row.id} className={row.reviewed_at ? 'bg-white' : 'bg-amber-50/40'}>
                     <td className="whitespace-nowrap px-4 py-4 font-semibold">{dateTime(row.sent_at || row.created_at)}</td>
                     <td className="px-4 py-4">{row.customer_name}<div className="text-xs text-slate-500">{row.customer_email}</div></td>
-                    <td className="px-4 py-4"><Link to={`/admin/bookings/${row.booking_id}`} className="font-bold text-amber-700 underline">Open Booking</Link></td>
+                    <td className="px-4 py-4">
+                      {row.booking_id ? (
+                        <Link to={`/admin/bookings/${row.booking_id}`} className="font-bold text-amber-700 underline">Open Booking</Link>
+                      ) : row.customer_message_id ? (
+                        <Link to="/admin#contact-inbox" className="font-bold text-amber-700 underline">Contact Inbox</Link>
+                      ) : (
+                        <span className="text-slate-500">—</span>
+                      )}
+                    </td>
                     <td className="px-4 py-4 uppercase">{row.channel}</td>
                     <td className="px-4 py-4 capitalize">{label(row.message_type)}</td>
                     <td className="max-w-[220px] break-all px-4 py-4">{row.recipient}</td>
@@ -298,7 +308,11 @@ export default function AdminOutbox() {
             <div className="mt-6 grid gap-2 sm:grid-cols-3">
               <button type="button" onClick={() => setSelected(null)} className="rounded-xl border px-5 py-4 text-lg font-black">Close</button>
               <button type="button" onClick={() => void resendMessage(selected)} disabled={busyId === selected.id} className="rounded-xl bg-green-700 px-5 py-4 text-lg font-black text-white disabled:opacity-50">Resend</button>
-              <Link to={`/admin/bookings/${selected.booking_id}`} className="rounded-xl bg-amber-600 px-5 py-4 text-center text-lg font-black text-white">Open Booking</Link>
+              {selected.booking_id ? (
+                <Link to={`/admin/bookings/${selected.booking_id}`} className="rounded-xl bg-amber-600 px-5 py-4 text-center text-lg font-black text-white">Open Booking</Link>
+              ) : (
+                <Link to="/admin#contact-inbox" className="rounded-xl bg-amber-600 px-5 py-4 text-center text-lg font-black text-white">Contact Inbox</Link>
+              )}
             </div>
           </div>
         </div>

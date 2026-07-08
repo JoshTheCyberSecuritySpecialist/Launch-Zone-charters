@@ -2673,7 +2673,7 @@ export default function Admin({ onNavigate }: AdminProps) {
           </div>
         </div>
 
-        <div className="mb-8 overflow-hidden rounded-xl border border-slate-200 bg-white shadow">
+        <div id="contact-inbox" className="mb-8 overflow-hidden rounded-xl border border-slate-200 bg-white shadow">
           <div className="border-b border-slate-100 px-4 py-3">
             <div className="flex flex-wrap items-center gap-2">
               <Mail className="h-5 w-5 text-amber-600" aria-hidden />

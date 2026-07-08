@@ -28,6 +28,11 @@ import Spinner from '../components/Spinner';
 import SafeImage from '../components/SafeImage';
 import { getBoatPlaceholderImage } from '../lib/boatPlaceholders';
 import { env } from '../config/env.js';
+import {
+  CHARTER_MAX_PASSENGERS,
+  CHARTER_MIN_PASSENGERS,
+  validateCharterPassengerCount,
+} from '../lib/charterCapacity';
 import { beginAsyncInteraction, measurePaintAfterSync, wrapSyncClick } from '../lib/clickPerf';
 import {
   buildTileLines,
@@ -604,7 +609,6 @@ export default function BookNow({ onNavigate }: BookNowProps) {
   const BIO_SHARED_PER_PERSON = 150;
   const ROCKET_SHARED_PER_PERSON = 85;
   const SUNSET_SHARED_PER_PERSON = 75;
-  const BIO_SHARED_MAX_GUESTS = 6;
 
   const isBioCharter = bookingMode === 'charter' && bookingData.charterType === 'night_bio';
   const isRocketCharter = bookingMode === 'charter' && bookingData.charterType === 'rocket_launch';
@@ -619,7 +623,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
   })();
   const sharedTourOverLimit =
     bookingMode === 'charter' &&
-    (bookingData.passengerCount < 1 || bookingData.passengerCount > BIO_SHARED_MAX_GUESTS);
+    (bookingData.passengerCount < CHARTER_MIN_PASSENGERS || bookingData.passengerCount > CHARTER_MAX_PASSENGERS);
   const sharedHoursUntilTrip = (() => {
     if (!bookingData.date) return Number.POSITIVE_INFINITY;
     const [y, m, d] = bookingData.date.split('-').map(Number);
@@ -1064,7 +1068,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
   };
 
   const calculateCharterPricing = () => {
-    const guests = Math.min(BIO_SHARED_MAX_GUESTS, Math.max(1, Number(bookingData.passengerCount) || 1));
+    const guests = Math.min(CHARTER_MAX_PASSENGERS, Math.max(CHARTER_MIN_PASSENGERS, Number(bookingData.passengerCount) || 1));
     const ticketPrice = sharedTourPerPerson;
     const total = Number((guests * ticketPrice).toFixed(2));
     return {
@@ -1267,10 +1271,13 @@ export default function BookNow({ onNavigate }: BookNowProps) {
       checkoutPerf.end('aborted_no_time');
       return;
     }
-    if (bookingMode === 'charter' && (bookingData.passengerCount < 1 || bookingData.passengerCount > BIO_SHARED_MAX_GUESTS)) {
-      setCheckoutError('Select number of guests.');
-      checkoutPerf.end('aborted_guest_count');
-      return;
+    if (bookingMode === 'charter') {
+      const passengerValidation = validateCharterPassengerCount(bookingData.passengerCount);
+      if (!passengerValidation.valid) {
+        setCheckoutError(passengerValidation.error);
+        checkoutPerf.end('aborted_guest_count');
+        return;
+      }
     }
     if (!bookingData.date || !bookingData.fullName || !bookingData.email || !bookingData.phone) {
       alert('Please complete your contact information and trip date.');
@@ -1280,7 +1287,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
 
     if (bookingMode === 'charter' && sharedTourOverLimit) {
       setCheckoutError(
-        `Shared bookings are limited to ${BIO_SHARED_MAX_GUESTS} guests per reservation.`
+        `Charter bookings are limited to ${CHARTER_MAX_PASSENGERS} passengers per reservation.`
       );
       checkoutPerf.end('aborted_shared_limit');
       return;
@@ -1390,9 +1397,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
               charterVariant: bookingMode === 'charter' ? bookingData.charterVariant : null,
               passengerCount:
                 bookingMode === 'charter'
-                  ? bookingData.charterVariant === 'shared'
-                    ? Math.min(BIO_SHARED_MAX_GUESTS, Math.max(1, Number(bookingData.passengerCount) || 1))
-                    : Math.min(6, Math.max(1, Number(bookingData.passengerCount) || 1))
+                  ? Math.min(CHARTER_MAX_PASSENGERS, Math.max(CHARTER_MIN_PASSENGERS, Number(bookingData.passengerCount) || 1))
                   : 1,
               special_requests:
                 bookingMode === 'charter'
@@ -1669,7 +1674,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
             {showNeutralChooser
               ? 'Choose a captain-led charter or a self-drive rental, then pick your boat and schedule. Charters and rentals use different pricing and requirements — your selections below set the right path.'
               : bookingMode === 'charter'
-                ? 'Choose your charter experience, date, time, and guests, then check out. Captain & fuel included; no security deposit.'
+                ? 'Choose your charter experience, date, time, and passengers, then check out. Captain & fuel included; no security deposit.'
                 : 'Pick your boat and schedule, add options, then check out with Stripe: today you pay 50% of your reservation total (which includes the refundable $300 security deposit). After checkout we verify compliance details and approvals.'}
           </p>
           <p className="mx-auto mt-3 max-w-2xl text-xs leading-snug text-slate-500 md:text-sm">
@@ -1872,7 +1877,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                 </h2>
                 <p className="mt-2 text-sm text-slate-400">
                   {bookingMode === 'charter'
-                    ? 'Choose date, time, and guests for your charter.'
+                    ? 'Choose date, time, and passengers for your charter.'
                     : 'Select a vessel, rental length, and when you want to go.'}
                 </p>
 
@@ -2160,10 +2165,10 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                       </div>
                       <div>
                         <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-400">
-                          Select number of guests
+                          Select number of passengers
                         </label>
                         <div className="flex flex-wrap gap-2">
-                          {[1, 2, 3, 4, 5, 6].map((count) => (
+                          {[1, 2, 3, 4, 5].map((count) => (
                             <button
                               key={count}
                               type="button"
@@ -2177,7 +2182,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                           ))}
                         </div>
                         <p className="mt-2 text-xs text-slate-400">
-                          ${sharedTourPerPerson.toFixed(2)} per ticket · max 6 guests.
+                          ${sharedTourPerPerson.toFixed(2)} per ticket · up to {CHARTER_MAX_PASSENGERS} passengers.
                         </p>
                       </div>
                     </div>
@@ -2434,7 +2439,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                       bookingData.date &&
                       (bookingData.time || bookingData.slotStartIso) &&
                       bookingData.passengerCount >= 1 &&
-                      bookingData.passengerCount <= BIO_SHARED_MAX_GUESTS &&
+                      bookingData.passengerCount <= CHARTER_MAX_PASSENGERS &&
                       !dateMarkedUnavailable &&
                       !noSlotsForDay;
                     const canContinueRental = bookingMode === 'rental' && selectedBoat && bookingData.date && !scheduleContinueBlocked;
@@ -2447,7 +2452,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                       ? !bookingData.date ||
                         (!bookingData.time && !bookingData.slotStartIso) ||
                         bookingData.passengerCount < 1 ||
-                        bookingData.passengerCount > BIO_SHARED_MAX_GUESTS ||
+                        bookingData.passengerCount > CHARTER_MAX_PASSENGERS ||
                         dateMarkedUnavailable ||
                         noSlotsForDay ||
                         availTimesLoading
@@ -2537,7 +2542,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                     <CharterPrivateSharedTourBlock
                       sectionTitle="Bioluminescence: private or shared"
                       perPerson={BIO_SHARED_PER_PERSON}
-                      maxSharedGuests={BIO_SHARED_MAX_GUESTS}
+                      maxSharedGuests={CHARTER_MAX_PASSENGERS}
                       sharedOpenWindow={sharedOpenWindow}
                       bookingData={bookingData}
                       setBookingData={setBookingData}
@@ -2552,7 +2557,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                     <CharterPrivateSharedTourBlock
                       sectionTitle="ROCKET LAUNCH: PRIVATE OR SHARED"
                       perPerson={ROCKET_SHARED_PER_PERSON}
-                      maxSharedGuests={BIO_SHARED_MAX_GUESTS}
+                      maxSharedGuests={CHARTER_MAX_PASSENGERS}
                       sharedOpenWindow={sharedOpenWindow}
                       bookingData={bookingData}
                       setBookingData={setBookingData}
@@ -2567,7 +2572,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                     <CharterPrivateSharedTourBlock
                       sectionTitle="Sunset cruise: private or shared"
                       perPerson={SUNSET_SHARED_PER_PERSON}
-                      maxSharedGuests={BIO_SHARED_MAX_GUESTS}
+                      maxSharedGuests={CHARTER_MAX_PASSENGERS}
                       sharedOpenWindow={sharedOpenWindow}
                       bookingData={bookingData}
                       setBookingData={setBookingData}
@@ -2884,7 +2889,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                     {bookingMode === 'charter' ? (
                       <div className="flex justify-between text-slate-300">
                         <span>
-                          ${sharedTourPerPerson} × {bookingData.passengerCount} guests/tickets
+                          ${sharedTourPerPerson} × {bookingData.passengerCount} passengers
                         </span>
                         <span>${pricing.total.toFixed(2)}</span>
                       </div>
@@ -3130,7 +3135,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                   <span className="text-emerald-400" aria-hidden>
                     ✔
                   </span>
-                  Up to 6 guests
+                  Up to {CHARTER_MAX_PASSENGERS} passengers
                 </li>
                 <li className="flex gap-2">
                   <span className="text-emerald-400" aria-hidden>

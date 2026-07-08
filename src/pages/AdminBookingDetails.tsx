@@ -6,6 +6,11 @@ import { useAuth } from '../contexts/useAuth';
 import FullPageLoader from '../components/FullPageLoader';
 import Logo from '../components/ui/Logo';
 import { env } from '../config/env.js';
+import {
+  CHARTER_MAX_PASSENGERS,
+  adminCharterCapacityLines,
+  validateCharterPassengerCount,
+} from '../lib/charterCapacity';
 
 type BoatRow = { id: string; name: string; type?: string | null };
 type TimelineEvent = { id: string; event_type: string; message: string | null; created_at: string };
@@ -448,6 +453,13 @@ export default function AdminBookingDetails() {
       setNotice({ variant: 'error', text: 'Conflict detected. Choose another boat or time before saving.' });
       return;
     }
+    if (form.bookingType === 'captain_charter') {
+      const validation = validateCharterPassengerCount(form.passengers);
+      if (!validation.valid) {
+        setNotice({ variant: 'error', text: validation.error });
+        return;
+      }
+    }
     setSaving(true);
     try {
       const res = await authedFetch(`/api/admin/bookings/${id}`, {
@@ -738,7 +750,31 @@ export default function AdminBookingDetails() {
                 <label className={labelClass}>Start Time<input className={inputClass} type="time" value={form.startTime || ''} onChange={(e) => setField('startTime', e.target.value)} /></label>
                 <label className={labelClass}>End Time<input className={inputClass} type="time" value={form.endTime || ''} onChange={(e) => setField('endTime', e.target.value)} /></label>
                 <label className={labelClass}>Duration<input className={inputClass} type="number" step="0.5" value={form.duration || ''} onChange={(e) => setField('duration', e.target.value)} /></label>
-                <label className={labelClass}>Passengers<input className={inputClass} type="number" min="1" value={form.passengers || ''} onChange={(e) => setField('passengers', e.target.value)} /></label>
+                <label className={labelClass}>
+                  Passengers
+                  <input
+                    className={inputClass}
+                    type="number"
+                    min="1"
+                    max={form.bookingType === 'captain_charter' ? CHARTER_MAX_PASSENGERS : undefined}
+                    value={form.passengers || ''}
+                    onChange={(e) => setField('passengers', e.target.value)}
+                  />
+                </label>
+                {form.bookingType === 'captain_charter' ? (
+                  <div className="rounded-lg bg-purple-50 p-3 text-sm font-semibold text-purple-950 sm:col-span-2">
+                    {(() => {
+                      const lines = adminCharterCapacityLines(form.passengers || 1);
+                      return (
+                        <>
+                          <div>{lines.passengerLine}</div>
+                          <div>{lines.captainLine}</div>
+                          <div>{lines.totalLine}</div>
+                        </>
+                      );
+                    })()}
+                  </div>
+                ) : null}
                 <label className={`${labelClass} sm:col-span-2`}>Booking Source<select className={inputClass} value={form.source || ''} onChange={(e) => setField('source', e.target.value)}>{sourceOptions.map((s) => <option key={s} value={s}>{s}</option>)}</select></label>
               </div>
               <div className="mt-4 text-sm font-bold">

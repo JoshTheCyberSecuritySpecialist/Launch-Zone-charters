@@ -6,6 +6,7 @@ import { useAuth } from '../contexts/useAuth';
 import FullPageLoader from '../components/FullPageLoader';
 import Logo from '../components/ui/Logo';
 import { env } from '../config/env.js';
+import { adminCharterCapacityLines, isCaptainLedCharter } from '../lib/charterCapacity';
 
 type CalendarView = 'day' | 'week' | 'month';
 
@@ -28,6 +29,7 @@ type CalendarBooking = {
   rental_location: string | null;
   booking_type: string | null;
   charter_type: string | null;
+  guest_count?: number | null;
   total_price?: number | string | null;
   staff_notes?: string | null;
 };
@@ -245,6 +247,18 @@ function cardClass(booking: CalendarBooking) {
 function sourceLabel(booking: CalendarBooking) {
   if (booking.staff_created || booking.booking_source === 'admin') return 'Staff';
   return booking.booking_source || 'Website';
+}
+
+function charterCapacityBlock(booking: CalendarBooking, compact = false) {
+  if (!isCaptainLedCharter(booking)) return null;
+  const lines = adminCharterCapacityLines(booking.guest_count || 1);
+  return (
+    <div className={compact ? 'mt-0.5 space-y-0 text-[10px] leading-tight opacity-90' : 'mt-1 space-y-0.5 text-[11px] leading-snug'}>
+      <div>{lines.passengerLine}</div>
+      <div>{lines.captainLine}</div>
+      <div>{lines.totalLine}</div>
+    </div>
+  );
 }
 
 function intervalsOverlap(aStart: string, aEnd: string, bStart: string, bEnd: string) {
@@ -924,8 +938,11 @@ export default function AdminCalendar() {
           <div>{timeLabel(booking.start_time, booking.end_time)}</div>
           <div>{durationHours(booking.start_time, booking.end_time)} hr · {booking.status.replace(/_/g, ' ')}</div>
           <div>{String(booking.payment_status || 'pending').replace(/_/g, ' ')} · {sourceLabel(booking)}</div>
+          {charterCapacityBlock(booking)}
         </>
-      ) : null}
+      ) : (
+        charterCapacityBlock(booking, true)
+      )}
       <div
         draggable
         onClick={(event) => event.stopPropagation()}
@@ -1263,6 +1280,7 @@ export default function AdminCalendar() {
                         <div className="font-black">{timeLabel(booking.start_time, booking.end_time)}</div>
                         <div>{booking.customer_name}</div>
                         <div>{booking.boat_name}</div>
+                        {charterCapacityBlock(booking, true)}
                       </button>
                     ))
                   )}
@@ -1515,6 +1533,9 @@ export default function AdminCalendar() {
             <div className="border-b border-slate-100 pb-2">
               <div className="font-black">{quickMenu.booking.customer_name}</div>
               <div className="text-xs text-slate-500">{timeLabel(quickMenu.booking.start_time, quickMenu.booking.end_time)}</div>
+              {charterCapacityBlock(quickMenu.booking) ? (
+                <div className="mt-2 rounded-lg bg-slate-50 p-2 text-xs text-slate-700">{charterCapacityBlock(quickMenu.booking)}</div>
+              ) : null}
             </div>
             <label className="mt-3 block text-xs font-black uppercase tracking-wide text-slate-500">
               Reassign Boat

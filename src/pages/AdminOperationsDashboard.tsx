@@ -6,6 +6,7 @@ import { useAuth } from '../contexts/useAuth';
 import FullPageLoader from '../components/FullPageLoader';
 import Logo from '../components/ui/Logo';
 import { env } from '../config/env.js';
+import { adminCharterCapacityLines } from '../lib/charterCapacity';
 
 type OpsBooking = {
   id: string;
@@ -218,7 +219,23 @@ export default function AdminOperationsDashboard() {
                       <div>
                         <h3 className="text-lg font-black">{trip.customer_name}</h3>
                         <p className="text-sm text-slate-600">{trip.boat_name} · {trip.location || 'No location'} · {timeLabel(trip.start_time, trip.end_time)}</p>
-                        <p className="text-sm text-slate-600">{trip.passenger_count} passengers · {sourceLabel(trip.booking_source)}</p>
+                        {trip.booking_type === 'charter' ? (
+                          <div className="mt-1 text-sm text-slate-600">
+                            {(() => {
+                              const lines = adminCharterCapacityLines(trip.passenger_count);
+                              return (
+                                <>
+                                  <div>{lines.passengerLine}</div>
+                                  <div>{lines.captainLine}</div>
+                                  <div>{lines.totalLine}</div>
+                                </>
+                              );
+                            })()}
+                            <div className="mt-1">{sourceLabel(trip.booking_source)}</div>
+                          </div>
+                        ) : (
+                          <p className="text-sm text-slate-600">{trip.passenger_count} passengers · {sourceLabel(trip.booking_source)}</p>
+                        )}
                       </div>
                       <div className="flex flex-wrap gap-2">
                         <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-bold capitalize">{trip.payment_status.replace(/_/g, ' ')}</span>

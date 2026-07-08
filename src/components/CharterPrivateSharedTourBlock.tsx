@@ -65,7 +65,7 @@ export default function CharterPrivateSharedTourBlock<T extends BookingDataSlice
           <p className="font-semibold text-white">Private</p>
           <p className="mt-1 text-xs text-slate-300">
             {hasSelectedBoat
-              ? `Full charter total $${pricingTotal.toFixed(2)} · your boat only · up to 6 guests`
+              ? `Full charter total $${pricingTotal.toFixed(2)} · your boat only · up to 5 passengers`
               : 'Starting rates available · select a boat to see your final total'}
           </p>
         </button>
@@ -90,7 +90,7 @@ export default function CharterPrivateSharedTourBlock<T extends BookingDataSlice
         >
           <p className="font-semibold text-white">Shared</p>
           <p className="mt-1 text-xs text-slate-300">
-            ${perPerson} per person · shared seating limited to {maxSharedGuests} guests per booking
+            ${perPerson} per person · shared seating limited to {maxSharedGuests} passengers per booking
           </p>
           {!sharedOpenWindow && (
             <p className="mt-1 text-xs text-cyan-200/90">
@@ -102,18 +102,18 @@ export default function CharterPrivateSharedTourBlock<T extends BookingDataSlice
 
       <div className="mt-4">
         <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-400">
-          Guests
+          Passengers
         </label>
         <input
           type="number"
           min={1}
-          max={isShared ? maxSharedGuests : 6}
+          max={maxSharedGuests}
           value={bookingData.passengerCount}
           onChange={(e) =>
             setBookingData((prev) => ({
               ...prev,
               passengerCount: Math.min(
-                isShared ? maxSharedGuests : 6,
+                maxSharedGuests,
                 Math.max(1, parseInt(e.target.value, 10) || 1)
               ),
             }))
@@ -122,7 +122,7 @@ export default function CharterPrivateSharedTourBlock<T extends BookingDataSlice
         />
         {isShared && (
           <p className="mt-2 text-xs text-amber-300">
-            Shared bookings are limited to {maxSharedGuests} guests per reservation.
+            Shared bookings are limited to {maxSharedGuests} passengers per reservation.
           </p>
         )}
       </div>

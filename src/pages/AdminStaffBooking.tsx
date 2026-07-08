@@ -7,6 +7,7 @@ import FullPageLoader from '../components/FullPageLoader';
 import Logo from '../components/ui/Logo';
 import { env } from '../config/env.js';
 import { PRICING, captainFeeForHours } from '../config/pricing';
+import { CHARTER_MAX_PASSENGERS, validateCharterPassengerCount } from '../lib/charterCapacity';
 
 type BookingType = 'rental' | 'captain_charter';
 type LocationValue = 'Port Orange' | 'Titusville';
@@ -290,6 +291,13 @@ export default function AdminStaffBooking() {
       setNotice({ variant: 'error', text: 'This slot is already booked.' });
       return;
     }
+    if (form.bookingType === 'captain_charter') {
+      const validation = validateCharterPassengerCount(form.passengerCount);
+      if (!validation.valid) {
+        setNotice({ variant: 'error', text: validation.error });
+        return;
+      }
+    }
 
     setSaving(action);
     try {
@@ -306,7 +314,7 @@ export default function AdminStaffBooking() {
           date: form.date,
           startTime: form.startTime,
           durationHours,
-          passenger_count: form.passengerCount,
+          passenger_count: form.bookingType === 'captain_charter' ? form.passengerCount : 1,
           original_price: form.originalPrice,
           discount: form.discount,
           final_price: form.finalPrice,
@@ -453,10 +461,23 @@ export default function AdminStaffBooking() {
                   <input className={inputClass} type="number" min="0.5" step="0.5" value={form.customDuration} onChange={(e) => setForm((p) => ({ ...p, customDuration: e.target.value }))} />
                 </label>
               ) : null}
-              <label className={labelClass}>
-                Passenger Count
-                <input className={inputClass} type="number" min="1" step="1" value={form.passengerCount} onChange={(e) => setForm((p) => ({ ...p, passengerCount: e.target.value }))} />
-              </label>
+              {form.bookingType === 'captain_charter' ? (
+                <label className={labelClass}>
+                  Passengers
+                  <input
+                    className={inputClass}
+                    type="number"
+                    min="1"
+                    max={CHARTER_MAX_PASSENGERS}
+                    step="1"
+                    value={form.passengerCount}
+                    onChange={(e) => setForm((p) => ({ ...p, passengerCount: e.target.value }))}
+                  />
+                  <span className="mt-1 block text-xs font-normal text-slate-500">
+                    1–{CHARTER_MAX_PASSENGERS} passengers (plus captain).
+                  </span>
+                </label>
+              ) : null}
               <label className={labelClass}>
                 Original Price
                 <input className={inputClass} type="number" min="0" step="0.01" value={form.originalPrice} onChange={(e) => setForm((p) => ({ ...p, originalPrice: e.target.value, finalPrice: money(Math.max(0, Number(e.target.value || 0) - Number(p.discount || 0))) }))} />

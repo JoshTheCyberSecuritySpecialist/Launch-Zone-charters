@@ -32,6 +32,7 @@ const { getWeeklyForecast } = require('./services/weeklyForecastService');
 const { getMarineConditions } = require('./services/marineConditionsService');
 const availabilityService = require('./services/availabilityService');
 const captainCharterAvailability = require('./services/captainCharterAvailability');
+const charterCapacity = require('./charterCapacity');
 const {
   applyPromoToExpectedTotals,
   incrementPromoUsage,
@@ -53,8 +54,11 @@ if (stripeSecret) {
 }
 const app = express();
 const PORT = process.env.PORT || 3001;
-const BIO_SHARED_MIN_GUESTS = 1;
-const BIO_SHARED_MAX_GUESTS = 6;
+const {
+  isCaptainLedCharter,
+  validateCharterPassengerCount,
+  clampCharterPassengerCount,
+} = charterCapacity;
 const BIO_SHARED_PER_PERSON = 150;
 const ROCKET_SHARED_PER_PERSON = 85;
 const SUNSET_SHARED_PER_PERSON = 75;
@@ -126,7 +130,7 @@ function computeExpectedBookingTotals({
 
   if (bookingMode === 'charter') {
     const charterDurationHours = 1;
-    const guests = Math.min(BIO_SHARED_MAX_GUESTS, Math.max(BIO_SHARED_MIN_GUESTS, Number(passengerCount) || 1));
+    const guests = clampCharterPassengerCount(passengerCount);
     const ticketPrice =
       charterType === 'bio'
         ? BIO_SHARED_PER_PERSON
@@ -804,8 +808,19 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
   const charterVariant =
     typeof booking.charterVariant === 'string' ? booking.charterVariant.trim().toLowerCase() : '';
   const passengerCountRaw = Number(booking.passengerCount);
-  const passengerCount = Number.isFinite(passengerCountRaw) ? Math.max(1, Math.round(passengerCountRaw)) : 1;
+  let passengerCount = Number.isFinite(passengerCountRaw) ? Math.max(1, Math.round(passengerCountRaw)) : NaN;
   const isCharterBooking = bookingMode === 'charter';
+  if (isCharterBooking) {
+    const validation = validateCharterPassengerCount(passengerCount);
+    if (!validation.valid) {
+      const err = new Error(validation.error);
+      err.statusCode = 400;
+      throw err;
+    }
+    passengerCount = validation.count;
+  } else {
+    passengerCount = 1;
+  }
 
   let boatRow = null;
   if (!isCharterBooking) {
@@ -873,20 +888,11 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
       : Number(booking.deposit_amount || 0);
   const paymentStatus = paidDeposit >= expected.totalPrice ? 'paid' : 'deposit_paid';
 
-  const sharedGuestOutOfRange =
-    ['bio', 'rocket', 'sunset'].includes(charterType) &&
-    (passengerCount < BIO_SHARED_MIN_GUESTS || passengerCount > BIO_SHARED_MAX_GUESTS);
-
   const adminNotesParts = [];
   if (bookingMode) adminNotesParts.push(`Booking mode: ${bookingMode}`);
   if (charterType) adminNotesParts.push(`Charter type: ${charterType}`);
   if (charterVariant) adminNotesParts.push(`Charter variant: ${charterVariant}`);
   adminNotesParts.push(`Passenger count: ${passengerCount}`);
-  if (sharedGuestOutOfRange) {
-    adminNotesParts.push(
-      `Shared tour guest count out of range (${BIO_SHARED_MIN_GUESTS}-${BIO_SHARED_MAX_GUESTS}): ${passengerCount}`
-    );
-  }
   if (booking.special_requests) {
     adminNotesParts.push(`Special requests: ${String(booking.special_requests).trim()}`);
   }
@@ -1742,7 +1748,12 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
       ? 'captain_charter'
       : 'rental';
     const location = cleanText(body.rental_location || body.location, 80);
-    const passengerCount = Math.max(1, Math.floor(Number(body.passenger_count || body.passengerCount || 1) || 1));
+    let passengerCount = Math.max(1, Math.floor(Number(body.passenger_count || body.passengerCount || 1) || 1));
+    if (bookingType === 'captain_charter') {
+      const validation = validateCharterPassengerCount(passengerCount);
+      if (!validation.valid) return res.status(400).json({ error: validation.error });
+      passengerCount = validation.count;
+    }
     const durationHours = parseStaffDuration(body.duration_hours ?? body.durationHours);
     const times = staffBookingTimes(body);
 
@@ -2656,7 +2667,7 @@ function bookingDetailUpdateFromBody(body) {
     out.charter_type = bookingType === 'captain_charter' ? 'captain_charter' : null;
     out.captain_included = bookingType === 'captain_charter';
   }
-  const guestCount = Number(body.guest_count ?? body.passengerCount);
+  const guestCount = Number(body.guest_count ?? body.passengerCount ?? body.passengers);
   if (Number.isFinite(guestCount) && guestCount > 0) out.guest_count = Math.floor(guestCount);
   return out;
 }
@@ -2684,7 +2695,7 @@ app.patch('/api/admin/bookings/:id', async (req, res) => {
     if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid booking id.' });
     const { data: existing, error: existingError } = await supabase
       .from('bookings')
-      .select('id, customer_id, boat_id, start_time, end_time, status')
+      .select('id, customer_id, boat_id, start_time, end_time, status, booking_type, guest_count')
       .eq('id', id)
       .maybeSingle();
     if (existingError) throw existingError;
@@ -2704,6 +2715,17 @@ app.patch('/api/admin/bookings/:id', async (req, res) => {
     }
 
     const update = bookingDetailUpdateFromBody(body.booking || body);
+    const nextBookingType = update.booking_type || existing.booking_type;
+    if (isCaptainLedCharter(nextBookingType)) {
+      const guestCount = Object.prototype.hasOwnProperty.call(update, 'guest_count')
+        ? update.guest_count
+        : existing.guest_count;
+      const validation = validateCharterPassengerCount(guestCount);
+      if (!validation.valid) return res.status(400).json({ error: validation.error });
+      if (Object.prototype.hasOwnProperty.call(update, 'guest_count')) {
+        update.guest_count = validation.count;
+      }
+    }
     const nextBoatId = cleanText(body.boat_id || body.boatId || body.booking?.boat_id || body.booking?.boatId, 80) || existing.boat_id;
     const nextStart = cleanText(body.start_time || body.startTime || body.booking?.start_time || body.booking?.startTime, 80) || existing.start_time;
     const nextEnd = cleanText(body.end_time || body.endTime || body.booking?.end_time || body.booking?.endTime, 80) || existing.end_time;
@@ -4412,16 +4434,15 @@ app.post('/api/create-checkout-session', async (req, res) => {
       });
     }
 
-    const passengerCountRaw = Number(booking.passengerCount);
-    const passengerCount = Number.isFinite(passengerCountRaw) ? Math.max(1, Math.round(passengerCountRaw)) : 1;
-    if (
-      isCharterBooking &&
-      ['bio', 'rocket', 'sunset'].includes(charterType) &&
-      (passengerCount < BIO_SHARED_MIN_GUESTS || passengerCount > BIO_SHARED_MAX_GUESTS)
-    ) {
-      return res.status(400).json({
-        error: `Select ${BIO_SHARED_MIN_GUESTS}-${BIO_SHARED_MAX_GUESTS} guests.`,
-      });
+    let passengerCount = Number.isFinite(passengerCountRaw) ? Math.max(1, Math.round(passengerCountRaw)) : NaN;
+    if (isCharterBooking) {
+      const validation = validateCharterPassengerCount(passengerCount);
+      if (!validation.valid) {
+        return res.status(400).json({ error: validation.error });
+      }
+      passengerCount = validation.count;
+    } else {
+      passengerCount = 1;
     }
 
     // Server-authoritative pricing: compute expected totals server-side.

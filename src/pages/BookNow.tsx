@@ -147,6 +147,19 @@ function buildSelectedStartDateTime({
   return new Date(parsedDate.year, parsedDate.month - 1, parsedDate.day + (rollToNextMorning ? 1 : 0), hour, minute);
 }
 
+function charterTypeForApi(charterType: CharterType): string {
+  if (charterType === 'night_bio') return 'bio';
+  if (charterType === 'sunset_cruise') return 'sunset';
+  return 'rocket';
+}
+
+function addDaysToYmd(ymd: string, days: number): string {
+  const parsed = parseYmd(ymd);
+  if (!parsed) return ymd;
+  const d = new Date(parsed.year, parsed.month - 1, parsed.day + days);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 interface Boat {
   id: string;
   name: string;
@@ -627,7 +640,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
 
   useEffect(() => {
     if (bookingMode !== 'rental' || !env.apiUrlConfigured || !env.apiUrl || !selectedBoat?.id) {
-      setAvailabilityByDate(new Map());
+      if (bookingMode === 'rental') setAvailabilityByDate(new Map());
       return;
     }
     const ac = new AbortController();
@@ -666,6 +679,43 @@ export default function BookNow({ onNavigate }: BookNowProps) {
       });
     return () => ac.abort();
   }, [bookingMode, selectedBoat?.id, durationHoursForAvailability, env.apiUrl, env.apiUrlConfigured]);
+
+  useEffect(() => {
+    if (bookingMode !== 'charter' || !env.apiUrlConfigured || !env.apiUrl) {
+      return;
+    }
+    const ac = new AbortController();
+    setAvailCalendarLoading(true);
+    const monthStart = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), 1);
+    const monthEnd = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 0);
+    const from = `${monthStart.getFullYear()}-${String(monthStart.getMonth() + 1).padStart(2, '0')}-${String(monthStart.getDate()).padStart(2, '0')}`;
+    const to = `${monthEnd.getFullYear()}-${String(monthEnd.getMonth() + 1).padStart(2, '0')}-${String(monthEnd.getDate()).padStart(2, '0')}`;
+    const q = new URLSearchParams({
+      from,
+      to,
+      charterType: charterTypeForApi(bookingData.charterType),
+    });
+    fetch(`${env.apiUrl}/api/availability/charter?${q.toString()}`, { signal: ac.signal })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error('charter calendar'))))
+      .then((data: { dates?: { date: string; available: boolean; slotsRemaining?: number }[] }) => {
+        const m = new Map<string, CalendarDayAvailability>();
+        for (const row of data.dates || []) {
+          m.set(row.date, {
+            available: row.available,
+            boatsRemaining: row.slotsRemaining,
+            totalBoats: row.slotsRemaining,
+          });
+        }
+        setAvailabilityByDate(m);
+      })
+      .catch(() => {
+        if (!ac.signal.aborted) setAvailabilityByDate(new Map());
+      })
+      .finally(() => {
+        if (!ac.signal.aborted) setAvailCalendarLoading(false);
+      });
+    return () => ac.abort();
+  }, [bookingMode, bookingData.charterType, calendarMonth, env.apiUrl, env.apiUrlConfigured]);
 
   useEffect(() => {
     const cached = calendarIntelCacheRef.current;
@@ -814,21 +864,83 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     rentalDurationPreset,
   ]);
 
+  useEffect(() => {
+    if (bookingMode !== 'charter' || !env.apiUrlConfigured || !env.apiUrl || !bookingData.date) {
+      if (bookingMode === 'charter') {
+        setTimeSlots([]);
+        setTimesManualFallback(false);
+      }
+      return;
+    }
+    const ac = new AbortController();
+    setAvailTimesLoading(true);
+    setTimesManualFallback(false);
+    const charterType = charterTypeForApi(bookingData.charterType);
+    const fetchDay = (date: string) => {
+      const q = new URLSearchParams({ date, charterType });
+      return fetch(`${env.apiUrl}/api/availability/charter/times?${q.toString()}`, { signal: ac.signal })
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error('charter times'))))
+        .then((data: { slots?: ApiTimeSlot[] }) => data.slots || []);
+    };
+    const nextDate = addDaysToYmd(bookingData.date, 1);
+    const load =
+      bookingData.charterType === 'night_bio'
+        ? Promise.all([fetchDay(bookingData.date), fetchDay(nextDate)])
+        : fetchDay(bookingData.date).then((slots) => [slots, [] as ApiTimeSlot[]]);
+
+    load
+      .then(([todaySlots, tomorrowSlots]) => {
+        const merged = [...todaySlots];
+        for (const slot of tomorrowSlots) {
+          const hour = Number(String(slot.startHHMM || '').slice(0, 2));
+          if (Number.isFinite(hour) && hour >= 0 && hour <= 4) merged.push(slot);
+        }
+        setTimeSlots(merged);
+        if (merged.length > 0) {
+          setBookingData((prev) => {
+            const still =
+              Boolean(prev.slotStartIso) && merged.some((s) => s.start === prev.slotStartIso);
+            const stillTime =
+              Boolean(prev.time) &&
+              merged.some((s) => s.startHHMM === prev.time || s.start === prev.slotStartIso);
+            const pick = still && prev.slotStartIso ? prev.slotStartIso : stillTime ? prev.slotStartIso : merged[0].start;
+            const slot = merged.find((s) => s.start === pick) || merged.find((s) => s.startHHMM === prev.time) || merged[0];
+            return {
+              ...prev,
+              slotStartIso: slot.start,
+              time: slot.startHHMM || prev.time,
+            };
+          });
+        } else {
+          setBookingData((prev) => ({ ...prev, slotStartIso: '', time: '' }));
+        }
+      })
+      .catch(() => {
+        if (!ac.signal.aborted) {
+          setTimeSlots([]);
+          setTimesManualFallback(true);
+          setBookingData((prev) => ({ ...prev, slotStartIso: '' }));
+        }
+      })
+      .finally(() => {
+        if (!ac.signal.aborted) setAvailTimesLoading(false);
+      });
+    return () => ac.abort();
+  }, [bookingMode, bookingData.date, bookingData.charterType, env.apiUrl, env.apiUrlConfigured]);
+
   const todayYmdLocal = ymdInTimezone(BUSINESS_TIMEZONE);
   const apiAvailEnabled = env.apiUrlConfigured && Boolean(env.apiUrl);
   const dateMarkedUnavailable =
-    bookingMode === 'rental' &&
     availabilityByDate.size > 0 &&
     Boolean(bookingData.date) &&
     isDayMarkedUnavailable(availabilityByDate, bookingData.date);
   const noSlotsForDay =
-    bookingMode === 'rental' &&
     apiAvailEnabled &&
     !availTimesLoading &&
     !timesManualFallback &&
     timeSlots.length === 0 &&
     Boolean(bookingData.date) &&
-    Boolean(selectedBoat);
+    (bookingMode === 'rental' ? Boolean(selectedBoat) : bookingMode === 'charter');
   const isBookingToday = Boolean(bookingData.date) && bookingData.date === todayYmdLocal;
   const rentalContinueNeedsPreset = bookingMode === 'rental' && rentalDurationPreset === null;
   const rentalContinueWaitingTimes =
@@ -851,7 +963,13 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     rentalContinueWaitingTimes ||
     rentalContinueNeedsSlot ||
     dateMarkedUnavailable ||
-    noSlotsForDay;
+    noSlotsForDay ||
+    (bookingMode === 'charter' &&
+      apiAvailEnabled &&
+      !timesManualFallback &&
+      Boolean(bookingData.date) &&
+      !bookingData.time &&
+      !bookingData.slotStartIso);
 
   const CHARTER_EXPERIENCE_LABEL: Record<CharterType, string> = {
     rocket_launch: 'Rocket launch charter',
@@ -1420,7 +1538,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     trackEvent?: string;
   }) => {
     const past = iso < todayYmdLocal;
-    const calKnown = bookingMode === 'rental' && availabilityByDate.size > 0;
+    const calKnown = availabilityByDate.size > 0;
     const dayAvail = availabilityByDate.get(iso);
     const open = calKnown
       ? typeof dayAvail === 'boolean'
@@ -1507,6 +1625,10 @@ export default function BookNow({ onNavigate }: BookNowProps) {
       </button>
     );
   };
+
+  const charterTimesFromApi =
+    bookingMode === 'charter' && apiAvailEnabled && !availTimesLoading && !timesManualFallback;
+  const availableCharterTimes = new Set(timeSlots.map((slot) => slot.startHHMM));
 
   const urgencyHint =
     bookingMode === 'charter' &&
@@ -1977,21 +2099,35 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                         )}
                         <div className="flex flex-wrap gap-3">
                           {charterTimeOptions.map((time) => {
+                            const slot = timeSlots.find((row) => row.startHHMM === time);
+                            const available = !charterTimesFromApi || availableCharterTimes.has(time);
                             const slotLabel = isBioCharter && isNextMorningBioStart(bookingData.charterType, time)
                               ? `${timeLabelFromHHMM(time)} next morning`
                               : timeLabelFromHHMM(time);
-                            const active = bookingData.time === time && !bookingData.slotStartIso;
+                            const active =
+                              (bookingData.time === time && !bookingData.slotStartIso) ||
+                              Boolean(slot && bookingData.slotStartIso === slot.start);
                             return (
                               <button
                                 key={time}
                                 type="button"
+                                disabled={!available}
                                 onClick={() => {
+                                  if (!available) return;
                                   const t0 = performance.now();
-                                  setBookingData({ ...bookingData, time, slotStartIso: '' });
+                                  setBookingData({
+                                    ...bookingData,
+                                    time,
+                                    slotStartIso: slot?.start || '',
+                                  });
                                   measurePaintAfterSync('booknow_charter_time_slot', t0, performance.now());
                                 }}
                                 className={`min-h-[48px] min-w-[5.5rem] rounded-xl border px-4 py-3 text-sm font-semibold transition ${
-                                  active ? bookingSlotChipActive : `border ${bookingChoiceIdle}`
+                                  !available
+                                    ? 'cursor-not-allowed border-transparent bg-slate-950/30 text-slate-600'
+                                    : active
+                                      ? bookingSlotChipActive
+                                      : `border ${bookingChoiceIdle}`
                                 }`}
                               >
                                 {slotLabel}
@@ -1999,6 +2135,14 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                             );
                           })}
                         </div>
+                        {charterTimesFromApi && availTimesLoading && (
+                          <p className="mt-2 text-xs text-slate-500">Checking captain availability…</p>
+                        )}
+                        {charterTimesFromApi && !availTimesLoading && bookingData.date && timeSlots.length === 0 && (
+                          <p className="mt-2 text-sm text-amber-200">
+                            No captain availability that night. Try another Friday or Saturday.
+                          </p>
+                        )}
                         {!isBioCharter && (
                           <div className="mt-3 max-w-xs">
                             <label className="mb-1 block text-xs text-slate-500">Custom time</label>
@@ -2288,9 +2432,11 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                     const canContinueCharter =
                       bookingMode === 'charter' &&
                       bookingData.date &&
-                      bookingData.time &&
+                      (bookingData.time || bookingData.slotStartIso) &&
                       bookingData.passengerCount >= 1 &&
-                      bookingData.passengerCount <= BIO_SHARED_MAX_GUESTS;
+                      bookingData.passengerCount <= BIO_SHARED_MAX_GUESTS &&
+                      !dateMarkedUnavailable &&
+                      !noSlotsForDay;
                     const canContinueRental = bookingMode === 'rental' && selectedBoat && bookingData.date && !scheduleContinueBlocked;
                     if (canContinueCharter || canContinueRental) {
                       setStep(bookingMode === 'charter' ? 3 : 2);
@@ -2299,9 +2445,12 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                   disabled={
                     bookingMode === 'charter'
                       ? !bookingData.date ||
-                        !bookingData.time ||
+                        (!bookingData.time && !bookingData.slotStartIso) ||
                         bookingData.passengerCount < 1 ||
-                        bookingData.passengerCount > BIO_SHARED_MAX_GUESTS
+                        bookingData.passengerCount > BIO_SHARED_MAX_GUESTS ||
+                        dateMarkedUnavailable ||
+                        noSlotsForDay ||
+                        availTimesLoading
                       : !selectedBoat || !bookingData.date || scheduleContinueBlocked
                   }
                   className={`${bookingPrimaryCta} mt-8 md:mt-10`}

@@ -75,6 +75,7 @@ type CalendarItemForm = {
   boatId: string;
   location: string;
   date: string;
+  endDate: string;
   startTime: string;
   endTime: string;
   allDay: boolean;
@@ -136,6 +137,7 @@ const blankItemForm = (itemType: 'blocked_time' | 'admin_duty', date = todayYmd(
   boatId: boatId || '',
   location: '',
   date,
+  endDate: date,
   startTime: `${pad(hour)}:00`,
   endTime: `${pad(Math.min(hour + 1, 23))}:00`,
   allDay: false,
@@ -560,6 +562,8 @@ export default function AdminCalendar() {
 
   const editItem = (item: CalendarItem) => {
     const start = new Date(item.start_time);
+    const end = new Date(item.end_time);
+    const endInclusive = item.all_day ? addDays(startOfDay(end), -1) : startOfDay(start);
     setItemMenu(null);
     setItemConflicts(null);
     setItemForm({
@@ -573,6 +577,7 @@ export default function AdminCalendar() {
       boatId: item.boat_id || '',
       location: item.location || '',
       date: ymd(start),
+      endDate: ymd(endInclusive),
       startTime: hhmmFromIso(item.start_time),
       endTime: hhmmFromIso(item.end_time),
       allDay: item.all_day,
@@ -588,8 +593,6 @@ export default function AdminCalendar() {
     setSavingItem(true);
     setItemConflicts(null);
     try {
-      const start = itemForm.allDay ? new Date(`${itemForm.date}T00:00`) : new Date(`${itemForm.date}T${itemForm.startTime}`);
-      const end = itemForm.allDay ? new Date(start.getTime() + 24 * 60 * 60 * 1000) : new Date(`${itemForm.date}T${itemForm.endTime}`);
       const body = {
         item_type: itemForm.itemType,
         title: itemForm.title,
@@ -598,8 +601,10 @@ export default function AdminCalendar() {
         assigned_to: itemForm.assignedTo,
         boat_id: itemForm.boatId || null,
         location: itemForm.location || null,
-        start_time: start.toISOString(),
-        end_time: end.toISOString(),
+        date: itemForm.date,
+        end_date: itemForm.endDate || itemForm.date,
+        start_time_local: itemForm.startTime,
+        end_time_local: itemForm.endTime,
         all_day: itemForm.allDay,
         blocks_availability: itemForm.itemType === 'blocked_time' ? true : itemForm.blocksAvailability,
         priority: itemForm.priority,
@@ -1207,8 +1212,19 @@ export default function AdminCalendar() {
                 <div>
                   <h3 className="text-2xl font-black">Step 2: When?</h3>
                   <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                    <label className="text-lg font-bold">Date<input type="date" value={itemForm.date} onChange={(e) => setItemForm((p) => p && { ...p, date: e.target.value })} className="mt-2 min-h-[54px] w-full rounded-xl border px-4 text-lg" /></label>
-                    <label className="flex items-center gap-3 text-lg font-bold"><input type="checkbox" checked={itemForm.allDay} onChange={(e) => setItemForm((p) => p && { ...p, allDay: e.target.checked })} className="h-6 w-6" /> All day</label>
+                    <label className="text-lg font-bold">Start Date<input type="date" value={itemForm.date} onChange={(e) => setItemForm((p) => p && { ...p, date: e.target.value, endDate: p.endDate < e.target.value ? e.target.value : p.endDate })} className="mt-2 min-h-[54px] w-full rounded-xl border px-4 text-lg" /></label>
+                    {itemForm.allDay ? (
+                      <label className="text-lg font-bold">End Date (inclusive)<input type="date" min={itemForm.date} value={itemForm.endDate} onChange={(e) => setItemForm((p) => p && { ...p, endDate: e.target.value })} className="mt-2 min-h-[54px] w-full rounded-xl border px-4 text-lg" /></label>
+                    ) : (
+                      <label className="text-lg font-bold">End Date<input type="date" disabled value={itemForm.date} className="mt-2 min-h-[54px] w-full rounded-xl border px-4 text-lg disabled:opacity-50" /></label>
+                    )}
+                    <label className="flex items-center gap-3 text-lg font-bold sm:col-span-2"><input type="checkbox" checked={itemForm.allDay} onChange={(e) => setItemForm((p) => p && { ...p, allDay: e.target.checked, endDate: p.endDate || p.date })} className="h-6 w-6" /> All day / multi-day block</label>
+                    {itemForm.itemType === 'blocked_time' && itemForm.allDay ? (
+                      <div className="flex flex-wrap gap-2 sm:col-span-2">
+                        <button type="button" onClick={() => setItemForm((p) => p && { ...p, endDate: ymd(addDays(new Date(`${p.date}T12:00:00`), 6)) })} className="rounded-lg bg-slate-200 px-4 py-3 text-sm font-bold text-slate-900">Block 1 week</button>
+                        <button type="button" onClick={() => setItemForm((p) => p && { ...p, endDate: ymd(addDays(new Date(`${p.date}T12:00:00`), 13)) })} className="rounded-lg bg-slate-200 px-4 py-3 text-sm font-bold text-slate-900">Block 2 weeks</button>
+                      </div>
+                    ) : null}
                     <label className="text-lg font-bold">Start Time<input type="time" disabled={itemForm.allDay} value={itemForm.startTime} onChange={(e) => setItemForm((p) => p && { ...p, startTime: e.target.value })} className="mt-2 min-h-[54px] w-full rounded-xl border px-4 text-lg disabled:opacity-50" /></label>
                     <label className="text-lg font-bold">End Time<input type="time" disabled={itemForm.allDay} value={itemForm.endTime} onChange={(e) => setItemForm((p) => p && { ...p, endTime: e.target.value })} className="mt-2 min-h-[54px] w-full rounded-xl border px-4 text-lg disabled:opacity-50" /></label>
                   </div>
@@ -1251,7 +1267,7 @@ export default function AdminCalendar() {
                   <div className="mt-4 rounded-xl bg-slate-100 p-4 text-lg">
                     <p><strong>Type:</strong> {itemForm.itemType === 'blocked_time' ? 'Blocked Time' : 'Admin Duty'}</p>
                     <p><strong>Title:</strong> {itemForm.title}</p>
-                    <p><strong>When:</strong> {itemForm.date} {itemForm.allDay ? 'All day' : `${itemForm.startTime} - ${itemForm.endTime}`}</p>
+                    <p><strong>When:</strong> {itemForm.allDay ? `${itemForm.date} – ${itemForm.endDate} (all day)` : `${itemForm.date} ${itemForm.startTime} - ${itemForm.endTime}`}</p>
                     <p><strong>Boat:</strong> {itemForm.boatId ? boats.find((boat) => boat.id === itemForm.boatId)?.name : 'All boats'}</p>
                     <p><strong>Location:</strong> {itemForm.location || 'All locations'}</p>
                     <p><strong>Blocks availability:</strong> {itemForm.itemType === 'blocked_time' || itemForm.blocksAvailability ? 'Yes' : 'No'}</p>

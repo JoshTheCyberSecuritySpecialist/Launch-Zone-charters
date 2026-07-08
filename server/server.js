@@ -164,7 +164,6 @@ const SLOT_TAKEN_USER_MESSAGE =
   'This time slot was just booked. Please select another time.';
 const SLOT_TOO_SOON_USER_MESSAGE =
   'This time is no longer available. Please choose a later time.';
-const BIO_NIGHT_CHARTER_START_HOURS = new Set([20, 21, 22, 23, 0, 1, 2, 3, 4]);
 
 function isOverlapConstraintError(err) {
   if (!err) return false;
@@ -189,27 +188,17 @@ function assertBookingLeadTime(startIso) {
   }
 }
 
-function assertCharterStartTimeAllowed(charterType, startIso) {
-  const local = DateTime.fromISO(String(startIso || ''), { zone: 'utc' }).setZone(availabilityService.BUSINESS_TZ);
-  if (!local.isValid) {
-    const err = new Error('Invalid charter start time.');
-    err.statusCode = 400;
-    throw err;
-  }
-  const type = String(charterType || '').trim().toLowerCase();
-  if (type === 'bio') {
-    if (local.minute !== 0 || !BIO_NIGHT_CHARTER_START_HOURS.has(local.hour)) {
-      const err = new Error('Bioluminescence night tours are available from 8:00 PM through 4:00 AM.');
-      err.statusCode = 400;
-      throw err;
-    }
-    return;
-  }
-  if (local.hour < 5) {
-    const err = new Error('Late-night times are only available for bioluminescence night tours.');
-    err.statusCode = 400;
-    throw err;
-  }
+function assertCharterStartTimeAllowed(charterType, startIso, endIso = null) {
+  const start = DateTime.fromISO(String(startIso || ''), { zone: 'utc' });
+  const end =
+    endIso != null
+      ? DateTime.fromISO(String(endIso || ''), { zone: 'utc' })
+      : start.plus({ hours: 1 });
+  availabilityService.assertCharterSlotWindow({
+    charterType,
+    startIso: start.toISO(),
+    endIso: end.toISO(),
+  });
 }
 
 async function cleanupExpiredBookingHolds() {
@@ -960,10 +949,10 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
         err.statusCode = 409;
         throw err;
       }
-        assertCharterStartTimeAllowed(charterType, booking.start_time);
         await availabilityService.assertCharterSlotAvailable({
           startTime: booking.start_time,
           endTime: bookingInsert.end_time,
+          charterType,
           excludeBookingId: holdRow?.id || null,
         });
     } else {
@@ -1997,7 +1986,10 @@ function calendarItemTimes(body) {
   if (!date) return null;
   if (allDay) {
     const start = DateTime.fromISO(date, { zone: availabilityService.BUSINESS_TZ }).startOf('day');
-    return { startIso: start.toUTC().toISO(), endIso: start.plus({ days: 1 }).toUTC().toISO(), allDay };
+    const endDate = cleanText(body.end_date || body.endDate, 20) || date;
+    const endDay = DateTime.fromISO(endDate, { zone: availabilityService.BUSINESS_TZ }).startOf('day');
+    if (!endDay.isValid || endDay < start.startOf('day')) return null;
+    return { startIso: start.toUTC().toISO(), endIso: endDay.plus({ days: 1 }).toUTC().toISO(), allDay };
   }
   const startTime = cleanText(body.start_time_local || body.startTimeLocal || body.startTime || '09:00', 20);
   const endTime = cleanText(body.end_time_local || body.endTimeLocal || body.endTime || '10:00', 20);
@@ -3792,6 +3784,67 @@ app.get('/api/availability/times', async (req, res) => {
   }
 });
 
+/**
+ * Captain charter calendar availability (Fri/Sat nights + admin blocks).
+ * GET /api/availability/charter?from=&to=&charterType=bio|rocket|sunset
+ */
+app.get('/api/availability/charter', async (req, res) => {
+  try {
+    if (!supabaseConfigured) {
+      return res.status(503).json({ error: 'Server not configured' });
+    }
+    const charterType = cleanText(req.query.charterType || req.query.charter_type, 40) || 'bio';
+    let from = String(req.query.from || '').trim();
+    let to = String(req.query.to || '').trim();
+    if (!from || !to) {
+      const d = availabilityService.defaultFromTo();
+      if (!from) from = d.from;
+      if (!to) to = d.to;
+    }
+
+    const dates = await availabilityService.listCharterDatesAvailability(from, to, charterType);
+    return res.json({
+      charterType,
+      timezone: availabilityService.BUSINESS_TZ,
+      captainNights: 'Friday/Saturday 5:00 PM – 4:00 AM',
+      from,
+      to,
+      dates,
+    });
+  } catch (err) {
+    console.error('[api/availability/charter]', err);
+    return res.status(500).json({ error: err.message || 'Charter availability failed' });
+  }
+});
+
+/**
+ * Captain charter start times for one calendar day.
+ * GET /api/availability/charter/times?date=YYYY-MM-DD&charterType=
+ */
+app.get('/api/availability/charter/times', async (req, res) => {
+  try {
+    if (!supabaseConfigured) {
+      return res.status(503).json({ error: 'Server not configured' });
+    }
+    const date = String(req.query.date || '').trim();
+    if (!date) {
+      return res.status(400).json({ error: 'date is required (YYYY-MM-DD)' });
+    }
+    const charterType = cleanText(req.query.charterType || req.query.charter_type, 40) || 'bio';
+    const slots = await availabilityService.listCharterSlotsForDay(date, charterType);
+    return res.json({
+      date,
+      charterType,
+      timezone: availabilityService.BUSINESS_TZ,
+      durationHours: 1,
+      slots,
+    });
+  } catch (err) {
+    console.error('[api/availability/charter/times]', err);
+    return res.status(500).json({ error: err.message || 'Charter availability times failed' });
+  }
+});
+
 function parseNullableNumber(value) {
   if (value === null || value === undefined || value === '') return null;
   const n = Number(value);
@@ -4298,10 +4351,10 @@ app.post('/api/create-checkout-session', async (req, res) => {
           err.statusCode = 409;
           throw err;
         }
-        assertCharterStartTimeAllowed(charterType, startTime.toISOString());
         await availabilityService.assertCharterSlotAvailable({
           startTime: startTime.toISOString(),
-          endTime: new Date(startTime.getTime() + 60 * 60 * 1000).toISOString(),
+          endTime: endTime.toISOString(),
+          charterType,
         });
       } else {
         assertBookingLeadTime(startTime.toISOString());

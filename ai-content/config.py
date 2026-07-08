@@ -33,12 +33,15 @@ CAPTAINS_LOG_IMAGE_BUCKET: str = (os.getenv("CAPTAINS_LOG_IMAGE_BUCKET") or "").
 # Backward-compatible alias (same value as SUPABASE_SERVICE_ROLE_KEY)
 SUPABASE_KEY: str = SUPABASE_SERVICE_ROLE_KEY
 
-# Ollama OpenAI-compatible generate endpoint
-OLLAMA_URL: str = os.environ.get(
-    "OLLAMA_URL", "http://localhost:11434/api/generate"
-).strip()
+# Ollama base URL (adapter appends /api/generate or /api/chat)
+OLLAMA_URL: str = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434").strip().replace(
+    "/api/generate", ""
+).replace("/api/chat", "").rstrip("/")
 
-OLLAMA_MODEL: str = os.environ.get("OLLAMA_MODEL", "phi3:mini").strip()
+OLLAMA_MODEL: str = os.environ.get(
+    "CAPTAIN_BOBBY_MODEL",
+    os.environ.get("OLLAMA_MODEL", "llama3.1:8b"),
+).strip()
 
 if os.environ.get("PIPELINE_LOG_OLLAMA_MODEL", "").strip() in ("1", "true", "yes"):
     print("[OLLAMA MODEL]", OLLAMA_MODEL, file=sys.stderr)

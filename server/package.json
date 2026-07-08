@@ -10,7 +10,8 @@
     "postinstall": "node scripts/ensure-captains-log-venv.js",
     "build": "npm run setup:captains-log",
     "setup:captains-log": "node scripts/ensure-captains-log-venv.js",
-    "test:lead-time": "node tests/bookingLeadTime.test.js"
+    "test:lead-time": "node tests/bookingLeadTime.test.js",
+    "test:ollama": "node --test tests/ollamaClient.test.js"
   },
   "engines": {
     "node": ">=22 <25"

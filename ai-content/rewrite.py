@@ -31,7 +31,9 @@ from config import (
     PIPELINE_SEO_HUB_MODE,
     REQUEST_TIMEOUT_SEC,
 )
+from ai_output_quality import validate_ai_output
 from grounding import validate_rewritten_article
+from ollama_client import generate_validated
 from pipeline_metrics import record_if_requests_timeout
 from seo_evergreen import (
     build_paraphrase_first_engine,
@@ -1640,22 +1642,13 @@ def _dedupe_fallback_sections(
     ):
         before_out = ""
 
-    # Keep sections non-empty without reusing long repeated phrases.
+    # Keep sections non-empty using source excerpt only — never invent launch-viewing facts.
     if not means_out:
-        means_out = (
-            "On the Indian River Lagoon near Titusville, launch news affects ramp traffic, "
-            "hold zones, and how early you should be on the water for a safe viewing position."
-        )
+        means_out = intro_out[:180].strip() or excerpt[:180].strip()
     if not ways_out:
-        ways_out = (
-            "Watching from a boat gives mobility when haze sits on shore and room for cameras "
-            "without parking-lot crowds along the Space Coast."
-        )
+        ways_out = means_out[:180].strip() or excerpt[:180].strip()
     if not before_out:
-        before_out = (
-            "Confirm the official launch window and marine forecast before you leave the dock, "
-            "and keep plans flexible if the range scrubs."
-        )
+        before_out = excerpt[-180:].strip() if excerpt else intro_out[:120].strip()
 
     return intro_out, means_out, ways_out, before_out
 
@@ -1793,49 +1786,36 @@ def pipeline_fallback_from_source(source_blob: str, title: str, category: str) -
     }
 
 
-def _ollama_stream_generate(prompt: str) -> str:
-    """Stream /api/generate to avoid long blocking on a single JSON response."""
-    payload: dict[str, Any] = {
-        "model": OLLAMA_MODEL,
-        "prompt": prompt,
-        "stream": True,
-        "options": {
-            "num_predict": _ollama_num_predict(),
-            "temperature": OLLAMA_TEMPERATURE,
-            "top_p": OLLAMA_TOP_P,
-        },
-    }
-    last_err: Exception | None = None
-    for attempt in range(1, OLLAMA_REQUEST_ATTEMPTS + 1):
-        try:
-            with requests.post(
-                OLLAMA_URL,
-                json=payload,
-                stream=True,
-                timeout=OLLAMA_STREAM_TIMEOUT_SEC,
-                headers={"Content-Type": "application/json"},
-            ) as r:
-                r.raise_for_status()
-                parts: list[str] = []
-                for line in r.iter_lines():
-                    if not line:
-                        continue
-                    try:
-                        chunk = json.loads(line.decode("utf-8"))
-                    except json.JSONDecodeError:
-                        continue
-                    parts.append(chunk.get("response", "") or "")
-            text = "".join(parts).strip()
-            if text:
-                return text
-            last_err = RuntimeError("Empty Ollama streamed response")
-            print(f"ERROR: Ollama stream empty (attempt {attempt}/{OLLAMA_REQUEST_ATTEMPTS})")
-        except Exception as e:
-            record_if_requests_timeout(e)
-            last_err = e
-            print(f"ERROR: Ollama stream attempt {attempt}/{OLLAMA_REQUEST_ATTEMPTS}: {e}")
-        if attempt < OLLAMA_REQUEST_ATTEMPTS:
-            time.sleep(1.5 * (attempt + 1))
+def _required_pipeline_sections() -> list[str]:
+    return [
+        "what this means for your trip",
+        "practical checklist before you leave the dock",
+        "before you go",
+    ]
+
+
+def _ollama_stream_generate(
+    prompt: str,
+    *,
+    title: str = "",
+    source_text: str = "",
+    min_words: int = 80,
+) -> str:
+    """Validated Ollama rewrite via shared adapter (one strict retry)."""
+    ok, text, err, meta = generate_validated(
+        prompt,
+        num_predict=_ollama_num_predict(),
+        timeout_sec=OLLAMA_STREAM_TIMEOUT_SEC,
+        min_words=min_words,
+        title=title,
+        source_text=source_text,
+        required_sections=_required_pipeline_sections(),
+    )
+    if ok and text:
+        if meta.get("retried"):
+            print("[ollama_client] quality retry succeeded")
+        return text
+    print(f"[ollama_client] rejected output: {err} meta={meta}")
     return ""
 
 
@@ -1889,13 +1869,9 @@ RESPONSE FORMAT (required for the CMS):
 - Blank line
 - Short markdown body per rules above. No charter CTAs in your text.
 """
-    out = _ollama_stream_generate(prompt)
+    out = _ollama_stream_generate(prompt, title=title, min_words=40)
     if not (out or "").strip():
-        print("[AI] weak output → fallback")
-        return fallback_rewrite("", title, category)
-    if len(out.split()) < 40:
-        print("[AI] weak output → fallback")
-        return fallback_rewrite("", title, category)
+        raise RewriteFailedError("Ollama could not produce valid content for weak source topic")
     return out
 
 
@@ -2008,10 +1984,16 @@ RESPONSE FORMAT (required for the CMS):
 - News paraphrase MUST come before any boating-context sections.
 - No placeholder filler. No images or phone numbers. Internal markdown links in Before You Go only.
 """
-        response_text = _ollama_stream_generate(prompt)
-        if not response_text or len(response_text.split()) < 80:
+        min_words = MIN_WORDS_SEO_HUB if hub else MIN_WORDS_TARGET
+        response_text = _ollama_stream_generate(
+            prompt,
+            title=title,
+            source_text=blob,
+            min_words=min_words,
+        )
+        if not response_text:
             raise RewriteFailedError(
-                "Ollama rewrite too short or empty — refusing placeholder fallback"
+                "Ollama rewrite failed quality validation — refusing placeholder fallback"
             )
         if not (response_text or "").strip():
             raise RewriteFailedError(
@@ -2152,10 +2134,26 @@ def rewrite_article(
 
     body = truncate_text(body)
     prompt = _simple_rewrite_prompt(body, title=title, keyword_topic=keyword_topic)
-    response_text = _ollama_stream_generate(prompt)
-    if not response_text or len(response_text.split()) < 100:
-        print("[AI] weak output → fallback")
-        response_text = fallback_rewrite(body, title, cat)
+    response_text = _ollama_stream_generate(
+        prompt,
+        title=title,
+        source_text=f"{title}\n\n{body}",
+        min_words=100,
+    )
+    if not response_text:
+        qc_ok, qc_reason, _ = validate_ai_output(
+            fallback_rewrite(body, title, cat),
+            min_words=100,
+            title=title,
+            source_text=body,
+        )
+        if qc_ok:
+            print("[AI] validated deterministic fallback from source excerpt")
+            response_text = fallback_rewrite(body, title, cat)
+        else:
+            raise RewriteFailedError(
+                f"Ollama rewrite failed quality validation ({qc_reason}) — skipping publish"
+            )
     if not (response_text or "").strip():
         raise RewriteFailedError(
             f"Ollama rewrite failed after {OLLAMA_REQUEST_ATTEMPTS} attempts (empty output)"

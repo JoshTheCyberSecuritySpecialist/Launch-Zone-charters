@@ -1974,6 +1974,38 @@ function normalizeAdminCalendarItem(row) {
   };
 }
 
+function legacyBlockedDateColumns(startIso, endIso) {
+  const zone = availabilityService.BUSINESS_TZ;
+  const start = DateTime.fromISO(String(startIso || ''), { zone: 'utc' }).setZone(zone);
+  const end = DateTime.fromISO(String(endIso || ''), { zone: 'utc' }).setZone(zone);
+  if (!start.isValid || !end.isValid) {
+    return {};
+  }
+  const startDate = start.toFormat('yyyy-MM-dd');
+  let endInclusive = end;
+  if (end.hour === 0 && end.minute === 0 && end.second === 0 && end.millisecond === 0) {
+    endInclusive = end.minus({ days: 1 }).startOf('day');
+  } else {
+    endInclusive = end.minus({ milliseconds: 1 }).startOf('day');
+  }
+  return {
+    start_date: startDate,
+    end_date: endInclusive.toFormat('yyyy-MM-dd'),
+  };
+}
+
+function buildBlockedDateInsertRow(fields) {
+  const startTime = String(fields.start_time || '');
+  const endTime = String(fields.end_time || '');
+  const { start_time, end_time, ...rest } = fields;
+  return {
+    ...rest,
+    start_time: startTime,
+    end_time: endTime,
+    ...legacyBlockedDateColumns(startTime, endTime),
+  };
+}
+
 function calendarItemTimes(body) {
   const allDay = Boolean(body.all_day || body.allDay);
   const startRaw = cleanText(body.start_time || body.startTime, 80);
@@ -2220,17 +2252,18 @@ app.post('/api/admin/calendar-items', async (req, res) => {
     if (itemType === 'blocked_time') {
       const { data, error } = await supabase
         .from('blocked_dates')
-        .insert({
-          title,
-          reason: cleanText(body.reason, 300) || title,
-          boat_id: boatId,
-          location,
-          start_time: times.startIso,
-          end_time: times.endIso,
-          all_day: times.allDay,
-          notes: cleanText(body.notes, 1000) || null,
-          created_by: null,
-        })
+        .insert(
+          buildBlockedDateInsertRow({
+            title,
+            reason: cleanText(body.reason, 300) || title,
+            boat_id: boatId,
+            location,
+            start_time: times.startIso,
+            end_time: times.endIso,
+            all_day: times.allDay,
+            notes: cleanText(body.notes, 1000) || null,
+          })
+        )
         .select('id, boat_id, start_time, end_time, title, reason, location, all_day, notes, created_at, updated_at')
         .single();
       if (error) throw error;
@@ -2306,6 +2339,7 @@ app.patch('/api/admin/calendar-items/:id', async (req, res) => {
       if (times) {
         update.start_time = times.startIso;
         update.end_time = times.endIso;
+        Object.assign(update, legacyBlockedDateColumns(times.startIso, times.endIso));
       }
       const { data, error } = await supabase
         .from('blocked_dates')
@@ -2454,19 +2488,20 @@ app.post('/api/admin/charter-captain-availability/apply', async (req, res) => {
       return res.json({ ok: true, inserted: 0, conflictCount: preview.conflictCount });
     }
 
-    const rows = preview.blocks.map((block) => ({
-      title: block.title,
-      reason: block.reason,
-      boat_id: null,
-      location: null,
-      start_time: block.startIso,
-      end_time: block.endIso,
-      all_day: false,
-      notes: block.notes,
-      block_scope: 'charter',
-      block_source: captainCharterAvailability.GENERATED_BLOCK_SOURCE,
-      created_by: null,
-    }));
+    const rows = preview.blocks.map((block) =>
+      buildBlockedDateInsertRow({
+        title: block.title,
+        reason: block.reason,
+        boat_id: null,
+        location: null,
+        start_time: block.startIso,
+        end_time: block.endIso,
+        all_day: false,
+        notes: block.notes,
+        block_scope: 'charter',
+        block_source: captainCharterAvailability.GENERATED_BLOCK_SOURCE,
+      })
+    );
 
     const { data, error } = await supabase.from('blocked_dates').insert(rows).select('id');
     if (error) throw error;

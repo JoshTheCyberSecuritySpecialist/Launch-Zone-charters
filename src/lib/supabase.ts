@@ -145,11 +145,16 @@ type PricingOverridesRow = {
 type BlockedDatesRow = {
   id: string;
   boat_id: string | null;
-  start_time: string;
-  end_time: string;
+  start_time: string | null;
+  end_time: string | null;
+  start_date?: string | null;
+  end_date?: string | null;
   reason: string | null;
-  created_by: string | null;
-  created_at: string;
+  created_at: string | null;
+  title?: string | null;
+  notes?: string | null;
+  block_scope?: string | null;
+  block_source?: string | null;
 };
 
 type ContactsRow = {

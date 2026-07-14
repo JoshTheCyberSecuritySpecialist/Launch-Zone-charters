@@ -4,6 +4,7 @@ import { Calendar, ClipboardCheck, ExternalLink, Loader2, Search, Upload, Shield
 import WaiverBlock, { waiverFormComplete, type WaiverFormData } from '../components/booking/WaiverBlock';
 import PreTripStatusPanel from '../components/booking/PreTripStatusPanel';
 import ManualPreTripSubmission from '../components/booking/ManualPreTripSubmission';
+import WaiversHelpCard from '../components/booking/WaiversHelpCard';
 import {
   confirmWaiversAccess,
   fetchPreTripStatus,
@@ -21,10 +22,37 @@ import {
   deriveBookingOverallStatus,
   deriveSubmissionOverallStatus,
 } from '../lib/preTripStatus';
+import {
+  loadCompletedPreTripRef,
+  loadManualPreTripDraft,
+  saveCompletedPreTripRef,
+} from '../lib/preTripDraftStorage';
+import {
+  WI_BODY,
+  WI_FIELD,
+  WI_HINT,
+  WI_LABEL,
+  WI_PRIMARY_BTN,
+  WI_SECONDARY_BTN,
+  WI_SECTION,
+  WI_UPLOAD_ZONE,
+  docStatusClass,
+  type DocStatusText,
+} from '../lib/waiversSeniorUi';
 import { getInsuranceConfigForBooking } from '../config/buoyInsurance';
 import { uploadBookingDocument } from '../lib/storageUpload';
 import { env } from '../config/env.js';
 import { wrapSyncClick } from '../lib/clickPerf';
+
+function DocStatusBadge({ status }: { status: DocStatusText }) {
+  return (
+    <span
+      className={`inline-flex min-h-10 items-center rounded-lg border px-3 py-1.5 text-base font-semibold ${docStatusClass(status)}`}
+    >
+      {status}
+    </span>
+  );
+}
 
 interface WaiversInsuranceProps {
   onNavigate: (page: string) => void;
@@ -47,9 +75,12 @@ function formatTripDate(iso: string) {
 }
 
 export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const bookingIdFromUrl = searchParams.get('bookingId')?.trim() || '';
   const submissionIdFromUrl = searchParams.get('submissionId')?.trim() || '';
+
+  const completedRef = useMemo(() => loadCompletedPreTripRef(), []);
+  const hasRestorableDraft = useMemo(() => Boolean(loadManualPreTripDraft()), []);
 
   const [findEmail, setFindEmail] = useState('');
   const [findPhone, setFindPhone] = useState('');
@@ -57,6 +88,7 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
   const [findLoading, setFindLoading] = useState(false);
   const [findError, setFindError] = useState<string | null>(null);
   const [magicLinkLoading, setMagicLinkLoading] = useState(Boolean(bookingIdFromUrl));
+  const [restoringSession, setRestoringSession] = useState(false);
 
   const [booking, setBooking] = useState<PublicBookingMatch | null>(null);
   const [contactEmail, setContactEmail] = useState('');
@@ -75,19 +107,28 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
   const [proofBusy, setProofBusy] = useState(false);
   const [proofMessage, setProofMessage] = useState<string | null>(null);
 
-  const [manualMode, setManualMode] = useState(false);
-  const [manualSubmissionId, setManualSubmissionId] = useState<string | null>(null);
-  const [entryMode, setEntryMode] = useState<'booking' | 'manual' | null>(
-    bookingIdFromUrl ? 'booking' : null
+  const [manualMode, setManualMode] = useState(
+    () =>
+      hasRestorableDraft &&
+      !bookingIdFromUrl &&
+      !submissionIdFromUrl &&
+      !completedRef
   );
+  const [manualSubmissionId, setManualSubmissionId] = useState<string | null>(null);
+  const [entryMode, setEntryMode] = useState<'booking' | 'manual' | null>(() => {
+    if (bookingIdFromUrl) return 'booking';
+    if (submissionIdFromUrl || completedRef) return null;
+    if (hasRestorableDraft) return 'manual';
+    return null;
+  });
 
-  const [statusEmail, setStatusEmail] = useState('');
+  const [statusEmail, setStatusEmail] = useState(() => completedRef?.email || '');
+  const [statusPhone, setStatusPhone] = useState(() => completedRef?.phone || '');
   const [statusLoading, setStatusLoading] = useState(false);
   const [statusError, setStatusError] = useState<string | null>(null);
   const [submissionStatus, setSubmissionStatus] = useState<PreTripStatusPayload | null>(null);
 
-  const fieldClass =
-    'lz-input-on-dark w-full rounded-xl border border-white/15 bg-slate-950/85 px-4 py-3 text-base shadow-inner focus:border-[var(--lz-cta)]/55 focus:outline-none focus:ring-2 focus:ring-[var(--lz-cta)]/20';
+  const fieldClass = WI_FIELD;
 
   const isRental = booking ? !booking.captain_included : true;
   const bookingMode = isRental ? 'rental' : 'charter';
@@ -110,20 +151,29 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
     bookingOverallStatus !== 'ready_for_departure' &&
     !bookingAllCustomerStepsDone(booking, isRental);
 
-  const loadSubmissionStatus = useCallback(async (submissionId: string, email: string) => {
-    setStatusLoading(true);
-    setStatusError(null);
-    const result = await fetchPreTripStatus(submissionId, email);
-    setStatusLoading(false);
-    if (!result.ok) {
-      setSubmissionStatus(null);
-      setStatusError(result.error);
-      return;
-    }
-    setSubmissionStatus(result.data);
-    setManualSubmissionId(submissionId);
-    setStatusEmail(email.trim().toLowerCase());
-  }, []);
+  const loadSubmissionStatus = useCallback(
+    async (submissionId: string, email: string, phone: string) => {
+      setStatusLoading(true);
+      setStatusError(null);
+      const result = await fetchPreTripStatus(submissionId, email, phone);
+      setStatusLoading(false);
+      setRestoringSession(false);
+      if (!result.ok) {
+        setSubmissionStatus(null);
+        setStatusError(
+          'We could not load your saved submission with that email and phone. Check them and try again, or call 803-542-1761.'
+        );
+        return;
+      }
+      setSubmissionStatus(result.data);
+      setManualSubmissionId(submissionId);
+      setManualMode(false);
+      setStatusEmail(email.trim().toLowerCase());
+      setStatusPhone(phone.trim());
+      saveCompletedPreTripRef(submissionId, email, phone);
+    },
+    []
+  );
 
   useEffect(() => {
     if (!bookingIdFromUrl) return;
@@ -132,6 +182,7 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
     (async () => {
       setMagicLinkLoading(true);
       setFindError(null);
+      setRestoringSession(false);
       const result = await fetchWaiversBookingById(bookingIdFromUrl);
       if (cancelled) return;
       setMagicLinkLoading(false);
@@ -158,19 +209,28 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
     };
   }, [bookingIdFromUrl]);
 
+  // Put submissionId in the URL for refresh, but never auto-fetch status without
+  // an explicit email+phone confirmation (shared-browser / IDOR hardening).
   useEffect(() => {
-    if (!submissionIdFromUrl || bookingIdFromUrl) return;
-    if (statusEmail) {
-      void loadSubmissionStatus(submissionIdFromUrl, statusEmail);
-    }
-  }, [submissionIdFromUrl, bookingIdFromUrl, statusEmail, loadSubmissionStatus]);
+    if (bookingIdFromUrl) return;
+    if (!completedRef?.submissionId || submissionIdFromUrl) return;
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.set('submissionId', completedRef.submissionId);
+        next.delete('bookingId');
+        return next;
+      },
+      { replace: true }
+    );
+  }, [bookingIdFromUrl, submissionIdFromUrl, completedRef, setSearchParams]);
 
   const handleFindBooking = async (e: React.FormEvent) => {
     e.preventDefault();
     setFindLoading(true);
     setFindError(null);
-    setSubmissionStatus(null);
-    setManualSubmissionId(null);
+    // Do not clear an already-submitted confirmation when lookup fails.
+    // Only clear booking match state for a fresh lookup attempt.
 
     const result = await findPublicBooking({
       email: findEmail,
@@ -181,11 +241,15 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
     setFindLoading(false);
     if (!result.ok) {
       setBooking(null);
-      setFindError(result.message);
+      setFindError(
+        'We could not find your trip automatically. That is okay. Enter the information below and our team will match it for you.'
+      );
       setManualMode(false);
       return;
     }
 
+    setSubmissionStatus(null);
+    setManualSubmissionId(null);
     setManualMode(false);
     setMagicLinkMode(false);
     setPhoneConfirmNeeded(false);
@@ -258,7 +322,9 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
       phone: contactPhone,
     });
     if (error || !url) {
-      setLicenseMessage(error?.message || 'Upload failed.');
+      setLicenseMessage(
+        'We could not upload this file. Your other information is still saved. Try again or choose another file.'
+      );
       setLicenseBusy(false);
       return;
     }
@@ -301,7 +367,9 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
     });
 
     if (upErr || !url) {
-      setProofMessage(upErr?.message || 'Upload failed.');
+      setProofMessage(
+        'We could not upload this file. Your other information is still saved. Try again or choose another file.'
+      );
       setProofBusy(false);
       return;
     }
@@ -326,8 +394,12 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
   const handleLoadSubmissionStatus = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!submissionIdFromUrl && !manualSubmissionId) return;
+    if (!statusEmail.trim() || !statusPhone.trim()) {
+      setStatusError('Enter the email and phone number used on your submission.');
+      return;
+    }
     const id = manualSubmissionId || submissionIdFromUrl;
-    await loadSubmissionStatus(id, statusEmail);
+    await loadSubmissionStatus(id, statusEmail, statusPhone);
   };
 
   const submissionView = submissionStatus?.submission ?? null;
@@ -339,6 +411,7 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
     : null;
 
   const showEntryOptions =
+    !restoringSession &&
     !booking &&
     !manualMode &&
     !manualSubmissionId &&
@@ -348,6 +421,7 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
     !entryMode;
 
   const showFindForm =
+    !restoringSession &&
     !booking &&
     !manualMode &&
     !manualSubmissionId &&
@@ -356,54 +430,104 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
     !submissionIdFromUrl &&
     entryMode === 'booking';
 
-  const showStatusEmailGate = Boolean(submissionIdFromUrl) && !submissionStatus && !booking;
+  const showStatusEmailGate =
+    !restoringSession &&
+    !statusLoading &&
+    Boolean(submissionIdFromUrl || manualSubmissionId) &&
+    !submissionStatus &&
+    !booking;
+
+  const waiverDocStatus: DocStatusText = booking?.waiver_signed
+    ? 'Completed'
+    : waiverBusy
+      ? 'Uploading'
+      : 'Not started';
+  const licenseDocStatus: DocStatusText = licenseBusy
+    ? 'Uploading'
+    : booking?.has_license_url || booking?.license_status === 'verified'
+      ? 'Completed'
+      : 'Needs attention';
+  const insuranceDocStatus: DocStatusText = proofBusy
+    ? 'Uploading'
+    : booking?.has_insurance_url ||
+        booking?.insurance_status === 'submitted' ||
+        booking?.insurance_status === 'verified'
+      ? 'Completed'
+      : 'Not started';
 
   return (
     <div className="relative min-h-screen px-4 py-10 md:py-14">
-      <div className="relative z-[1] mx-auto max-w-4xl">
+      <div className="relative z-[1] mx-auto max-w-2xl">
         <header className="mb-8 text-center">
-          <p className="text-xs font-bold uppercase tracking-[0.2em] text-cyan-300/80">Launch Zone Charters</p>
-          <h1 className="font-display mt-2 text-3xl font-bold uppercase tracking-[0.08em] text-white md:text-4xl">
-            Waivers &amp; Insurance
+          <p className="text-base font-bold tracking-wide text-cyan-200">Launch Zone Charters</p>
+          <h1 className="font-display mt-2 text-3xl font-bold text-white md:text-4xl">
+            Complete Your Trip Documents
           </h1>
-          <p className="mt-3 text-sm text-slate-300 md:text-base">
-            Complete your pre-trip steps in a few minutes — we will guide you through each one.
+          <p className={`mx-auto mt-4 max-w-xl ${WI_BODY}`}>
+            Complete each section below. Your progress is saved automatically, so you will not need to
+            start over.
           </p>
         </header>
 
-        {magicLinkLoading ? (
-          <div className="lz-card-glass flex items-center justify-center gap-3 rounded-[var(--lz-radius-card)] p-10">
-            <Loader2 className="h-6 w-6 animate-spin text-cyan-300" aria-hidden />
-            <span className="text-sm text-slate-300">Loading your booking…</span>
+        <WaiversHelpCard className="mb-6" />
+
+        {restoringSession || magicLinkLoading || (statusLoading && !submissionStatus) ? (
+          <div className={`${WI_SECTION} flex items-center justify-center gap-3 p-10`}>
+            <Loader2 className="h-7 w-7 animate-spin text-cyan-300" aria-hidden />
+            <span className="text-lg text-slate-200">
+              {magicLinkLoading
+                ? 'Loading your booking…'
+                : statusLoading
+                  ? 'Loading your submission…'
+                  : 'Finding your saved progress…'}
+            </span>
           </div>
         ) : null}
 
         {showStatusEmailGate ? (
-          <section className="lz-card-glass mx-auto max-w-2xl rounded-[var(--lz-radius-card)] p-6 md:p-8">
-            <h2 className="text-sm font-bold uppercase tracking-widest text-cyan-200/90">Check your status</h2>
-            <p className="mt-2 text-sm text-slate-400">
-              Enter the email you used when submitting your documents.
+          <section className={`${WI_SECTION} mx-auto`}>
+            <h2 className="text-xl font-bold text-white">Check your status</h2>
+            <p className={`${WI_HINT} mt-2`}>
+              For your privacy, confirm the email and phone number used when you submitted your
+              documents.
             </p>
-            <form onSubmit={(e) => void handleLoadSubmissionStatus(e)} className="mt-5 space-y-4">
-              <input
-                type="email"
-                required
-                autoComplete="email"
-                value={statusEmail}
-                onChange={(e) => setStatusEmail(e.target.value)}
-                className={fieldClass}
-                placeholder="you@email.com"
-              />
-              <button
-                type="submit"
-                disabled={statusLoading}
-                className="lz-btn-primary flex w-full items-center justify-center gap-2 py-4 text-base !normal-case !tracking-wide"
-              >
+            <form onSubmit={(e) => void handleLoadSubmissionStatus(e)} className="mt-5 space-y-5">
+              <div>
+                <label htmlFor="wi-status-email" className={WI_LABEL}>
+                  Email address
+                </label>
+                <input
+                  id="wi-status-email"
+                  type="email"
+                  required
+                  autoComplete="email"
+                  inputMode="email"
+                  value={statusEmail}
+                  onChange={(e) => setStatusEmail(e.target.value)}
+                  className={fieldClass}
+                />
+              </div>
+              <div>
+                <label htmlFor="wi-status-phone" className={WI_LABEL}>
+                  Mobile phone number
+                </label>
+                <input
+                  id="wi-status-phone"
+                  type="tel"
+                  required
+                  autoComplete="tel"
+                  inputMode="tel"
+                  value={statusPhone}
+                  onChange={(e) => setStatusPhone(e.target.value)}
+                  className={fieldClass}
+                />
+              </div>
+              <button type="submit" disabled={statusLoading} className={WI_PRIMARY_BTN}>
                 {statusLoading ? <Loader2 className="h-5 w-5 animate-spin" aria-hidden /> : null}
-                View status
+                View My Submission Status
               </button>
               {statusError ? (
-                <p className="text-sm text-amber-100" role="alert">
+                <p className="text-lg text-amber-100" role="alert">
                   {statusError}
                 </p>
               ) : null}
@@ -413,96 +537,105 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
 
         {showEntryOptions ? (
           <section className="space-y-5">
-            <div className="grid gap-4 md:grid-cols-2">
-              <article className="lz-card-glass flex h-full flex-col rounded-[var(--lz-radius-card)] border border-cyan-400/20 p-6 md:p-7">
-                <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-cyan-300/25 bg-cyan-400/10 text-cyan-200">
-                  <Calendar className="h-6 w-6" aria-hidden />
-                </div>
-                <h2 className="mt-5 text-xl font-bold text-white">I Have a Booking</h2>
-                <p className="mt-2 flex-1 text-sm leading-relaxed text-slate-300">
-                  Find your trip and complete your waiver, license, and insurance steps.
-                </p>
-                <button
-                  type="button"
-                  onClick={wrapSyncClick('waivers_choose_booking_lookup', () => {
-                    setEntryMode('booking');
-                    setManualMode(false);
-                    setFindError(null);
-                  })}
-                  className="lz-btn-primary mt-6 flex w-full items-center justify-center gap-2 py-4 text-base !normal-case !tracking-wide"
-                >
-                  <Search className="h-5 w-5" aria-hidden />
-                  Find My Booking
-                </button>
-              </article>
+            <article className={`${WI_SECTION} border-cyan-400/20`}>
+              <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-cyan-300/25 bg-cyan-400/10 text-cyan-200">
+                <Calendar className="h-6 w-6" aria-hidden />
+              </div>
+              <h2 className="mt-5 text-2xl font-bold text-white">I Have a Booking</h2>
+              <p className={`mt-2 ${WI_BODY}`}>
+                Find your trip with your booking email and phone number, then complete your waiver,
+                license, and insurance steps.
+              </p>
+              <button
+                type="button"
+                onClick={wrapSyncClick('waivers_choose_booking_lookup', () => {
+                  setEntryMode('booking');
+                  setManualMode(false);
+                  setFindError(null);
+                })}
+                className={`${WI_PRIMARY_BTN} mt-6`}
+              >
+                <Search className="h-5 w-5" aria-hidden />
+                Find My Booking
+              </button>
+            </article>
 
-              <article className="lz-card-glass flex h-full flex-col rounded-[var(--lz-radius-card)] border border-[var(--lz-cta)]/25 p-6 md:p-7">
-                <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-[var(--lz-cta)]/30 bg-[var(--lz-cta)]/10 text-[var(--lz-cta)]">
-                  <ClipboardCheck className="h-6 w-6" aria-hidden />
-                </div>
-                <h2 className="mt-5 text-xl font-bold text-white">I Don&apos;t Have a Booking Yet</h2>
-                <p className="mt-2 flex-1 text-sm leading-relaxed text-slate-300">
-                  Booked through Groupon, phone, text, or need to complete requirements before we match your trip?
-                </p>
-                <button
-                  type="button"
-                  onClick={wrapSyncClick('waivers_choose_manual_submission', () => {
-                    setEntryMode('manual');
-                    setManualMode(true);
-                    setFindError(null);
-                  })}
-                  className="lz-btn-primary mt-6 flex w-full items-center justify-center gap-2 py-4 text-base !normal-case !tracking-wide"
-                >
-                  <Shield className="h-5 w-5" aria-hidden />
-                  Continue Without Booking
-                </button>
-              </article>
-            </div>
+            <article className={`${WI_SECTION} border-[var(--lz-cta)]/25`}>
+              <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-[var(--lz-cta)]/30 bg-[var(--lz-cta)]/10 text-[var(--lz-cta)]">
+                <ClipboardCheck className="h-6 w-6" aria-hidden />
+              </div>
+              <h2 className="mt-5 text-2xl font-bold text-white">I Don&apos;t Have a Booking Yet</h2>
+              <p className={`mt-2 ${WI_BODY}`}>
+                Booked through Groupon, phone, text, or you are not sure? Continue here and our team
+                will match your documents.
+              </p>
+              <button
+                type="button"
+                onClick={wrapSyncClick('waivers_choose_manual_submission', () => {
+                  setEntryMode('manual');
+                  setManualMode(true);
+                  setFindError(null);
+                })}
+                className={`${WI_PRIMARY_BTN} mt-6`}
+              >
+                <Shield className="h-5 w-5" aria-hidden />
+                Continue Without Booking
+              </button>
+            </article>
 
-            <p className="rounded-2xl border border-white/10 bg-slate-950/35 px-4 py-3 text-center text-sm text-slate-300">
-              Not sure? Choose "I Don&apos;t Have a Booking Yet" and our team will match your documents manually.
+            <p className={`${WI_SECTION} text-center ${WI_BODY}`}>
+              Not sure? Choose &quot;I Don&apos;t Have a Booking Yet&quot; — you will not need to start
+              over later.
             </p>
           </section>
         ) : null}
 
         {showFindForm ? (
-          <section className="lz-card-glass mx-auto max-w-2xl rounded-[var(--lz-radius-card)] p-6 md:p-8">
-            <h2 className="text-sm font-bold uppercase tracking-widest text-cyan-200/90">
-              Step 1 — Find your booking
-            </h2>
-            <form onSubmit={(e) => void handleFindBooking(e)} className="mt-5 space-y-4">
+          <section className={`${WI_SECTION} mx-auto`}>
+            <h2 className="text-xl font-bold text-white">Trip Details</h2>
+            <p className={`${WI_HINT} mt-2`}>
+              Enter the email and phone number from your booking. Booking ID or Groupon code is
+              optional.
+            </p>
+            <form onSubmit={(e) => void handleFindBooking(e)} className="mt-6 space-y-5">
               <div>
-                <label htmlFor="wi-email" className="mb-1 block text-xs font-semibold uppercase text-slate-400">
-                  Email
+                <label htmlFor="wi-email" className={WI_LABEL}>
+                  Email address
                 </label>
                 <input
                   id="wi-email"
                   type="email"
                   required
                   autoComplete="email"
+                  inputMode="email"
                   value={findEmail}
                   onChange={(e) => setFindEmail(e.target.value)}
                   className={fieldClass}
                 />
               </div>
               <div>
-                <label htmlFor="wi-phone" className="mb-1 block text-xs font-semibold uppercase text-slate-400">
-                  Phone number
+                <label htmlFor="wi-phone" className={WI_LABEL}>
+                  Mobile phone number
                 </label>
                 <input
                   id="wi-phone"
                   type="tel"
                   required
                   autoComplete="tel"
+                  inputMode="tel"
                   value={findPhone}
                   onChange={(e) => setFindPhone(e.target.value)}
                   className={fieldClass}
-                  placeholder="Same number used when booking"
+                  aria-describedby="wi-phone-hint"
                 />
+                <p id="wi-phone-hint" className={WI_HINT}>
+                  Use the same number from your booking.
+                </p>
               </div>
               <div>
-                <label htmlFor="wi-code" className="mb-1 block text-xs font-semibold uppercase text-slate-400">
-                  Booking ID or Groupon code <span className="text-slate-500">(optional)</span>
+                <label htmlFor="wi-code" className={WI_LABEL}>
+                  Booking number or Groupon voucher{' '}
+                  <span className="font-normal text-slate-300">(optional)</span>
                 </label>
                 <input
                   id="wi-code"
@@ -510,17 +643,13 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
                   value={findCode}
                   onChange={(e) => setFindCode(e.target.value)}
                   className={fieldClass}
-                  placeholder="Booking ID or GROUPON code"
+                  autoComplete="off"
                 />
               </div>
               {findError ? (
                 <div className="rounded-xl border border-amber-400/30 bg-amber-950/40 px-4 py-4">
-                  <p className="text-sm text-amber-100" role="alert">
+                  <p className="text-lg text-amber-50" role="alert">
                     {findError}
-                  </p>
-                  <p className="mt-2 text-sm text-amber-100/90">
-                    We could not find your booking. You can still complete your pre-trip requirements and
-                    our team will match it manually.
                   </p>
                   <button
                     type="button"
@@ -529,36 +658,60 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
                       setManualMode(true);
                       setFindError(null);
                     })}
-                    className="lz-btn-primary mt-4 w-full justify-center py-4 text-base !normal-case !tracking-wide"
+                    className={`${WI_PRIMARY_BTN} mt-4`}
                   >
                     Continue Without Booking
                   </button>
                 </div>
               ) : null}
-              <button
-                type="submit"
-                disabled={findLoading}
-                className="lz-btn-primary flex w-full items-center justify-center gap-2 py-4 text-base !normal-case !tracking-wide"
-              >
-                {findLoading ? <Loader2 className="h-5 w-5 animate-spin" aria-hidden /> : <Search className="h-5 w-5" aria-hidden />}
+              <button type="submit" disabled={findLoading} className={WI_PRIMARY_BTN}>
+                {findLoading ? (
+                  <Loader2 className="h-5 w-5 animate-spin" aria-hidden />
+                ) : (
+                  <Search className="h-5 w-5" aria-hidden />
+                )}
                 Find My Booking
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setEntryMode(null);
+                  setFindError(null);
+                }}
+                className={WI_SECONDARY_BTN}
+              >
+                Choose a Different Option
               </button>
             </form>
           </section>
         ) : null}
 
-        {manualMode && !manualSubmissionId && !submissionStatus ? (
+        {manualMode &&
+        !manualSubmissionId &&
+        !submissionStatus &&
+        !submissionIdFromUrl &&
+        !restoringSession ? (
           <div className="mx-auto max-w-2xl">
             <ManualPreTripSubmission
               initialEmail={findEmail}
               initialPhone={findPhone}
               initialGrouponCode={findCode}
               onNavigateTerms={() => onNavigate('terms')}
-              onSubmitted={(id, email) => {
-                setManualSubmissionId(id);
+              onSubmitted={(id, email, phone) => {
+                saveCompletedPreTripRef(id, email, phone);
                 setManualMode(false);
                 setStatusEmail(email);
-                void loadSubmissionStatus(id, email);
+                setStatusPhone(phone);
+                setSearchParams(
+                  (prev) => {
+                    const next = new URLSearchParams(prev);
+                    next.set('submissionId', id);
+                    next.delete('bookingId');
+                    return next;
+                  },
+                  { replace: true }
+                );
+                void loadSubmissionStatus(id, email, phone);
               }}
               onBack={() => {
                 setManualMode(false);
@@ -569,36 +722,48 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
         ) : null}
 
         {submissionView && submissionOverallStatus ? (
-          <div className="mx-auto max-w-2xl space-y-6">
+          <div className="space-y-6">
             <PreTripStatusPanel
               status={submissionOverallStatus}
               checklist={submissionChecklist}
               referenceId={submissionView.id}
+              customerName={submissionView.customer_name}
+              showSuccessHeadline
             />
             <button
               type="button"
               onClick={wrapSyncClick('waivers_refresh_submission_status', () =>
-                void loadSubmissionStatus(submissionView.id, statusEmail)
+                void loadSubmissionStatus(submissionView.id, statusEmail, statusPhone)
               )}
               disabled={statusLoading}
-              className="lz-btn-primary w-full justify-center py-3 text-sm !normal-case !tracking-wide"
+              className={WI_PRIMARY_BTN}
             >
-              {statusLoading ? 'Refreshing…' : 'Refresh status'}
+              {statusLoading ? 'Refreshing…' : 'Refresh My Status'}
             </button>
+            <button
+              type="button"
+              onClick={wrapSyncClick('waivers_return_home', () => onNavigate('home'))}
+              className={WI_SECONDARY_BTN}
+            >
+              Return to Launch Zone Charters
+            </button>
+            <WaiversHelpCard />
           </div>
         ) : null}
 
         {booking && bookingOverallStatus ? (
-          <div className="mx-auto max-w-2xl space-y-6">
-            <section className="lz-card-glass rounded-[var(--lz-radius-card)] p-6 md:p-8">
+          <div className="space-y-6">
+            <section className={WI_SECTION}>
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <h2 className="text-sm font-bold uppercase tracking-widest text-cyan-200/90">Your booking</h2>
-                  <p className="mt-2 text-lg font-semibold text-white">{booking.customer_name}</p>
-                  <p className="text-sm text-slate-400">
+                  <h2 className="text-xl font-bold text-white">Your booking</h2>
+                  <p className="mt-2 text-xl font-semibold text-white">{booking.customer_name}</p>
+                  <p className={`mt-1 ${WI_BODY}`}>
                     {booking.boat_name || 'Boat'} · {formatTripDate(booking.start_time)}
                   </p>
-                  <p className="mt-1 font-mono text-xs text-slate-500">ID: {booking.id}</p>
+                  <p className="mt-2 break-all font-mono text-base text-slate-300">
+                    Confirmation: {booking.id}
+                  </p>
                 </div>
                 {!magicLinkMode ? (
                   <button
@@ -608,7 +773,7 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
                       setEntryMode('booking');
                       setMagicLinkMode(false);
                     })}
-                    className="text-sm font-semibold text-cyan-300 underline decoration-cyan-500/30"
+                    className="min-h-12 text-lg font-semibold text-cyan-200 underline"
                   >
                     Find a different booking
                   </button>
@@ -620,24 +785,29 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
               status={bookingOverallStatus}
               checklist={bookingChecklist}
               referenceId={booking.id}
+              customerName={booking.customer_name}
+              tripDateLabel={formatTripDate(booking.start_time)}
+              showSuccessHeadline={!showBookingActionSteps}
             />
 
             {magicLinkMode && phoneConfirmNeeded ? (
-              <section className="lz-card-glass rounded-[var(--lz-radius-card)] border border-cyan-400/25 p-6">
-                <h2 className="text-sm font-bold uppercase tracking-widest text-cyan-200/90">
-                  Confirm your phone
-                </h2>
-                <p className="mt-2 text-sm text-slate-400">
+              <section className={`${WI_SECTION} border-cyan-400/25`}>
+                <h2 className="text-xl font-bold text-white">Confirm your phone</h2>
+                <p className={`${WI_HINT} mt-2`}>
                   For security, enter the phone number on your booking (ends in{' '}
                   {booking.phone_last4 || '****'}).
                 </p>
+                <label htmlFor="wi-confirm-phone" className={`${WI_LABEL} mt-5`}>
+                  Mobile phone number
+                </label>
                 <input
+                  id="wi-confirm-phone"
                   type="tel"
                   autoComplete="tel"
+                  inputMode="tel"
                   value={contactPhone}
                   onChange={(e) => setContactPhone(e.target.value)}
-                  className={`${fieldClass} mt-4`}
-                  placeholder="Your phone number"
+                  className={fieldClass}
                 />
                 <button
                   type="button"
@@ -658,88 +828,105 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
                       setWaiverMessage(null);
                     })();
                   })}
-                  className="lz-btn-primary mt-4 w-full justify-center py-4 text-base !normal-case !tracking-wide"
+                  className={`${WI_PRIMARY_BTN} mt-5`}
                 >
-                  Continue
+                  Continue to Documents
                 </button>
+                {waiverMessage ? (
+                  <p className="mt-3 text-lg text-amber-100" role="alert">
+                    {waiverMessage}
+                  </p>
+                ) : null}
               </section>
             ) : null}
 
             {showBookingActionSteps ? (
               <>
-                {!booking.waiver_signed ? (
-                  <section className="lz-card-glass rounded-[var(--lz-radius-card)] p-6 md:p-8">
-                    <h2 className="text-sm font-bold uppercase tracking-widest text-cyan-200/90">
-                      Sign waiver
-                    </h2>
-                    <WaiverBlock
-                      bookingMode={bookingMode}
-                      waiverData={waiverData}
-                      onWaiverDataChange={setWaiverData}
-                      termsAccepted={termsAccepted}
-                      onTermsAcceptedChange={setTermsAccepted}
-                      damageFeeAcknowledged={damageFeeAcknowledged}
-                      onDamageFeeAcknowledgedChange={setDamageFeeAcknowledged}
-                      onNavigateTerms={() => onNavigate('terms')}
-                      fieldClass={fieldClass}
-                      idPrefix="wi-"
-                    />
-                    <button
-                      type="button"
-                      disabled={waiverBusy || actionsBlocked}
-                      onClick={() => void handleSignWaiver()}
-                      className="lz-btn-primary mt-6 w-full justify-center py-4 text-base !normal-case !tracking-wide"
-                    >
-                      {waiverBusy ? 'Saving…' : 'Save waiver'}
-                    </button>
-                    {waiverMessage ? (
-                      <p className="mt-3 text-sm text-slate-300" role="status">
-                        {waiverMessage}
-                      </p>
-                    ) : null}
-                  </section>
-                ) : (
-                  <section className="lz-card-glass rounded-[var(--lz-radius-card)] p-4 text-sm text-emerald-100">
-                    <Shield className="mb-2 h-5 w-5 text-emerald-300" aria-hidden />
-                    Waiver on file for this booking.
-                  </section>
-                )}
+                <section className={WI_SECTION}>
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <h2 className="text-xl font-bold text-white">Waiver</h2>
+                      <p className={`${WI_HINT} mt-1`}>Read and sign before your trip.</p>
+                    </div>
+                    <DocStatusBadge status={waiverDocStatus} />
+                  </div>
+                  {!booking.waiver_signed ? (
+                    <>
+                      <div className="mt-5">
+                        <WaiverBlock
+                          bookingMode={bookingMode}
+                          waiverData={waiverData}
+                          onWaiverDataChange={setWaiverData}
+                          termsAccepted={termsAccepted}
+                          onTermsAcceptedChange={setTermsAccepted}
+                          damageFeeAcknowledged={damageFeeAcknowledged}
+                          onDamageFeeAcknowledgedChange={setDamageFeeAcknowledged}
+                          onNavigateTerms={() => onNavigate('terms')}
+                          fieldClass={fieldClass}
+                          idPrefix="wi-"
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        disabled={waiverBusy || actionsBlocked}
+                        onClick={() => void handleSignWaiver()}
+                        className={`${WI_PRIMARY_BTN} mt-6`}
+                      >
+                        {waiverBusy ? 'Saving…' : 'Save My Waiver'}
+                      </button>
+                      {waiverMessage ? (
+                        <p className="mt-3 text-lg text-slate-200" role="status">
+                          {waiverMessage}
+                        </p>
+                      ) : null}
+                    </>
+                  ) : (
+                    <p className="mt-4 text-lg text-emerald-100">Waiver on file for this booking.</p>
+                  )}
+                </section>
 
                 {isRental && booking.waiver_signed ? (
                   <>
-                    <section className="lz-card-glass rounded-[var(--lz-radius-card)] p-6 md:p-8">
-                      <h2 className="text-sm font-bold uppercase tracking-widest text-cyan-200/90">
-                        License / ID
-                      </h2>
-                      <p className="mt-2 text-sm text-slate-400">
-                        Upload your boating license or government ID (JPEG, PNG, WebP, GIF, or PDF).
-                      </p>
-                      <label className="mt-4 flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-white/20 bg-slate-950/30 px-4 py-10 hover:border-cyan-400/40">
-                        <Upload className="mb-2 h-10 w-10 text-slate-500" aria-hidden />
-                        <span className="text-base font-semibold text-slate-200">
-                          {licenseBusy ? 'Uploading…' : 'Tap to upload license'}
+                    <section className={WI_SECTION}>
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <h2 className="text-xl font-bold text-white">Driver&apos;s license / ID</h2>
+                          <p className={`${WI_HINT} mt-1`}>
+                            Upload a clear photo. Accepted: JPEG, PNG, WebP, GIF, or PDF.
+                          </p>
+                        </div>
+                        <DocStatusBadge status={licenseDocStatus} />
+                      </div>
+                      <label className={WI_UPLOAD_ZONE}>
+                        <Upload className="mb-2 h-10 w-10 text-slate-400" aria-hidden />
+                        <span className="text-lg font-semibold text-white">
+                          {licenseBusy ? 'Uploading…' : 'Take Photo or Choose File'}
                         </span>
                         <input
                           type="file"
                           accept={FILE_ACCEPT}
+                          capture="environment"
                           className="sr-only"
                           disabled={licenseBusy || actionsBlocked}
                           onChange={(e) => void handleLicenseUpload(e)}
                         />
                       </label>
                       {licenseMessage ? (
-                        <p className="mt-3 text-sm text-slate-300" role="status">
+                        <p className="mt-3 text-lg text-slate-200" role="status">
                           {licenseMessage}
                         </p>
                       ) : null}
                     </section>
 
                     {insuranceConfig ? (
-                      <section className="lz-card-glass rounded-[var(--lz-radius-card)] p-6 md:p-8">
-                        <h2 className="text-sm font-bold uppercase tracking-widest text-cyan-200/90">
-                          Buoy rental insurance
-                        </h2>
-                        <p className="mt-2 text-sm font-semibold text-cyan-100/95">{insuranceConfig.label}</p>
+                      <section className={WI_SECTION}>
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <h2 className="text-xl font-bold text-white">Insurance</h2>
+                            <p className={`${WI_HINT} mt-1`}>{insuranceConfig.label}</p>
+                          </div>
+                          <DocStatusBadge status={insuranceDocStatus} />
+                        </div>
                         <div className="mt-5 flex justify-center rounded-xl border border-white/10 bg-white p-4">
                           <img
                             src={insuranceConfig.qrImage}
@@ -753,60 +940,56 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
                           href={insuranceConfig.checkoutUrl}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="lz-btn-primary mt-5 inline-flex w-full items-center justify-center gap-2 py-4 text-base !normal-case !tracking-wide"
+                          className={`${WI_PRIMARY_BTN} mt-5`}
                         >
                           Get Buoy Insurance
                           <ExternalLink className="h-5 w-5" aria-hidden />
                         </a>
+                        <p className={`${WI_HINT} mt-5`}>
+                          After purchasing coverage, upload a screenshot or PDF of your policy.
+                        </p>
+                        <label className={WI_UPLOAD_ZONE}>
+                          <Upload className="mb-2 h-10 w-10 text-slate-400" aria-hidden />
+                          <span className="text-lg font-semibold text-white">
+                            {proofBusy ? 'Uploading…' : 'Take Photo or Choose File'}
+                          </span>
+                          <input
+                            type="file"
+                            accept={FILE_ACCEPT}
+                            capture="environment"
+                            className="sr-only"
+                            disabled={proofBusy || actionsBlocked}
+                            onChange={(e) => void handleProofUpload(e)}
+                          />
+                        </label>
+                        {proofMessage ? (
+                          <p className="mt-3 text-lg text-slate-200" role="status">
+                            {proofMessage}
+                          </p>
+                        ) : null}
                       </section>
                     ) : null}
-
-                    <section className="lz-card-glass rounded-[var(--lz-radius-card)] p-6 md:p-8">
-                      <h2 className="text-sm font-bold uppercase tracking-widest text-cyan-200/90">
-                        Upload insurance proof
-                      </h2>
-                      <p className="mt-2 text-sm text-slate-400">
-                        After purchasing Buoy coverage, upload a screenshot or PDF of your policy.
-                      </p>
-                      <label className="mt-4 flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-white/20 bg-slate-950/30 px-4 py-10 hover:border-cyan-400/40">
-                        <Upload className="mb-2 h-10 w-10 text-slate-500" aria-hidden />
-                        <span className="text-base font-semibold text-slate-200">
-                          {proofBusy ? 'Uploading…' : 'Tap to upload proof'}
-                        </span>
-                        <input
-                          type="file"
-                          accept={FILE_ACCEPT}
-                          className="sr-only"
-                          disabled={proofBusy || actionsBlocked}
-                          onChange={(e) => void handleProofUpload(e)}
-                        />
-                      </label>
-                      {proofMessage ? (
-                        <p className="mt-3 text-sm text-slate-300" role="status">
-                          {proofMessage}
-                        </p>
-                      ) : null}
-                    </section>
                   </>
                 ) : null}
 
                 {!isRental && booking.waiver_signed ? (
-                  <section className="lz-card-glass rounded-[var(--lz-radius-card)] p-6 text-sm text-slate-300">
-                    Captain-led charter: rental insurance is handled by Launch Zone unless we contact you
-                    with additional requirements.
+                  <section className={`${WI_SECTION} ${WI_BODY}`}>
+                    Captain-led charter: rental insurance is handled by Launch Zone unless we contact
+                    you with additional requirements.
                   </section>
                 ) : null}
               </>
             ) : null}
 
-            <button
-              type="button"
-              onClick={() => void refreshBooking()}
-              className="w-full rounded-xl border border-white/15 bg-slate-950/50 py-3 text-sm font-semibold text-cyan-200 hover:bg-slate-900/60"
-            >
-              Refresh status
+            <button type="button" onClick={() => void refreshBooking()} className={WI_SECONDARY_BTN}>
+              Refresh My Status
             </button>
+            <WaiversHelpCard />
           </div>
+        ) : null}
+
+        {!restoringSession && !magicLinkLoading && !submissionView && !booking ? (
+          <WaiversHelpCard className="mt-8" />
         ) : null}
       </div>
     </div>

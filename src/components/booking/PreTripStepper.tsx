@@ -9,41 +9,56 @@ export default function PreTripStepper({ steps, currentKey, className = '' }: Pr
     0,
     steps.findIndex((s) => s.key === currentKey)
   );
+  const current = steps[currentIndex];
 
   return (
-    <nav aria-label="Progress" className={`mb-6 ${className}`}>
-      <ol className="flex items-center justify-between gap-1">
+    <nav aria-label="Form progress" className={className}>
+      <p className="text-lg font-bold text-white" aria-live="polite">
+        Step {currentIndex + 1} of {steps.length}
+        {current ? `: ${current.label}` : ''}
+      </p>
+
+      <ol className="mt-4 space-y-3">
         {steps.map((step, index) => {
           const done = index < currentIndex;
           const active = index === currentIndex;
           return (
-            <li key={step.key} className="flex flex-1 flex-col items-center gap-1">
+            <li
+              key={step.key}
+              className={`flex min-h-12 items-center gap-3 rounded-xl border px-4 py-3 ${
+                active
+                  ? 'border-[var(--lz-cta)]/45 bg-[var(--lz-cta)]/10'
+                  : done
+                    ? 'border-emerald-400/30 bg-emerald-950/20'
+                    : 'border-white/10 bg-slate-950/35'
+              }`}
+            >
               <span
-                className={`flex h-9 w-9 items-center justify-center rounded-full text-xs font-bold transition-colors ${
+                className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-base font-bold ${
                   done
-                    ? 'bg-emerald-500/25 text-emerald-200 ring-2 ring-emerald-400/40'
+                    ? 'bg-emerald-500/30 text-emerald-100'
                     : active
-                      ? 'bg-[var(--lz-cta)]/25 text-white ring-2 ring-[var(--lz-cta)]/50'
-                      : 'bg-slate-800/80 text-slate-500 ring-1 ring-white/10'
+                      ? 'bg-[var(--lz-cta)]/35 text-white'
+                      : 'bg-slate-800 text-slate-300'
                 }`}
                 aria-current={active ? 'step' : undefined}
               >
                 {done ? '✓' : index + 1}
               </span>
               <span
-                className={`hidden text-center text-[10px] font-semibold uppercase leading-tight tracking-wide sm:block ${
-                  active ? 'text-cyan-100' : done ? 'text-emerald-200/80' : 'text-slate-500'
+                className={`text-lg font-semibold ${
+                  active ? 'text-white' : done ? 'text-emerald-100' : 'text-slate-300'
                 }`}
               >
                 {step.label}
+              </span>
+              <span className="sr-only">
+                {done ? 'Completed' : active ? 'Current step' : 'Not started'}
               </span>
             </li>
           );
         })}
       </ol>
-      <p className="mt-3 text-center text-sm font-semibold text-cyan-100 sm:hidden">
-        Step {currentIndex + 1} of {steps.length}: {steps[currentIndex]?.label}
-      </p>
     </nav>
   );
 }

@@ -39,7 +39,7 @@ export async function findPublicBooking(input: {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      email: input.email.trim(),
+      email: input.email.trim().toLowerCase(),
       phone: input.phone.trim(),
       code: input.code?.trim() || undefined,
     }),
@@ -254,7 +254,8 @@ export type PreTripStatusPayload = {
 
 export async function fetchPreTripStatus(
   submissionId: string,
-  email: string
+  email: string,
+  phone: string
 ): Promise<{ ok: true; data: PreTripStatusPayload } | { ok: false; error: string }> {
   if (!env.apiUrlConfigured || !env.apiUrl) {
     return { ok: false, error: 'API is not configured.' };
@@ -263,6 +264,7 @@ export async function fetchPreTripStatus(
   const params = new URLSearchParams({
     submissionId: submissionId.trim(),
     email: email.trim().toLowerCase(),
+    phone: phone.trim(),
   });
   const res = await fetch(`${env.apiUrl}/api/public/pre-trip-status?${params}`);
   const payload = (await res.json().catch(() => ({}))) as PreTripStatusPayload & { error?: string };
@@ -350,7 +352,12 @@ export async function submitPreTripSubmission(input: {
   damageFeeAcknowledged: boolean;
   licenseUrl?: string | null;
   insuranceUrl?: string | null;
-}): Promise<{ ok: true; submissionId: string } | { ok: false; error: string }> {
+  /** Stable client draft UUID — used for server-side idempotency. */
+  clientDraftId?: string;
+}): Promise<
+  | { ok: true; submissionId: string; duplicate?: boolean }
+  | { ok: false; error: string }
+> {
   if (!env.apiUrlConfigured || !env.apiUrl) {
     return { ok: false, error: 'API is not configured.' };
   }
@@ -359,11 +366,11 @@ export async function submitPreTripSubmission(input: {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      customerName: input.customerName,
-      email: input.email,
-      phone: input.phone,
+      customerName: input.customerName.trim(),
+      email: input.email.trim().toLowerCase(),
+      phone: input.phone.trim(),
       tripType: input.tripType,
-      grouponCode: input.grouponCode || undefined,
+      grouponCode: input.grouponCode?.trim() || undefined,
       requestedTripDate: input.requestedTripDate || undefined,
       waiverSignature: input.waiverSignature,
       waiverAgreed: input.waiverAgreed,
@@ -371,11 +378,14 @@ export async function submitPreTripSubmission(input: {
       damageFeeAcknowledged: input.damageFeeAcknowledged,
       licenseUrl: input.licenseUrl || undefined,
       insuranceUrl: input.insuranceUrl || undefined,
+      clientDraftId: input.clientDraftId || undefined,
+      idempotencyKey: input.clientDraftId || undefined,
     }),
   });
 
   const payload = (await res.json().catch(() => ({}))) as {
     submissionId?: string;
+    duplicate?: boolean;
     error?: string;
   };
 
@@ -383,7 +393,11 @@ export async function submitPreTripSubmission(input: {
     return { ok: false, error: payload.error || 'Could not submit. Try again or call us.' };
   }
 
-  return { ok: true, submissionId: payload.submissionId };
+  return {
+    ok: true,
+    submissionId: payload.submissionId,
+    duplicate: Boolean(payload.duplicate),
+  };
 }
 
 export async function adminUpdatePreTripSubmission(

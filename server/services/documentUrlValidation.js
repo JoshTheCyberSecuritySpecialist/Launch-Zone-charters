@@ -79,6 +79,7 @@ function validateStorageDocumentUrl(rawUrl, opts = {}) {
  * @param {object} [opts]
  * @param {string} [opts.bookingId]
  * @param {string} [opts.preTripPrefix] - e.g. pre-trip/draft-uuid
+ * @param {boolean} [opts.allowUnscopedPreTrip] - allow any licenses|insurance/pre-trip/* path
  */
 function validateCustomerDocumentUrl(rawUrl, opts = {}) {
   const base = validateStorageDocumentUrl(rawUrl);
@@ -101,6 +102,8 @@ function validateCustomerDocumentUrl(rawUrl, opts = {}) {
       ) {
         return base;
       }
+      // When a draft prefix is required, do not accept other pre-trip paths.
+      return { ok: false, reason: 'path_prefix_mismatch' };
     }
     if (bookingId) {
       if (
@@ -110,7 +113,11 @@ function validateCustomerDocumentUrl(rawUrl, opts = {}) {
         return base;
       }
     }
-    if (objectPath.startsWith('licenses/pre-trip/') || objectPath.startsWith('insurance/pre-trip/')) {
+    // Opt-in only (e.g. admin/booking attach of an already-stored pre-trip file).
+    if (
+      opts.allowUnscopedPreTrip &&
+      (objectPath.startsWith('licenses/pre-trip/') || objectPath.startsWith('insurance/pre-trip/'))
+    ) {
       return base;
     }
   }

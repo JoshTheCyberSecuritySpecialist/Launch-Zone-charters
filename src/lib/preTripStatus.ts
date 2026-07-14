@@ -252,11 +252,11 @@ export const STATUS_COPY: Record<
   submitted_for_review: {
     title: 'Submitted for Review',
     description:
-      'We have your documents. Our team is reviewing them — you are not cleared until we mark you Ready for Departure.',
+      'Thank you. Launch Zone Charters has received your information. You do not need to complete this form again. Our team is reviewing your documents — you are not cleared until we mark you Ready for Departure.',
   },
   missing_items: {
-    title: 'Missing Items',
-    description: 'Complete the steps below so we can review your trip.',
+    title: 'Needs Attention',
+    description: 'Complete the steps below so we can review your trip. Your progress is saved automatically.',
   },
   rejected: {
     title: 'Needs Attention',

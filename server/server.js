@@ -19,6 +19,7 @@ const preTripNotifications = require('./services/preTripNotifications');
 const waiversDocsReminders = require('./services/waiversDocsReminders');
 const bookingAccess = require('./services/bookingAccess');
 const documentUrlValidation = require('./services/documentUrlValidation');
+const preTripSubmissionGuard = require('./services/preTripSubmissionGuard');
 const bookingReliability = require('./services/bookingReliability');
 const bookingCommunications = require('./services/bookingCommunications');
 const shopService = require('./services/shopService');
@@ -5910,7 +5911,7 @@ app.post('/api/booking-mark-insurance-proof', async (req, res) => {
 });
 
 /**
- * Public status for manual pre-trip submissions (submission id + email must match).
+ * Public status for manual pre-trip submissions (submission id + email + phone must match).
  */
 app.get('/api/public/pre-trip-status', async (req, res) => {
   try {
@@ -5918,8 +5919,9 @@ app.get('/api/public/pre-trip-status', async (req, res) => {
 
     const submissionId = String(req.query.submissionId || '').trim();
     const email = normalizeEmailParam(req.query.email);
-    if (!isBookingUuidParam(submissionId) || !email) {
-      return res.status(400).json({ error: 'submissionId and email are required' });
+    const phone = String(req.query.phone || '').trim();
+    if (!isBookingUuidParam(submissionId) || !email || !phone) {
+      return res.status(400).json({ error: 'submissionId, email, and phone are required' });
     }
 
     const { data: submission, error: sErr } = await supabase
@@ -5930,7 +5932,10 @@ app.get('/api/public/pre-trip-status', async (req, res) => {
 
     if (sErr || !submission) return res.status(404).json({ error: 'Not found' });
     if (normalizeEmailParam(submission.email) !== email) {
-      return res.status(403).json({ error: 'Email does not match this submission' });
+      return res.status(403).json({ error: 'Email or phone does not match this submission' });
+    }
+    if (!phoneDigitsMatch(submission.phone, phone)) {
+      return res.status(403).json({ error: 'Email or phone does not match this submission' });
     }
 
     let matchedBooking = null;
@@ -6167,6 +6172,8 @@ function checkPreTripSubmitRate(ip) {
 /**
  * Off-platform pre-trip submission (no booking record yet).
  * POST /api/public/pre-trip-submission
+ * Idempotent when clientDraftId / idempotencyKey is provided, or when the same
+ * email+phone already has a non-rejected submission.
  */
 app.post('/api/public/pre-trip-submission', async (req, res) => {
   try {
@@ -6190,8 +6197,14 @@ app.post('/api/public/pre-trip-submission', async (req, res) => {
     const damageFeeAcknowledged = Boolean(body.damageFeeAcknowledged ?? body.damage_fee_acknowledged);
     const licenseUrl = String(body.licenseUrl || body.license_url || '').trim() || null;
     const insuranceUrl = String(body.insuranceUrl || body.insurance_url || '').trim() || null;
+    const idempotencyKey = preTripSubmissionGuard.normalizeIdempotencyKey(
+      body.idempotencyKey || body.idempotency_key || body.clientDraftId || body.client_draft_id
+    );
 
     if (!email) return res.status(400).json({ error: 'Email is required.' });
+    if (!phone || normalizePhoneDigits(phone).length < 7) {
+      return res.status(400).json({ error: 'A valid mobile phone number is required.' });
+    }
     if (!PRE_TRIP_TYPES.has(tripType)) {
       return res.status(400).json({ error: 'Invalid trip type.' });
     }
@@ -6213,17 +6226,65 @@ app.post('/api/public/pre-trip-submission', async (req, res) => {
       return res.status(400).json({ error: 'License / ID upload is required for rentals.' });
     }
 
+    // Document URLs must be bound to this client draft when present.
+    if ((licenseUrl || insuranceUrl) && !idempotencyKey) {
+      return res.status(400).json({ error: 'clientDraftId is required when uploading documents.' });
+    }
+    const preTripPrefix = idempotencyKey ? `pre-trip/${idempotencyKey}` : '';
     if (licenseUrl) {
-      const licCheck = documentUrlValidation.validateCustomerDocumentUrl(licenseUrl);
+      const licCheck = documentUrlValidation.validateCustomerDocumentUrl(licenseUrl, {
+        preTripPrefix,
+      });
       if (!licCheck.ok) {
         return res.status(400).json({ error: 'Invalid license document URL.' });
       }
     }
     if (insuranceUrl) {
-      const insCheck = documentUrlValidation.validateCustomerDocumentUrl(insuranceUrl);
+      const insCheck = documentUrlValidation.validateCustomerDocumentUrl(insuranceUrl, {
+        preTripPrefix,
+      });
       if (!insCheck.ok) {
         return res.status(400).json({ error: 'Invalid insurance document URL.' });
       }
+    }
+
+    // Load recent candidates for this email (and exact key) before insert.
+    const candidateMap = new Map();
+    if (idempotencyKey) {
+      const { data: byKey } = await supabase
+        .from('pre_trip_submissions')
+        .select('id, email, phone, admin_status, idempotency_key, created_at')
+        .eq('idempotency_key', idempotencyKey)
+        .maybeSingle();
+      if (byKey?.id) candidateMap.set(byKey.id, byKey);
+    }
+    const { data: byEmail } = await supabase
+      .from('pre_trip_submissions')
+      .select('id, email, phone, admin_status, idempotency_key, created_at')
+      .ilike('email', email)
+      .order('created_at', { ascending: false })
+      .limit(20);
+    for (const row of byEmail || []) {
+      if (row?.id) candidateMap.set(row.id, row);
+    }
+
+    const { reuse, reason } = preTripSubmissionGuard.pickReusableSubmission(
+      [...candidateMap.values()],
+      { email, phone, idempotencyKey }
+    );
+
+    if (reuse?.id) {
+      console.log(
+        '[pre-trip-submission] duplicate prevented',
+        reason,
+        String(reuse.id).slice(0, 8)
+      );
+      return res.json({
+        ok: true,
+        submissionId: reuse.id,
+        duplicate: true,
+        duplicateReason: reason,
+      });
     }
 
     const signedAt = new Date().toISOString();
@@ -6246,6 +6307,7 @@ app.post('/api/public/pre-trip-submission', async (req, res) => {
       insurance_status: insuranceStatus,
       admin_status: 'pending',
       updated_at: signedAt,
+      idempotency_key: idempotencyKey,
     };
 
     const { data: inserted, error: insErr } = await supabase
@@ -6255,6 +6317,31 @@ app.post('/api/public/pre-trip-submission', async (req, res) => {
       .single();
 
     if (insErr || !inserted?.id) {
+      // Race: unique idempotency_key collision — return the winner.
+      const errCode = String(insErr?.code || '');
+      const errMsg = String(insErr?.message || '').toLowerCase();
+      const looksLikeUniqueRace =
+        Boolean(idempotencyKey) &&
+        (errCode === '23505' || errMsg.includes('idempotency') || errMsg.includes('duplicate'));
+      if (looksLikeUniqueRace) {
+        const { data: raced } = await supabase
+          .from('pre_trip_submissions')
+          .select('id, email, phone')
+          .eq('idempotency_key', idempotencyKey)
+          .maybeSingle();
+        if (
+          raced?.id &&
+          normalizeEmailParam(raced.email) === email &&
+          phoneDigitsMatch(raced.phone, phone)
+        ) {
+          return res.json({
+            ok: true,
+            submissionId: raced.id,
+            duplicate: true,
+            duplicateReason: 'idempotency_key_race',
+          });
+        }
+      }
       console.error('[pre-trip-submission] insert:', insErr?.message);
       return res.status(500).json({ error: 'Could not save submission. Try again or call us.' });
     }
@@ -6268,7 +6355,7 @@ app.post('/api/public/pre-trip-submission', async (req, res) => {
       submission: { ...row, id: inserted.id },
     });
 
-    return res.json({ ok: true, submissionId: inserted.id });
+    return res.json({ ok: true, submissionId: inserted.id, duplicate: false });
   } catch (err) {
     console.error('[pre-trip-submission]', err);
     return res.status(500).json({ error: 'Failed' });
@@ -6638,7 +6725,9 @@ app.post('/api/booking-mark-license-submitted', async (req, res) => {
     const urlCheck = documentUrlValidation.validateCustomerDocumentUrl(licenseUrl, { bookingId });
     const preTripCheck = urlCheck.ok
       ? urlCheck
-      : documentUrlValidation.validateCustomerDocumentUrl(licenseUrl);
+      : documentUrlValidation.validateCustomerDocumentUrl(licenseUrl, {
+          allowUnscopedPreTrip: true,
+        });
     if (!preTripCheck.ok) {
       return res.status(400).json({ error: 'Invalid license URL for this booking' });
     }

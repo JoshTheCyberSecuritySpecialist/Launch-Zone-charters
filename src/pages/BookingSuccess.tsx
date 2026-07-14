@@ -190,24 +190,13 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
     };
   }, [activeBookingId]);
 
-  const goInsuranceRequired = useMemo(
+  const goWaiversInsurance = useMemo(
     () =>
       wrapRouterNavigate(
         'booking_success',
-        'insurance_required',
+        'waivers_insurance',
         navigate,
-        `/insurance-required?bookingId=${encodeURIComponent(activeBookingId)}`
-      ),
-    [navigate, activeBookingId]
-  );
-
-  const goVerifyUpload = useMemo(
-    () =>
-      wrapRouterNavigate(
-        'booking_success',
-        'verify_upload',
-        navigate,
-        `/verify?bookingId=${encodeURIComponent(activeBookingId)}`
+        `/waivers-insurance?bookingId=${encodeURIComponent(activeBookingId)}`
       ),
     [navigate, activeBookingId]
   );
@@ -355,7 +344,7 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
         <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
           <button
             type="button"
-            onClick={goInsuranceRequired}
+            onClick={goWaiversInsurance}
             className="lz-btn-primary inline-flex justify-center text-center text-sm !normal-case !tracking-wide"
           >
             Waivers &amp; insurance
@@ -374,15 +363,15 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
           </a>
           <button
             type="button"
-            onClick={goVerifyUpload}
+            onClick={goWaiversInsurance}
             className="lz-btn-primary inline-flex justify-center text-center text-sm !normal-case !tracking-wide"
           >
             Upload insurance proof
           </button>
         </div>
         <p className="mt-3 text-xs text-slate-500">
-          You&apos;ll confirm your booking email, then upload a screenshot or PDF of your policy — same flow as
-          your confirmation email.
+          Continue on Waivers &amp; Insurance to confirm your phone, sign your waiver, and upload your
+          documents — same place as your confirmation email link.
         </p>
       </div>
 

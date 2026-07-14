@@ -11,6 +11,7 @@ import {
   adminCharterCapacityLines,
   validateCharterPassengerCount,
 } from '../lib/charterCapacity';
+import { withTimeout } from '../lib/adminDiagnostics';
 
 type BoatRow = { id: string; name: string; type?: string | null };
 type TimelineEvent = { id: string; event_type: string; message: string | null; created_at: string };
@@ -167,11 +168,11 @@ function disputeDeadlineLabel(dueBy: string | null | undefined) {
 export default function AdminBookingDetails() {
   const { id = '' } = useParams();
   const navigate = useNavigate();
-  const { isAdmin, loading: authLoading } = useAuth();
+  const { user, isAdmin, loading: authLoading } = useAuth();
   const [detail, setDetail] = useState<DetailPayload | null>(null);
   const [boats, setBoats] = useState<BoatRow[]>([]);
   const [form, setForm] = useState<Record<string, any>>({});
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [notice, setNotice] = useState<{ variant: 'success' | 'error'; text: string } | null>(null);
@@ -202,7 +203,7 @@ export default function AdminBookingDetails() {
   const booking = detail?.booking;
 
   const getAdminToken = useCallback(async () => {
-    const { data } = await supabase.auth.getSession();
+    const { data } = await withTimeout('Admin session lookup', supabase.auth.getSession(), 12000);
     return data.session?.access_token || null;
   }, []);
 
@@ -211,24 +212,39 @@ export default function AdminBookingDetails() {
       if (!env.apiUrlConfigured || !env.apiUrl) throw new Error('API URL is not configured.');
       const token = await getAdminToken();
       if (!token) throw new Error('Admin session expired.');
-      return fetch(`${env.apiUrl}${path}`, {
-        ...init,
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...(init.headers || {}) },
-      });
+      return withTimeout(
+        `Admin booking ${path}`,
+        fetch(`${env.apiUrl}${path}`, {
+          ...init,
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+            ...(init.headers || {}),
+          },
+        }),
+        20000
+      );
     },
     [getAdminToken]
   );
 
   const load = useCallback(async () => {
-    if (!isAdmin || !id) return;
+    if (!isAdmin || !id) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     try {
-      const [bookingRes, boatsRes, emailConfigRes, disputeRes] = await Promise.all([
-        authedFetch(`/api/admin/bookings/${id}`),
-        fetch(`${env.apiUrl}/api/boats`),
-        authedFetch('/api/admin/email/config-check'),
-        authedFetch(`/api/admin/bookings/${id}/dispute`),
-      ]);
+      const [bookingRes, boatsRes, emailConfigRes, disputeRes] = await withTimeout(
+        'Booking details bundle',
+        Promise.all([
+          authedFetch(`/api/admin/bookings/${id}`),
+          withTimeout('Boats list', fetch(`${env.apiUrl}/api/boats`), 15000),
+          authedFetch('/api/admin/email/config-check'),
+          authedFetch(`/api/admin/bookings/${id}/dispute`),
+        ]),
+        30000
+      );
       const bookingPayload = (await bookingRes.json().catch(() => ({}))) as DetailPayload & { error?: string };
       if (!bookingRes.ok) throw new Error(bookingPayload.error || 'Could not load booking.');
       const boatsPayload = (await boatsRes.json().catch(() => ({}))) as { boats?: BoatRow[] };
@@ -380,8 +396,9 @@ export default function AdminBookingDetails() {
   };
 
   useEffect(() => {
+    if (authLoading || !isAdmin) return;
     void load();
-  }, [load]);
+  }, [authLoading, isAdmin, load]);
 
   useEffect(() => {
     const beforeUnload = (event: BeforeUnloadEvent) => {
@@ -682,9 +699,50 @@ export default function AdminBookingDetails() {
     }
   };
 
-  if (authLoading || loading) return <FullPageLoader message="Loading booking details..." />;
-  if (!isAdmin) return <FullPageLoader message="Admin access required." />;
-  if (!booking) return <div className="p-8">Booking not found.</div>;
+  if (authLoading) return <FullPageLoader message="Checking admin access…" />;
+  if (!isAdmin) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
+        <div className="rounded-xl bg-white p-8 text-center shadow">
+          <h1 className="text-2xl font-bold">Access denied</h1>
+          <p className="mt-2 text-slate-600">
+            {user ? 'This account is not authorized.' : 'Sign in as admin.'}
+          </p>
+          <Link
+            to="/admin-login"
+            className="mt-5 inline-flex rounded-lg bg-amber-600 px-5 py-3 font-bold text-white"
+          >
+            Admin Login
+          </Link>
+        </div>
+      </div>
+    );
+  }
+  if (loading && !detail) return <FullPageLoader message="Loading booking details…" />;
+  if (!booking) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
+        <div className="w-full max-w-lg rounded-xl bg-white p-8 text-center shadow">
+          <h1 className="text-2xl font-bold">Booking not found</h1>
+          <p className="mt-2 text-slate-600">
+            {notice?.text || 'This booking could not be loaded. It may have been removed, or the request timed out.'}
+          </p>
+          <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-center">
+            <button
+              type="button"
+              onClick={() => void load()}
+              className="rounded-lg bg-amber-600 px-6 py-3 font-bold text-white"
+            >
+              Retry
+            </button>
+            <Link to="/admin/bookings" className="rounded-lg bg-slate-200 px-6 py-3 font-bold text-slate-900">
+              Back to Bookings
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const waiverDone = Boolean(booking.waiver_signed || (Array.isArray(booking.waivers) && booking.waivers.length > 0));
   const insuranceDone = ['submitted', 'verified'].includes(String(booking.insurance_status || ''));

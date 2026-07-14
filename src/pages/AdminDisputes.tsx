@@ -6,6 +6,7 @@ import { useAuth } from '../contexts/useAuth';
 import FullPageLoader from '../components/FullPageLoader';
 import Logo from '../components/ui/Logo';
 import { env } from '../config/env.js';
+import { fetchJsonWithTimeout, withTimeout } from '../lib/adminDiagnostics';
 
 type DisputeRow = {
   id: string;
@@ -103,7 +104,7 @@ export default function AdminDisputes() {
   const [summary, setSummary] = useState<DisputeSummary | null>(null);
   const [statusFilter, setStatusFilter] = useState('');
   const [search, setSearch] = useState('');
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState<{ variant: 'success' | 'error'; text: string } | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<DisputeDetail | null>(null);
@@ -113,34 +114,40 @@ export default function AdminDisputes() {
   const [evidenceModalOpen, setEvidenceModalOpen] = useState(false);
   const [evidenceLoading, setEvidenceLoading] = useState(false);
   const [exportLoading, setExportLoading] = useState<'pdf' | 'zip' | 'stripe' | null>(null);
+  const [hasLoaded, setHasLoaded] = useState(false);
 
   const getAdminToken = useCallback(async () => {
-    const { data } = await supabase.auth.getSession();
+    const { data } = await withTimeout('Admin session lookup', supabase.auth.getSession(), 12000);
     return data.session?.access_token || null;
   }, []);
 
   const apiRequest = useCallback(
-    async (path: string, init: RequestInit = {}) => {
+    async <T = Record<string, unknown>>(path: string, init: RequestInit = {}): Promise<T> => {
       if (!env.apiUrlConfigured || !env.apiUrl) throw new Error('API URL is not configured.');
       const token = await getAdminToken();
       if (!token) throw new Error('Admin session expired.');
-      const res = await fetch(`${env.apiUrl}${path}`, {
-        ...init,
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-          ...(init.headers || {}),
+      return fetchJsonWithTimeout<T>(
+        'Admin disputes',
+        `${env.apiUrl}${path}`,
+        {
+          ...init,
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+            ...(init.headers || {}),
+          },
         },
-      });
-      const payload = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(typeof payload?.error === 'string' ? payload.error : 'Request failed.');
-      return payload;
+        20000
+      );
     },
     [getAdminToken]
   );
 
   const loadDisputes = useCallback(async () => {
-    if (!isAdmin) return;
+    if (!isAdmin) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     try {
       const params = new URLSearchParams();
@@ -150,18 +157,20 @@ export default function AdminDisputes() {
         apiRequest(`/api/admin/disputes?${params.toString()}`),
         apiRequest('/api/admin/disputes/summary'),
       ]);
-      setItems(Array.isArray(listPayload.items) ? listPayload.items : []);
+      setItems(Array.isArray((listPayload as { items?: DisputeRow[] }).items) ? (listPayload as { items: DisputeRow[] }).items : []);
       setSummary(summaryPayload as DisputeSummary);
     } catch (err) {
       setNotice({ variant: 'error', text: err instanceof Error ? err.message : 'Could not load disputes.' });
     } finally {
+      setHasLoaded(true);
       setLoading(false);
     }
   }, [apiRequest, isAdmin, search, statusFilter]);
 
   useEffect(() => {
+    if (authLoading || !isAdmin) return;
     void loadDisputes();
-  }, [loadDisputes]);
+  }, [authLoading, isAdmin, loadDisputes]);
 
   const loadDetail = async (id: string) => {
     setSelectedId(id);
@@ -201,7 +210,9 @@ export default function AdminDisputes() {
     if (!selectedId) return;
     setEvidenceLoading(true);
     try {
-      const payload = await apiRequest(`/api/admin/disputes/${encodeURIComponent(selectedId)}/evidence-summary`);
+      const payload = await apiRequest<{ summary?: string }>(
+        `/api/admin/disputes/${encodeURIComponent(selectedId)}/evidence-summary`
+      );
       setEvidenceSummary(typeof payload.summary === 'string' ? payload.summary : '');
       setEvidenceModalOpen(true);
     } catch (err) {
@@ -279,7 +290,7 @@ export default function AdminDisputes() {
     return row?.bookings?.customers || null;
   }, [detail, items, selectedId]);
 
-  if (authLoading || loading) return <FullPageLoader message="Loading Stripe disputes..." />;
+  if (authLoading) return <FullPageLoader message="Checking admin access…" />;
   if (!isAdmin) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
@@ -293,6 +304,7 @@ export default function AdminDisputes() {
       </div>
     );
   }
+  if (loading && !hasLoaded) return <FullPageLoader message="Loading Stripe disputes…" />;
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">

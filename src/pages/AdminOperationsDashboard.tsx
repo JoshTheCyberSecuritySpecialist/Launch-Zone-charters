@@ -7,6 +7,7 @@ import FullPageLoader from '../components/FullPageLoader';
 import Logo from '../components/ui/Logo';
 import { env } from '../config/env.js';
 import { adminCharterCapacityLines } from '../lib/charterCapacity';
+import { fetchJsonWithTimeout, withTimeout } from '../lib/adminDiagnostics';
 
 type OpsBooking = {
   id: string;
@@ -114,29 +115,33 @@ function revenueCard(title: string, row: RevenueSummary) {
 }
 
 export default function AdminOperationsDashboard() {
-  const { user, isAdmin, loading: authLoading } = useAuth();
+  const { user, isAdmin, loading: authLoading, authError, retryAuth } = useAuth();
   const [payload, setPayload] = useState<DashboardPayload | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
   const getAdminToken = useCallback(async () => {
-    const { data } = await supabase.auth.getSession();
+    const { data } = await withTimeout('Admin session lookup', supabase.auth.getSession(), 12000);
     return data.session?.access_token || null;
   }, []);
 
   const loadDashboard = useCallback(async () => {
-    if (!isAdmin) return;
+    if (!isAdmin) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setNotice(null);
     try {
       if (!env.apiUrlConfigured || !env.apiUrl) throw new Error('API URL is not configured.');
       const token = await getAdminToken();
       if (!token) throw new Error('Admin session expired.');
-      const res = await fetch(`${env.apiUrl}/api/admin/operations-dashboard`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const data = (await res.json().catch(() => ({}))) as DashboardPayload & { error?: string };
-      if (!res.ok) throw new Error(data.error || 'Could not load operations dashboard.');
+      const data = await fetchJsonWithTimeout<DashboardPayload>(
+        'Operations dashboard',
+        `${env.apiUrl}/api/admin/operations-dashboard`,
+        { headers: { Authorization: `Bearer ${token}` } },
+        20000
+      );
       setPayload(data);
     } catch (err) {
       setNotice(err instanceof Error ? err.message : 'Could not load operations dashboard.');
@@ -146,25 +151,105 @@ export default function AdminOperationsDashboard() {
   }, [getAdminToken, isAdmin]);
 
   useEffect(() => {
+    if (authLoading || !isAdmin) return;
     void loadDashboard();
-  }, [loadDashboard]);
+  }, [authLoading, isAdmin, loadDashboard]);
 
   const sourceRows = useMemo(() => Object.entries(payload?.bookingSources || {}).sort((a, b) => b[1] - a[1]), [payload]);
 
-  if (authLoading || loading) return <FullPageLoader message="Loading operations dashboard..." />;
-  if (!isAdmin) {
+  if (authLoading) {
+    return <FullPageLoader message="Checking admin access…" />;
+  }
+
+  if (authError) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
-        <div className="rounded-xl bg-white p-8 text-center shadow">
-          <h1 className="text-2xl font-bold">Access denied</h1>
-          <p className="mt-2 text-slate-600">{user ? 'This account is not authorized.' : 'Sign in as admin.'}</p>
-          <Link to="/admin-login" className="mt-5 inline-flex rounded-lg bg-amber-600 px-5 py-3 font-bold text-white">Admin Login</Link>
+        <div className="w-full max-w-md rounded-xl bg-white p-8 text-center shadow-lg">
+          <h1 className="text-2xl font-bold text-slate-900">Admin session could not load</h1>
+          <p className="mt-2 text-slate-600">
+            The admin page stopped while restoring your browser session.
+          </p>
+          <div className="mt-4 rounded-lg bg-red-50 px-4 py-3 text-left text-sm font-semibold text-red-800">
+            {authError}
+          </div>
+          <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-center">
+            <button
+              type="button"
+              onClick={retryAuth}
+              className="rounded-lg bg-amber-600 px-6 py-3 font-bold text-white hover:bg-amber-700"
+            >
+              Retry
+            </button>
+            <Link
+              to="/admin-login"
+              className="rounded-lg bg-slate-200 px-6 py-3 font-bold text-slate-900 hover:bg-slate-300"
+            >
+              Admin Login
+            </Link>
+          </div>
         </div>
       </div>
     );
   }
 
-  const weather = payload?.weather || {};
+  if (!isAdmin) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
+        <div className="rounded-xl bg-white p-8 text-center shadow">
+          <h1 className="text-2xl font-bold">Access denied</h1>
+          <p className="mt-2 text-slate-600">
+            {user ? 'This account is not authorized.' : 'Sign in as admin.'}
+          </p>
+          <Link
+            to="/admin-login"
+            className="mt-5 inline-flex rounded-lg bg-amber-600 px-5 py-3 font-bold text-white"
+          >
+            Admin Login
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  if (loading && !payload) {
+    return <FullPageLoader message="Loading operations dashboard…" />;
+  }
+
+  if (!payload) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
+        <div className="w-full max-w-lg rounded-xl bg-white p-8 text-center shadow-lg">
+          <h1 className="text-2xl font-bold text-slate-900">Operations dashboard could not load</h1>
+          <p className="mt-2 text-slate-600">
+            The request failed or timed out. This can happen on mobile networks. Other admin pages
+            like Bookings may still work.
+          </p>
+          {notice ? (
+            <div className="mt-4 rounded-lg bg-red-50 px-4 py-3 text-left text-sm font-semibold text-red-800">
+              {notice}
+            </div>
+          ) : null}
+          <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-center">
+            <button
+              type="button"
+              onClick={() => void loadDashboard()}
+              className="rounded-lg bg-amber-600 px-6 py-3 font-bold text-white hover:bg-amber-700"
+            >
+              Retry dashboard
+            </button>
+            <Link
+              to="/admin/bookings"
+              className="rounded-lg bg-slate-200 px-6 py-3 font-bold text-slate-900 hover:bg-slate-300"
+            >
+              Open Bookings
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const weather = payload.weather || {};
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
@@ -177,8 +262,13 @@ export default function AdminOperationsDashboard() {
               <p className="text-sm text-slate-400">Today&apos;s trips, paperwork, boats, revenue, and alerts</p>
             </div>
           </div>
-          <button type="button" onClick={() => void loadDashboard()} className="rounded-lg bg-slate-800 px-4 py-3 font-semibold hover:bg-slate-700">
-            Refresh
+          <button
+            type="button"
+            onClick={() => void loadDashboard()}
+            disabled={loading}
+            className="min-h-12 rounded-lg bg-slate-800 px-4 py-3 font-semibold hover:bg-slate-700 disabled:opacity-60"
+          >
+            {loading ? 'Refreshing…' : 'Refresh'}
           </button>
         </div>
       </div>

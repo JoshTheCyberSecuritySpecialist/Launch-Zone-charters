@@ -6,6 +6,7 @@ import { useAuth } from '../contexts/useAuth';
 import FullPageLoader from '../components/FullPageLoader';
 import Logo from '../components/ui/Logo';
 import { env } from '../config/env.js';
+import { fetchJsonWithTimeout, withTimeout } from '../lib/adminDiagnostics';
 
 type OutboxRow = {
   id: string;
@@ -60,56 +61,66 @@ export default function AdminOutbox() {
   const { user, isAdmin, loading: authLoading } = useAuth();
   const [items, setItems] = useState<OutboxRow[]>([]);
   const [filters, setFilters] = useState(emptyFilters);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState<{ variant: 'success' | 'error'; text: string } | null>(null);
   const [selected, setSelected] = useState<OutboxRow | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [hasLoaded, setHasLoaded] = useState(false);
 
   const getAdminToken = useCallback(async () => {
-    const { data } = await supabase.auth.getSession();
+    const { data } = await withTimeout('Admin session lookup', supabase.auth.getSession(), 12000);
     return data.session?.access_token || null;
   }, []);
 
   const apiRequest = useCallback(
-    async (path: string, init: RequestInit = {}) => {
+    async <T = Record<string, unknown>>(path: string, init: RequestInit = {}): Promise<T> => {
       if (!env.apiUrlConfigured || !env.apiUrl) throw new Error('API URL is not configured.');
       const token = await getAdminToken();
       if (!token) throw new Error('Admin session expired.');
-      const res = await fetch(`${env.apiUrl}${path}`, {
-        ...init,
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-          ...(init.headers || {}),
+      return fetchJsonWithTimeout<T>(
+        'Admin outbox',
+        `${env.apiUrl}${path}`,
+        {
+          ...init,
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+            ...(init.headers || {}),
+          },
         },
-      });
-      const payload = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(typeof payload?.error === 'string' ? payload.error : 'Request failed.');
-      return payload;
+        20000
+      );
     },
     [getAdminToken]
   );
 
   const loadOutbox = useCallback(async () => {
-    if (!isAdmin) return;
+    if (!isAdmin) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     try {
       const params = new URLSearchParams();
       Object.entries(filters).forEach(([key, value]) => {
         if (value.trim()) params.set(key, value.trim());
       });
-      const payload = await apiRequest(`/api/admin/outbox?${params.toString()}`);
+      const payload = (await apiRequest(`/api/admin/outbox?${params.toString()}`)) as {
+        items?: OutboxRow[];
+      };
       setItems(Array.isArray(payload.items) ? payload.items : []);
     } catch (err) {
       setNotice({ variant: 'error', text: err instanceof Error ? err.message : 'Could not load outbox.' });
     } finally {
+      setHasLoaded(true);
       setLoading(false);
     }
   }, [apiRequest, filters, isAdmin]);
 
   useEffect(() => {
+    if (authLoading || !isAdmin) return;
     void loadOutbox();
-  }, [loadOutbox]);
+  }, [authLoading, isAdmin, loadOutbox]);
 
   const messageTypes = useMemo(
     () => Array.from(new Set(items.map((row) => row.message_type).filter(Boolean))).sort(),
@@ -119,8 +130,8 @@ export default function AdminOutbox() {
   const viewMessage = async (id: string) => {
     setBusyId(id);
     try {
-      const payload = await apiRequest(`/api/admin/outbox/${id}`);
-      setSelected(payload.item as OutboxRow);
+      const payload = await apiRequest<{ item?: OutboxRow }>(`/api/admin/outbox/${id}`);
+      setSelected(payload.item || null);
     } catch (err) {
       setNotice({ variant: 'error', text: err instanceof Error ? err.message : 'Could not load message.' });
     } finally {
@@ -159,7 +170,7 @@ export default function AdminOutbox() {
     }
   };
 
-  if (authLoading || loading) return <FullPageLoader message="Loading communications outbox..." />;
+  if (authLoading) return <FullPageLoader message="Checking admin access…" />;
   if (!isAdmin) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
@@ -171,6 +182,7 @@ export default function AdminOutbox() {
       </div>
     );
   }
+  if (loading && !hasLoaded) return <FullPageLoader message="Loading communications outbox…" />;
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">

@@ -94,6 +94,31 @@ function run() {
   });
   assert.strictEqual(noMatch.reuse, null);
 
+  const draftFromUrl = guard.extractPreTripDraftIdFromDocumentUrl(
+    `https://abc.supabase.co/storage/v1/object/public/documents/licenses/pre-trip/${key}/file.jpg`
+  );
+  assert.strictEqual(draftFromUrl, key);
+
+  const resolvedFromUrl = guard.resolveSubmissionDraftId({
+    licenseUrl: `https://abc.supabase.co/storage/v1/object/public/documents/licenses/pre-trip/${key}/a.jpg`,
+  });
+  assert.strictEqual(resolvedFromUrl.ok, true);
+  assert.strictEqual(resolvedFromUrl.id, key);
+  assert.strictEqual(resolvedFromUrl.source, 'document_url');
+
+  const missing = guard.resolveSubmissionDraftId({
+    licenseUrl: 'https://abc.supabase.co/storage/v1/object/public/documents/licenses/other/a.jpg',
+  });
+  assert.strictEqual(missing.ok, false);
+  assert.strictEqual(missing.reason, 'missing_draft_id');
+
+  const bodyWinsAligned = guard.resolveSubmissionDraftId({
+    clientDraftId: key,
+    licenseUrl: `https://abc.supabase.co/storage/v1/object/public/documents/licenses/pre-trip/${key}/a.jpg`,
+  });
+  assert.strictEqual(bodyWinsAligned.ok, true);
+  assert.strictEqual(bodyWinsAligned.id, key);
+
   console.log('preTripSubmissionGuard.test: all assertions passed');
 }
 

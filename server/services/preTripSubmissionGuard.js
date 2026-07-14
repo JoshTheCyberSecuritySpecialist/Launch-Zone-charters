@@ -38,6 +38,65 @@ function normalizeIdempotencyKey(raw) {
 }
 
 /**
+ * Extract client draft UUID from a documents-bucket public/signed URL path
+ * like .../licenses/pre-trip/{uuid}/file.jpg
+ */
+function extractPreTripDraftIdFromDocumentUrl(rawUrl) {
+  const urlStr = String(rawUrl || '').trim();
+  if (!urlStr) return null;
+  let path = urlStr;
+  try {
+    path = decodeURIComponent(new URL(urlStr).pathname);
+  } catch {
+    // Fall through and match against the raw string.
+  }
+  const match = path.match(
+    /\/(?:licenses|insurance)\/pre-trip\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\//i
+  );
+  return normalizeIdempotencyKey(match?.[1]);
+}
+
+/**
+ * Resolve the draft UUID for a final submission from body and/or uploaded document URLs.
+ * Document URL wins when body and URL disagree (uploads already wrote under that path).
+ *
+ * @returns {{ ok: true, id: string|null, source: string } | { ok: false, reason: string }}
+ */
+function resolveSubmissionDraftId(input) {
+  const fromBody = normalizeIdempotencyKey(
+    input?.clientDraftId || input?.client_draft_id || input?.idempotencyKey || input?.idempotency_key
+  );
+  const fromLicense = extractPreTripDraftIdFromDocumentUrl(input?.licenseUrl || input?.license_url);
+  const fromInsurance = extractPreTripDraftIdFromDocumentUrl(
+    input?.insuranceUrl || input?.insurance_url
+  );
+
+  if (fromLicense && fromInsurance && fromLicense !== fromInsurance) {
+    return { ok: false, reason: 'draft_id_mismatch' };
+  }
+
+  const fromUrl = fromLicense || fromInsurance;
+  if (fromBody && fromUrl && fromBody !== fromUrl) {
+    return { ok: true, id: fromUrl, source: 'document_url' };
+  }
+
+  const id = fromBody || fromUrl || null;
+  const hasDocs = Boolean(
+    String(input?.licenseUrl || input?.license_url || '').trim() ||
+      String(input?.insuranceUrl || input?.insurance_url || '').trim()
+  );
+  if (hasDocs && !id) {
+    return { ok: false, reason: 'missing_draft_id' };
+  }
+
+  return {
+    ok: true,
+    id,
+    source: fromBody ? 'body' : fromUrl ? 'document_url' : 'none',
+  };
+}
+
+/**
  * Pick an existing submission to reuse instead of inserting another row.
  * Prefer exact idempotency_key match (only when email+phone also match that row);
  * otherwise same email+phone pending/recent submission.
@@ -97,6 +156,8 @@ module.exports = {
   phoneLast10,
   phoneDigitsMatch,
   normalizeIdempotencyKey,
+  extractPreTripDraftIdFromDocumentUrl,
+  resolveSubmissionDraftId,
   pickReusableSubmission,
   isDuplicatePrevention,
 };

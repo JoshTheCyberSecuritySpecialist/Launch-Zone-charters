@@ -12,6 +12,7 @@ import { submitPreTripSubmission, type PreTripTripType as ApiTripType } from '..
 import {
   clearManualPreTripDraft,
   loadManualPreTripDraft,
+  resolveClientDraftId,
   saveManualPreTripDraft,
   type ManualPreTripStep,
 } from '../../lib/preTripDraftStorage';
@@ -280,6 +281,29 @@ export default function ManualPreTripSubmission({
       return;
     }
 
+    const resolved = resolveClientDraftId({ draftId, licenseUrl, insuranceUrl });
+    if ((licenseUrl || insuranceUrl) && !resolved.clientDraftId) {
+      console.warn('[manual-pre-trip] missing clientDraftId', {
+        hasClientDraftId: false,
+        draftIdSource: resolved.source,
+        pendingDocumentCount: [licenseUrl, insuranceUrl].filter(Boolean).length,
+        currentStep: step,
+      });
+      setSubmitError(
+        'We could not connect your documents to your registration. Your information is still saved. Please try again.'
+      );
+      focusErrors();
+      return;
+    }
+
+    const resolvedClientDraftId = resolved.clientDraftId || draftId;
+    console.info('[manual-pre-trip] submit', {
+      hasClientDraftId: Boolean(resolvedClientDraftId),
+      draftIdSource: resolved.source,
+      pendingDocumentCount: [licenseUrl, insuranceUrl].filter(Boolean).length,
+      currentStep: step,
+    });
+
     submitLockRef.current = true;
     setSubmitBusy(true);
     const result = await submitPreTripSubmission({
@@ -295,14 +319,18 @@ export default function ManualPreTripSubmission({
       damageFeeAcknowledged,
       licenseUrl,
       insuranceUrl,
-      clientDraftId: draftId,
+      clientDraftId: resolvedClientDraftId,
     });
     setSubmitBusy(false);
 
     if (!result.ok) {
       submitLockRef.current = false;
+      const technical = String(result.error || '');
+      console.warn('[manual-pre-trip] submit failed', technical);
       setSubmitError(
-        'We could not finish sending your information. Your progress has been saved. Please try again, or call 803-542-1761 for help.'
+        technical.includes('connect your documents') || technical.includes('clientDraftId')
+          ? 'We could not connect your documents to your registration. Your information is still saved. Please try again.'
+          : 'We could not finish sending your information. Your progress has been saved. Please try again, or call 803-542-1761 for help.'
       );
       focusErrors();
       return;

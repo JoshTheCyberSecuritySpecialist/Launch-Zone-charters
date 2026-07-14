@@ -6197,9 +6197,21 @@ app.post('/api/public/pre-trip-submission', async (req, res) => {
     const damageFeeAcknowledged = Boolean(body.damageFeeAcknowledged ?? body.damage_fee_acknowledged);
     const licenseUrl = String(body.licenseUrl || body.license_url || '').trim() || null;
     const insuranceUrl = String(body.insuranceUrl || body.insurance_url || '').trim() || null;
-    const idempotencyKey = preTripSubmissionGuard.normalizeIdempotencyKey(
-      body.idempotencyKey || body.idempotency_key || body.clientDraftId || body.client_draft_id
-    );
+    const draftResolution = preTripSubmissionGuard.resolveSubmissionDraftId({
+      clientDraftId: body.clientDraftId || body.client_draft_id,
+      idempotencyKey: body.idempotencyKey || body.idempotency_key,
+      licenseUrl,
+      insuranceUrl,
+    });
+    if (!draftResolution.ok) {
+      console.warn('[pre-trip-submission] draft id resolve failed', draftResolution.reason);
+      return res.status(400).json({
+        error:
+          'We could not connect your documents to your registration. Your information is still saved. Please try again.',
+        code: draftResolution.reason,
+      });
+    }
+    const idempotencyKey = draftResolution.id;
 
     if (!email) return res.status(400).json({ error: 'Email is required.' });
     if (!phone || normalizePhoneDigits(phone).length < 7) {
@@ -6226,9 +6238,21 @@ app.post('/api/public/pre-trip-submission', async (req, res) => {
       return res.status(400).json({ error: 'License / ID upload is required for rentals.' });
     }
 
-    // Document URLs must be bound to this client draft when present.
+    // Document URLs must be bound to the resolved client draft when present.
     if ((licenseUrl || insuranceUrl) && !idempotencyKey) {
-      return res.status(400).json({ error: 'clientDraftId is required when uploading documents.' });
+      console.warn('[pre-trip-submission] missing clientDraftId with documents');
+      return res.status(400).json({
+        error:
+          'We could not connect your documents to your registration. Your information is still saved. Please try again.',
+        code: 'missing_draft_id',
+      });
+    }
+    if (idempotencyKey && draftResolution.source) {
+      console.log(
+        '[pre-trip-submission] draft id source',
+        draftResolution.source,
+        String(idempotencyKey).slice(0, 8)
+      );
     }
     const preTripPrefix = idempotencyKey ? `pre-trip/${idempotencyKey}` : '';
     if (licenseUrl) {
@@ -6236,7 +6260,11 @@ app.post('/api/public/pre-trip-submission', async (req, res) => {
         preTripPrefix,
       });
       if (!licCheck.ok) {
-        return res.status(400).json({ error: 'Invalid license document URL.' });
+        return res.status(400).json({
+          error:
+            'We could not connect your documents to your registration. Your information is still saved. Please try again.',
+          code: 'invalid_license_url',
+        });
       }
     }
     if (insuranceUrl) {
@@ -6244,7 +6272,11 @@ app.post('/api/public/pre-trip-submission', async (req, res) => {
         preTripPrefix,
       });
       if (!insCheck.ok) {
-        return res.status(400).json({ error: 'Invalid insurance document URL.' });
+        return res.status(400).json({
+          error:
+            'We could not connect your documents to your registration. Your information is still saved. Please try again.',
+          code: 'invalid_insurance_url',
+        });
       }
     }
 

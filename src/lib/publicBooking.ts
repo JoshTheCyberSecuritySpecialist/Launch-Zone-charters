@@ -362,6 +362,8 @@ export async function submitPreTripSubmission(input: {
     return { ok: false, error: 'API is not configured.' };
   }
 
+  const clientDraftId = String(input.clientDraftId || '').trim() || undefined;
+
   const res = await fetch(`${env.apiUrl}/api/public/pre-trip-submission`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -378,8 +380,10 @@ export async function submitPreTripSubmission(input: {
       damageFeeAcknowledged: input.damageFeeAcknowledged,
       licenseUrl: input.licenseUrl || undefined,
       insuranceUrl: input.insuranceUrl || undefined,
-      clientDraftId: input.clientDraftId || undefined,
-      idempotencyKey: input.clientDraftId || undefined,
+      clientDraftId,
+      client_draft_id: clientDraftId,
+      idempotencyKey: clientDraftId,
+      idempotency_key: clientDraftId,
     }),
   });
 
@@ -387,10 +391,18 @@ export async function submitPreTripSubmission(input: {
     submissionId?: string;
     duplicate?: boolean;
     error?: string;
+    code?: string;
   };
 
   if (!res.ok || !payload.submissionId) {
-    return { ok: false, error: payload.error || 'Could not submit. Try again or call us.' };
+    return {
+      ok: false,
+      error:
+        payload.error ||
+        (payload.code === 'missing_draft_id'
+          ? 'We could not connect your documents to your registration. Your information is still saved. Please try again.'
+          : 'Could not submit. Try again or call us.'),
+    };
   }
 
   return {

@@ -51,6 +51,61 @@ export function normalizeDraftEmail(email: string): string {
     .toLowerCase();
 }
 
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function normalizeClientDraftId(raw: string | null | undefined): string | null {
+  const key = String(raw || '').trim();
+  if (!key || !UUID_RE.test(key)) return null;
+  return key.toLowerCase();
+}
+
+/** Pull draft UUID from a documents URL path: .../licenses|insurance/pre-trip/{uuid}/... */
+export function extractClientDraftIdFromDocumentUrl(rawUrl: string | null | undefined): string | null {
+  const urlStr = String(rawUrl || '').trim();
+  if (!urlStr) return null;
+  let path = urlStr;
+  try {
+    path = decodeURIComponent(new URL(urlStr).pathname);
+  } catch {
+    // match against raw string
+  }
+  const match = path.match(
+    /\/(?:licenses|insurance)\/pre-trip\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\//i
+  );
+  return normalizeClientDraftId(match?.[1]);
+}
+
+/**
+ * Canonical draft ID for final submit / uploads.
+ * Prefer document URL path when it disagrees with in-memory state (uploads already used that path).
+ */
+export function resolveClientDraftId(input: {
+  draftId?: string | null;
+  licenseUrl?: string | null;
+  insuranceUrl?: string | null;
+}): { clientDraftId: string | null; source: string } {
+  const fromState = normalizeClientDraftId(input.draftId);
+  const fromLicense = extractClientDraftIdFromDocumentUrl(input.licenseUrl);
+  const fromInsurance = extractClientDraftIdFromDocumentUrl(input.insuranceUrl);
+  const fromUrl = fromLicense || fromInsurance;
+  const fromStorage = normalizeClientDraftId(loadManualPreTripDraft()?.draftId);
+
+  if (fromLicense && fromInsurance && fromLicense !== fromInsurance) {
+    return { clientDraftId: null, source: 'mismatch' };
+  }
+  if (fromUrl) {
+    return { clientDraftId: fromUrl, source: 'document_url' };
+  }
+  if (fromState) {
+    return { clientDraftId: fromState, source: 'state' };
+  }
+  if (fromStorage) {
+    return { clientDraftId: fromStorage, source: 'session' };
+  }
+  return { clientDraftId: null, source: 'none' };
+}
+
 /** Map legacy fine-grained steps onto the senior-friendly 4-step flow. */
 export function normalizeManualStep(raw: string | undefined | null): ManualPreTripStep {
   switch (String(raw || '')) {

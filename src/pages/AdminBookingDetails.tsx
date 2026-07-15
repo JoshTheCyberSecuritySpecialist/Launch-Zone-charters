@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Copy, Download, FileArchive, FileText, Printer, Save } from 'lucide-react';
+import { Copy, Download, FileArchive, FileText, Printer, Save } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/useAuth';
 import FullPageLoader from '../components/FullPageLoader';
-import Logo from '../components/ui/Logo';
+import AdminShell from '../components/admin/AdminShell';
+import AdminAccessDenied from '../components/admin/AdminAccessDenied';
 import { env } from '../config/env.js';
 import {
   CHARTER_MAX_PASSENGERS,
@@ -701,22 +702,7 @@ export default function AdminBookingDetails() {
 
   if (authLoading) return <FullPageLoader message="Checking admin access…" />;
   if (!isAdmin) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
-        <div className="rounded-xl bg-white p-8 text-center shadow">
-          <h1 className="text-2xl font-bold">Access denied</h1>
-          <p className="mt-2 text-slate-600">
-            {user ? 'This account is not authorized.' : 'Sign in as admin.'}
-          </p>
-          <Link
-            to="/admin-login"
-            className="mt-5 inline-flex rounded-lg bg-amber-600 px-5 py-3 font-bold text-white"
-          >
-            Admin Login
-          </Link>
-        </div>
-      </div>
-    );
+    return <AdminAccessDenied signedIn={Boolean(user)} />;
   }
   if (loading && !detail) return <FullPageLoader message="Loading booking details…" />;
   if (!booking) {
@@ -754,24 +740,19 @@ export default function AdminBookingDetails() {
   const labelClass = 'block text-sm font-bold text-slate-700';
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900">
-      <div className="border-b bg-slate-900 py-6 text-white">
-        <div className="mx-auto flex max-w-7xl flex-col gap-4 px-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-4">
-            <Logo variant="admin" />
-            <div>
-              <h1 className="text-3xl font-bold">Booking Details</h1>
-              <p className="text-sm text-slate-400">{booking.id}</p>
-            </div>
-          </div>
-          <Link to="/admin/calendar" className="inline-flex items-center gap-2 rounded-lg bg-slate-800 px-4 py-3 font-semibold hover:bg-slate-700">
-            <ArrowLeft className="h-4 w-4" />
-            Calendar
-          </Link>
-        </div>
-      </div>
-
-      <main className="mx-auto grid max-w-7xl gap-6 px-4 py-6 lg:grid-cols-[minmax(0,1fr)_340px]">
+    <AdminShell
+      title="Booking Details"
+      subtitle={booking.id}
+      actions={
+        <Link
+          to="/admin/calendar"
+          className="inline-flex min-h-11 items-center rounded-lg bg-slate-800 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-700"
+        >
+          Calendar
+        </Link>
+      }
+    >
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
         <section className="space-y-6">
           {notice ? (
             <div className={`rounded-lg px-4 py-3 font-semibold ${notice.variant === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
@@ -1276,7 +1257,7 @@ export default function AdminBookingDetails() {
             </div>
           </div>
         </aside>
-      </main>
+      </div>
 
       {customEmailPreview ? (
         <div className="fixed inset-0 z-[125] flex items-center justify-center bg-slate-950/70 p-4">
@@ -1487,6 +1468,6 @@ export default function AdminBookingDetails() {
           </div>
         </div>
       ) : null}
-    </div>
+    </AdminShell>
   );
 }

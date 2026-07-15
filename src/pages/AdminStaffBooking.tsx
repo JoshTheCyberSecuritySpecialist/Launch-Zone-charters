@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, CalendarPlus, RotateCcw, Save } from 'lucide-react';
+import { CalendarPlus, RotateCcw, Save } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/useAuth';
 import FullPageLoader from '../components/FullPageLoader';
-import Logo from '../components/ui/Logo';
+import AdminShell from '../components/admin/AdminShell';
+import AdminAccessDenied from '../components/admin/AdminAccessDenied';
 import { env } from '../config/env.js';
 import { PRICING, captainFeeForHours } from '../config/pricing';
 import { CHARTER_MAX_PASSENGERS, validateCharterPassengerCount } from '../lib/charterCapacity';
@@ -344,17 +345,14 @@ export default function AdminStaffBooking() {
 
   if (!isAdmin) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
-        <div className="w-full max-w-md rounded-xl bg-white p-8 text-center shadow-lg">
-          <h1 className="text-2xl font-bold text-slate-900">Access denied</h1>
-          <p className="mt-2 text-slate-600">
-            {user ? 'This account is not authorized to create staff bookings.' : 'Sign in with an admin account.'}
-          </p>
-          <Link to="/admin-login" className="mt-6 inline-flex rounded-lg bg-amber-600 px-6 py-3 font-bold text-white">
-            Admin Login
-          </Link>
-        </div>
-      </div>
+      <AdminAccessDenied
+        signedIn={Boolean(user)}
+        message={
+          user
+            ? 'This account is not authorized to create staff bookings.'
+            : 'Sign in with an admin account.'
+        }
+      />
     );
   }
 
@@ -363,24 +361,7 @@ export default function AdminStaffBooking() {
   const labelClass = 'block text-sm font-bold text-slate-700';
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900">
-      <div className="border-b border-slate-200 bg-slate-900 py-6 text-white">
-        <div className="mx-auto flex max-w-7xl flex-col gap-4 px-4 sm:flex-row sm:items-center sm:justify-between sm:px-6 lg:px-8">
-          <div className="flex items-center gap-4">
-            <Logo variant="admin" />
-            <div>
-              <h1 className="text-3xl font-bold">Staff Booking</h1>
-              <p className="text-sm text-slate-400">Fast internal phone bookings and holds</p>
-            </div>
-          </div>
-          <Link to="/admin" className="inline-flex items-center gap-2 rounded-lg bg-slate-800 px-4 py-3 font-semibold hover:bg-slate-700">
-            <ArrowLeft className="h-4 w-4" />
-            Admin
-          </Link>
-        </div>
-      </div>
-
-      <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+    <AdminShell title="Staff Booking" subtitle="Fast internal phone bookings and holds">
         {notice ? (
           <div
             className={`mb-6 rounded-xl px-4 py-3 text-sm font-semibold ${
@@ -639,7 +620,6 @@ export default function AdminStaffBooking() {
             </table>
           </div>
         </section>
-      </main>
-    </div>
+    </AdminShell>
   );
 }

@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { ArrowLeft, Ship } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { logSupabaseError } from '../lib/supabaseErrors';
 import { useAuth } from '../contexts/useAuth';
 import FullPageLoader from '../components/FullPageLoader';
+import AdminShell from '../components/admin/AdminShell';
+import AdminAccessDenied from '../components/admin/AdminAccessDenied';
 
 interface AdminBoatsProps {
   onNavigate: (page: string) => void;
@@ -53,7 +53,7 @@ function ratesFromHourly(hourly: number, boatType: BoatType): { half: number; fu
   };
 }
 
-export default function AdminBoats({ onNavigate }: AdminBoatsProps) {
+export default function AdminBoats(_props: AdminBoatsProps) {
   const { user, isAdmin, loading: authLoading } = useAuth();
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -373,59 +373,24 @@ export default function AdminBoats({ onNavigate }: AdminBoatsProps) {
   }
 
   if (!isAdmin) {
-    const signedIn = Boolean(user);
     return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
-        <div className="w-full max-w-md rounded-xl bg-white p-8 text-center shadow-lg">
-          <h2 className="mb-2 text-2xl font-bold text-slate-900">Access denied</h2>
-          <p className="mb-6 text-slate-600">
-            {signedIn
-              ? 'This account is not authorized to manage boats.'
-              : 'Sign in with an administrator account.'}
-          </p>
-          <div className="flex flex-col gap-3 sm:flex-row sm:justify-center">
-            <button
-              type="button"
-              onClick={() => onNavigate('admin-login')}
-              className="rounded-lg bg-slate-200 px-6 py-3 font-bold text-slate-900 hover:bg-slate-300"
-            >
-              {signedIn ? 'Try another account' : 'Admin Login'}
-            </button>
-            <button
-              type="button"
-              onClick={() => onNavigate('admin')}
-              className="rounded-lg bg-amber-600 px-6 py-3 font-bold text-white hover:bg-amber-700"
-            >
-              Back to Admin
-            </button>
-          </div>
-        </div>
-      </div>
+      <AdminAccessDenied
+        signedIn={Boolean(user)}
+        message={
+          user
+            ? 'This account is not authorized to manage boats.'
+            : 'Sign in with an administrator account.'
+        }
+      />
     );
   }
 
   return (
-    <div className="min-h-screen bg-slate-50">
-      <div className="border-b border-slate-200 bg-slate-900 py-6 text-white">
-        <div className="mx-auto flex max-w-5xl flex-col gap-4 px-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
-          <div className="flex items-center gap-3">
-            <Ship className="h-8 w-8 text-amber-400" aria-hidden />
-            <div>
-              <h1 className="text-2xl font-bold">Manage boats</h1>
-              <p className="text-sm text-slate-400">Upload images and add vessels to Supabase</p>
-            </div>
-          </div>
-          <Link
-            to="/admin"
-            className="inline-flex items-center gap-2 rounded-lg bg-slate-800 px-4 py-2 text-sm font-semibold hover:bg-slate-700"
-          >
-            <ArrowLeft className="h-4 w-4" aria-hidden />
-            Admin dashboard
-          </Link>
-        </div>
-      </div>
-
-      <div className="mx-auto max-w-5xl px-4 py-8 sm:px-6">
+    <AdminShell
+      title="Manage boats"
+      subtitle="Upload images and add vessels to Supabase"
+      maxWidth="5xl"
+    >
         {message && (
           <div
             className={`mb-6 rounded-lg px-4 py-3 text-sm font-medium ${
@@ -581,7 +546,6 @@ export default function AdminBoats({ onNavigate }: AdminBoatsProps) {
             </div>
           )}
         </section>
-      </div>
-    </div>
+    </AdminShell>
   );
 }

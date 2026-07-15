@@ -235,6 +235,27 @@ export default function Header({ onNavigate, currentPage }: HeaderProps) {
                 >
                   Disputes
                 </button>
+                <button
+                  type="button"
+                  onClick={() => handleNavigation('admin-outbox')}
+                  className="lz-nav-drawer__link lz-nav-drawer__link--admin"
+                >
+                  Outbox
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleNavigation('admin-shop-orders')}
+                  className="lz-nav-drawer__link lz-nav-drawer__link--admin"
+                >
+                  Shop Orders
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleNavigation('admin-boats')}
+                  className="lz-nav-drawer__link lz-nav-drawer__link--admin"
+                >
+                  Boats
+                </button>
               </div>
             )}
           </nav>

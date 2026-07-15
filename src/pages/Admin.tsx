@@ -5,7 +5,6 @@ import {
   Users,
   DollarSign,
   Settings,
-  LogOut,
   Trash2,
   ChevronLeft,
   ChevronRight,
@@ -21,7 +20,7 @@ import { logSupabaseError } from '../lib/supabaseErrors';
 import { adminUpdatePreTripSubmission, fetchPreTripMatchSuggestions, type PreTripMatchSuggestion } from '../lib/publicBooking';
 import { useAuth } from '../contexts/useAuth';
 import FullPageLoader from '../components/FullPageLoader';
-import Logo from '../components/ui/Logo';
+import AdminShell from '../components/admin/AdminShell';
 import { env } from '../config/env.js';
 import { uploadCaptainsLogHeroImage } from '../lib/storageUpload';
 import {
@@ -311,7 +310,7 @@ function insuranceComplianceEmojiLabel(status: string | null | undefined): { emo
 }
 
 export default function Admin({ onNavigate }: AdminProps) {
-  const { user, isAdmin, signOut, loading: authLoading, authError, retryAuth } = useAuth();
+  const { user, isAdmin, loading: authLoading, authError, retryAuth } = useAuth();
 
   useEffect(() => {
     if (import.meta.env.DEV) {
@@ -1706,11 +1705,6 @@ export default function Admin({ onNavigate }: AdminProps) {
     }
   };
 
-  const handleSignOut = async () => {
-    await signOut();
-    onNavigate('home');
-  };
-
   const persistLastRun = (status: string) => {
     const iso = new Date().toISOString();
     localStorage.setItem(LS_CAP_RUN_STATUS, status);
@@ -1957,80 +1951,7 @@ export default function Admin({ onNavigate }: AdminProps) {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50">
-      <div className="bg-slate-900 py-8 text-white">
-        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
-              <Logo variant="admin" className="self-start sm:self-center" />
-              <div>
-                <h1 className="text-3xl font-bold">Admin Bookings</h1>
-                <p className="mt-1 text-slate-400">Welcome back, {user?.email}</p>
-              </div>
-            </div>
-            <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-              <Link
-                to="/admin"
-                className="rounded-lg bg-slate-800 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-slate-700"
-              >
-                Dashboard
-              </Link>
-              <Link
-                to="/admin/bookings"
-                className="rounded-lg bg-slate-700 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-slate-600"
-              >
-                Bookings
-              </Link>
-              <Link
-                to="/admin/staff-booking"
-                className="rounded-lg bg-green-700 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-green-600"
-              >
-                Staff Booking
-              </Link>
-              <Link
-                to="/admin/calendar"
-                className="rounded-lg bg-purple-700 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-purple-600"
-              >
-                Calendar
-              </Link>
-              <Link
-                to="/admin/boats"
-                className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-amber-500"
-              >
-                Manage boats
-              </Link>
-              <Link
-                to="/admin/outbox"
-                className="rounded-lg bg-indigo-700 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-indigo-600"
-              >
-                Outbox
-              </Link>
-              <Link
-                to="/admin/disputes"
-                className="rounded-lg bg-rose-700 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-rose-600"
-              >
-                Disputes
-              </Link>
-              <Link
-                to="/admin/shop-orders"
-                className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-teal-600"
-              >
-                Shop Orders
-              </Link>
-              <button
-                type="button"
-                onClick={handleSignOut}
-                className="flex items-center space-x-2 rounded-lg bg-slate-800 px-4 py-2 transition-colors hover:bg-slate-700"
-              >
-                <LogOut className="h-5 w-5" />
-                <span>Sign Out</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+    <AdminShell title="Admin Bookings" subtitle={user?.email ? `Welcome back, ${user.email}` : undefined}>
         {notice && (
           <div
             className={`fixed bottom-6 left-1/2 z-[100] max-w-md -translate-x-1/2 rounded-lg px-4 py-3 text-center text-sm font-semibold shadow-lg ${
@@ -4195,8 +4116,7 @@ export default function Admin({ onNavigate }: AdminProps) {
             </div>
           </div>
         </div>
-      </div>
-    </div>
+    </AdminShell>
   );
 }
 

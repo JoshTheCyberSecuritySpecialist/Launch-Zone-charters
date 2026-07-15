@@ -1,10 +1,11 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ArrowLeft, CalendarDays, ChevronLeft, ChevronRight, MoreVertical, RefreshCw, Undo2 } from 'lucide-react';
+import { CalendarDays, ChevronLeft, ChevronRight, MoreVertical, RefreshCw, Undo2 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/useAuth';
 import FullPageLoader from '../components/FullPageLoader';
-import Logo from '../components/ui/Logo';
+import AdminShell from '../components/admin/AdminShell';
+import AdminAccessDenied from '../components/admin/AdminAccessDenied';
 import { env } from '../config/env.js';
 import { adminCharterCapacityLines, isCaptainLedCharter } from '../lib/charterCapacity';
 
@@ -858,17 +859,7 @@ export default function AdminCalendar() {
 
   if (authLoading) return <FullPageLoader message="Checking admin access..." />;
   if (!isAdmin) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
-        <div className="rounded-xl bg-white p-8 text-center shadow">
-          <h1 className="text-2xl font-bold">Access denied</h1>
-          <p className="mt-2 text-slate-600">{user ? 'This account is not authorized.' : 'Sign in as admin.'}</p>
-          <Link to="/admin-login" className="mt-5 inline-flex rounded-lg bg-amber-600 px-5 py-3 font-bold text-white">
-            Admin Login
-          </Link>
-        </div>
-      </div>
-    );
+    return <AdminAccessDenied signedIn={Boolean(user)} />;
   }
 
   const title =
@@ -995,71 +986,60 @@ export default function AdminCalendar() {
   );
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900">
-      <div className="border-b border-slate-200 bg-slate-900 py-6 text-white">
-        <div className="mx-auto flex max-w-7xl flex-col gap-4 px-4 sm:flex-row sm:items-center sm:justify-between sm:px-6 lg:px-8">
-          <div className="flex items-center gap-4">
-            <Logo variant="admin" />
-            <div>
-              <h1 className="text-3xl font-bold">Admin Calendar</h1>
-              <p className="text-sm text-slate-400">Visual schedule for bookings, holds, and departures</p>
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <button type="button" onClick={() => openAddChoice()} className="rounded-lg bg-green-700 px-5 py-4 text-lg font-black text-white hover:bg-green-600">
-              + New Booking
-            </button>
-            <button type="button" onClick={() => openItemForm('blocked_time')} className="rounded-lg bg-slate-700 px-5 py-4 text-lg font-black text-white hover:bg-slate-600">
-              + Block Time
-            </button>
-            <button type="button" onClick={() => openCaptainAvailabilityForm()} className="rounded-lg bg-purple-700 px-5 py-4 text-lg font-black text-white hover:bg-purple-600">
-              Apply Charter Captain Availability
-            </button>
-            <button type="button" onClick={() => openItemForm('admin_duty')} className="rounded-lg bg-yellow-500 px-5 py-4 text-lg font-black text-slate-950 hover:bg-yellow-400">
-              + Add Admin Duty
-            </button>
-            <Link to="/admin" className="inline-flex items-center gap-2 rounded-lg bg-slate-800 px-4 py-3 font-semibold hover:bg-slate-700">
-              <ArrowLeft className="h-4 w-4" />
-              Dashboard
-            </Link>
-          </div>
-        </div>
-      </div>
-
-      <div className="border-b border-purple-200 bg-purple-50">
-        <div className="mx-auto flex max-w-7xl flex-wrap gap-2 px-4 py-3 sm:px-6 lg:px-8">
-          <span className="self-center text-sm font-black uppercase tracking-wide text-purple-900">Charter captain</span>
-          <button
-            type="button"
-            onClick={() => {
-              const range = nextWeekCharterRange();
-              openCaptainAvailabilityForm(range.startDate, range.endDate);
-            }}
-            className="rounded-lg bg-white px-4 py-2 text-sm font-bold text-purple-900 shadow-sm ring-1 ring-purple-200 hover:bg-purple-100"
-          >
-            Block Next Week (Charters)
+    <AdminShell
+      title="Admin Calendar"
+      subtitle="Visual schedule for bookings, holds, and departures"
+      actions={
+        <>
+          <button type="button" onClick={() => openAddChoice()} className="min-h-11 rounded-lg bg-green-700 px-4 py-3 text-sm font-black text-white hover:bg-green-600">
+            + New Booking
           </button>
-          <button
-            type="button"
-            onClick={() => {
-              const range = nextMonthCharterRange();
-              openCaptainAvailabilityForm(range.startDate, range.endDate);
-            }}
-            className="rounded-lg bg-white px-4 py-2 text-sm font-bold text-purple-900 shadow-sm ring-1 ring-purple-200 hover:bg-purple-100"
-          >
-            Block Next Month (Charters)
+          <button type="button" onClick={() => openItemForm('blocked_time')} className="min-h-11 rounded-lg bg-slate-700 px-4 py-3 text-sm font-black text-white hover:bg-slate-600">
+            + Block Time
           </button>
-          <button
-            type="button"
-            onClick={() => void clearGeneratedCharterBlocks()}
-            className="rounded-lg bg-white px-4 py-2 text-sm font-bold text-purple-900 shadow-sm ring-1 ring-purple-200 hover:bg-purple-100"
-          >
-            Clear Generated Charter Blocks
+          <button type="button" onClick={() => openCaptainAvailabilityForm()} className="min-h-11 rounded-lg bg-purple-700 px-4 py-3 text-sm font-black text-white hover:bg-purple-600">
+            Captain Availability
           </button>
-        </div>
-      </div>
-
-      <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+          <button type="button" onClick={() => openItemForm('admin_duty')} className="min-h-11 rounded-lg bg-yellow-500 px-4 py-3 text-sm font-black text-slate-950 hover:bg-yellow-400">
+            + Admin Duty
+          </button>
+        </>
+      }
+      belowHeader={
+              <div className="border-b border-purple-200 bg-purple-50">
+                <div className="mx-auto flex max-w-7xl flex-wrap gap-2 px-3 py-3 sm:px-6 lg:px-8">
+                  <span className="self-center text-sm font-black uppercase tracking-wide text-purple-900">Charter captain</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const range = nextWeekCharterRange();
+                      openCaptainAvailabilityForm(range.startDate, range.endDate);
+                    }}
+                    className="rounded-lg bg-white px-4 py-2 text-sm font-bold text-purple-900 shadow-sm ring-1 ring-purple-200 hover:bg-purple-100"
+                  >
+                    Block Next Week (Charters)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const range = nextMonthCharterRange();
+                      openCaptainAvailabilityForm(range.startDate, range.endDate);
+                    }}
+                    className="rounded-lg bg-white px-4 py-2 text-sm font-bold text-purple-900 shadow-sm ring-1 ring-purple-200 hover:bg-purple-100"
+                  >
+                    Block Next Month (Charters)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void clearGeneratedCharterBlocks()}
+                    className="rounded-lg bg-white px-4 py-2 text-sm font-bold text-purple-900 shadow-sm ring-1 ring-purple-200 hover:bg-purple-100"
+                  >
+                    Clear Generated Charter Blocks
+                  </button>
+                </div>
+              </div>
+      }
+    >
         {notice ? <div className="mb-4 rounded-lg bg-red-100 px-4 py-3 font-semibold text-red-800">{notice}</div> : null}
         {undoMove ? (
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-green-100 px-4 py-3 font-semibold text-green-900">
@@ -1289,7 +1269,6 @@ export default function AdminCalendar() {
             ))}
           </aside>
         </div>
-      </main>
 
       {pendingMove ? (
         <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/70 p-4">
@@ -1707,6 +1686,6 @@ export default function AdminCalendar() {
           </div>
         </div>
       ) : null}
-    </div>
+    </AdminShell>
   );
 }

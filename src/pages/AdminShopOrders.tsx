@@ -1,10 +1,10 @@
 import { Fragment, useCallback, useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { ArrowLeft, ChevronDown, ChevronRight, Package, RefreshCw } from 'lucide-react';
+import { ChevronDown, ChevronRight, RefreshCw } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/useAuth';
 import FullPageLoader from '../components/FullPageLoader';
-import Logo from '../components/ui/Logo';
+import AdminShell from '../components/admin/AdminShell';
+import AdminAccessDenied from '../components/admin/AdminAccessDenied';
 import { env } from '../config/env.js';
 
 type ShopOrderRow = {
@@ -251,48 +251,14 @@ export default function AdminShopOrders() {
 
   if (authLoading) return <FullPageLoader />;
   if (!user || !isAdmin) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-100 p-6">
-        <p className="text-slate-700">Admin access required.</p>
-      </div>
-    );
+    return <AdminAccessDenied signedIn={Boolean(user)} message="Admin access required." />;
   }
 
   return (
-    <div className="min-h-screen bg-slate-50">
-      <div className="bg-slate-900 py-8 text-white">
-        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-center gap-4">
-              <Logo variant="admin" />
-              <div>
-                <h1 className="flex items-center gap-2 text-3xl font-bold">
-                  <Package className="h-8 w-8 text-cyan-300" aria-hidden />
-                  Shop Orders
-                </h1>
-                <p className="mt-1 text-slate-400">Paid orders needing fulfillment — switch filter to see abandoned checkouts</p>
-              </div>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Link
-                to="/admin"
-                className="inline-flex items-center gap-2 rounded-lg bg-slate-800 px-4 py-2 text-sm font-semibold hover:bg-slate-700"
-              >
-                <ArrowLeft className="h-4 w-4" aria-hidden />
-                Dashboard
-              </Link>
-              <Link
-                to="/admin/bookings"
-                className="rounded-lg bg-slate-700 px-4 py-2 text-sm font-semibold hover:bg-slate-600"
-              >
-                Bookings
-              </Link>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+    <AdminShell
+      title="Shop Orders"
+      subtitle="Paid orders needing fulfillment — switch filter to see abandoned checkouts"
+    >
         {notice ? (
           <div
             className={`mb-6 rounded-lg px-4 py-3 text-sm font-semibold ${
@@ -447,7 +413,6 @@ export default function AdminShopOrders() {
             </table>
           </div>
         </div>
-      </div>
-    </div>
+    </AdminShell>
   );
 }

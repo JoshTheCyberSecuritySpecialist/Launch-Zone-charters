@@ -4,7 +4,8 @@ import { AlertTriangle, CalendarDays, CloudSun, DollarSign, ShipWheel, Users } f
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/useAuth';
 import FullPageLoader from '../components/FullPageLoader';
-import Logo from '../components/ui/Logo';
+import AdminShell from '../components/admin/AdminShell';
+import AdminAccessDenied from '../components/admin/AdminAccessDenied';
 import { env } from '../config/env.js';
 import { adminCharterCapacityLines } from '../lib/charterCapacity';
 import { fetchJsonWithTimeout, withTimeout } from '../lib/adminDiagnostics';
@@ -193,22 +194,7 @@ export default function AdminOperationsDashboard() {
   }
 
   if (!isAdmin) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
-        <div className="rounded-xl bg-white p-8 text-center shadow">
-          <h1 className="text-2xl font-bold">Access denied</h1>
-          <p className="mt-2 text-slate-600">
-            {user ? 'This account is not authorized.' : 'Sign in as admin.'}
-          </p>
-          <Link
-            to="/admin-login"
-            className="mt-5 inline-flex rounded-lg bg-amber-600 px-5 py-3 font-bold text-white"
-          >
-            Admin Login
-          </Link>
-        </div>
-      </div>
-    );
+    return <AdminAccessDenied signedIn={Boolean(user)} />;
   }
 
   if (loading && !payload) {
@@ -252,28 +238,21 @@ export default function AdminOperationsDashboard() {
   const weather = payload.weather || {};
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900">
-      <div className="border-b border-slate-200 bg-slate-900 py-6 text-white">
-        <div className="mx-auto flex max-w-7xl flex-col gap-4 px-4 sm:flex-row sm:items-center sm:justify-between sm:px-6 lg:px-8">
-          <div className="flex items-center gap-4">
-            <Logo variant="admin" />
-            <div>
-              <h1 className="text-3xl font-bold">Operations Dashboard</h1>
-              <p className="text-sm text-slate-400">Today&apos;s trips, paperwork, boats, revenue, and alerts</p>
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={() => void loadDashboard()}
-            disabled={loading}
-            className="min-h-12 rounded-lg bg-slate-800 px-4 py-3 font-semibold hover:bg-slate-700 disabled:opacity-60"
-          >
-            {loading ? 'Refreshing…' : 'Refresh'}
-          </button>
-        </div>
-      </div>
-
-      <main className="mx-auto max-w-7xl space-y-6 px-4 py-6 sm:px-6 lg:px-8">
+    <AdminShell
+      title="Operations Dashboard"
+      subtitle="Today's trips, paperwork, boats, revenue, and alerts"
+      actions={
+        <button
+          type="button"
+          onClick={() => void loadDashboard()}
+          disabled={loading}
+          className="min-h-11 rounded-lg bg-slate-800 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-700 disabled:opacity-60"
+        >
+          {loading ? 'Refreshing…' : 'Refresh'}
+        </button>
+      }
+    >
+      <div className="space-y-6">
         {notice ? <div className="rounded-lg bg-red-100 px-4 py-3 font-semibold text-red-800">{notice}</div> : null}
 
         <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
@@ -472,7 +451,7 @@ export default function AdminOperationsDashboard() {
             ))}
           </div>
         </section>
-      </main>
-    </div>
+      </div>
+    </AdminShell>
   );
 }

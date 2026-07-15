@@ -29,6 +29,8 @@ const ROUTES = {
   shopOrderSuccess: '/shop/order-success',
   adminShopOrders: '/admin/shop-orders',
   adminDisputes: '/admin/disputes',
+  adminOutbox: '/admin/outbox',
+  adminBoats: '/admin/boats',
   insuranceRequired: '/insurance-required',
 } as const;
 
@@ -77,6 +79,8 @@ const PAGE_TO_PATH: Record<string, string> = {
   'shop-order-success': ROUTES.shopOrderSuccess,
   'admin-shop-orders': ROUTES.adminShopOrders,
   'admin-disputes': ROUTES.adminDisputes,
+  'admin-outbox': ROUTES.adminOutbox,
+  'admin-boats': ROUTES.adminBoats,
   'insurance-required': ROUTES.insuranceRequired,
 };
 
@@ -96,12 +100,7 @@ export function pageKeyFromPath(pathname: string): string {
   if (path.startsWith('/log/')) return 'log-article';
   if (path === '/insurance-required') return 'insurance-required';
   if (path === '/waivers-insurance') return 'waivers-insurance';
-  if (path === '/admin/bookings') return 'admin';
-  if (path === '/admin/boats') return 'admin';
-  if (path === '/admin/staff-booking') return 'admin';
-  if (path === '/admin/calendar') return 'admin';
-  if (path.startsWith('/admin/bookings/')) return 'admin';
-  if (path === '/admin/disputes') return 'admin';
+  if (path === '/admin' || path.startsWith('/admin/')) return 'admin';
   if (path === '/boats' || path === '/boat-rentals-daytona-beach') return 'fleet-daytona';
   return PATH_TO_PAGE[path] ?? 'home';
 }

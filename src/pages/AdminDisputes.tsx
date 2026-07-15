@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertTriangle, ArrowLeft, Clock, Copy, Download, FileArchive, FileText, RefreshCw, Scale, Upload } from 'lucide-react';
+import { AlertTriangle, Clock, Copy, Download, FileArchive, FileText, RefreshCw, Scale, Upload } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/useAuth';
 import FullPageLoader from '../components/FullPageLoader';
-import Logo from '../components/ui/Logo';
+import AdminShell from '../components/admin/AdminShell';
+import AdminAccessDenied from '../components/admin/AdminAccessDenied';
 import { env } from '../config/env.js';
 import { fetchJsonWithTimeout, withTimeout } from '../lib/adminDiagnostics';
 
@@ -292,45 +293,25 @@ export default function AdminDisputes() {
 
   if (authLoading) return <FullPageLoader message="Checking admin access…" />;
   if (!isAdmin) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
-        <div className="rounded-xl bg-white p-8 text-center shadow">
-          <h1 className="text-2xl font-bold">Access denied</h1>
-          <p className="mt-2 text-slate-600">{user ? 'This account is not authorized.' : 'Sign in as admin.'}</p>
-          <Link to="/admin-login" className="mt-5 inline-flex rounded-lg bg-amber-600 px-5 py-3 font-bold text-white">
-            Admin Login
-          </Link>
-        </div>
-      </div>
-    );
+    return <AdminAccessDenied signedIn={Boolean(user)} />;
   }
   if (loading && !hasLoaded) return <FullPageLoader message="Loading Stripe disputes…" />;
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900">
-      <div className="border-b bg-slate-900 py-6 text-white">
-        <div className="mx-auto flex max-w-7xl flex-col gap-4 px-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-4">
-            <Logo variant="admin" />
-            <div>
-              <h1 className="text-3xl font-bold">Stripe Disputes</h1>
-              <p className="text-sm text-slate-400">Payment chargebacks linked to bookings</p>
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Link to="/admin" className="inline-flex items-center gap-2 rounded-lg bg-slate-800 px-4 py-3 font-semibold hover:bg-slate-700">
-              <ArrowLeft className="h-4 w-4" />
-              Dashboard
-            </Link>
-            <button type="button" onClick={() => void loadDisputes()} className="inline-flex items-center gap-2 rounded-lg bg-amber-600 px-4 py-3 font-bold text-white">
-              <RefreshCw className="h-4 w-4" />
-              Refresh
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <main className="mx-auto max-w-7xl px-4 py-6">
+    <AdminShell
+      title="Stripe Disputes"
+      subtitle="Payment chargebacks linked to bookings"
+      actions={
+        <button
+          type="button"
+          onClick={() => void loadDisputes()}
+          className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-amber-600 px-4 py-3 text-sm font-bold text-white"
+        >
+          <RefreshCw className="h-4 w-4" aria-hidden />
+          Refresh
+        </button>
+      }
+    >
         {notice ? (
           <div className={`mb-5 rounded-xl px-4 py-3 font-semibold ${notice.variant === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
             {notice.text}
@@ -596,8 +577,6 @@ export default function AdminDisputes() {
             )}
           </aside>
         </div>
-      </main>
-
       {evidenceModalOpen ? (
         <div className="fixed inset-0 z-[130] flex items-center justify-center bg-slate-950/70 p-4">
           <div className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl">
@@ -627,6 +606,6 @@ export default function AdminDisputes() {
           </div>
         </div>
       ) : null}
-    </div>
+    </AdminShell>
   );
 }

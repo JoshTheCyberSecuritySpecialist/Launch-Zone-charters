@@ -39,6 +39,7 @@ import AdminShopOrders from './pages/AdminShopOrders';
 import { pageKeyFromPath, pathFromPageKey } from './navigation';
 import ScrollToTop from './components/ScrollToTop';
 import { SITE_FAVICON_PATH } from './constants/branding';
+import { isAdminAreaPath } from './components/admin/adminNav';
 
 const BioGuidePage = lazy(() => import('./pages/BioGuidePage'));
 
@@ -54,7 +55,8 @@ function AppLayout() {
     [navigate]
   );
 
-  const showHeaderFooter = currentPage !== 'admin-login';
+  // Admin area uses AdminShell; keep marketing chrome off /admin* and /admin-login
+  const showHeaderFooter = !isAdminAreaPath(location.pathname);
 
   return (
     <div className="min-h-screen flex flex-col">

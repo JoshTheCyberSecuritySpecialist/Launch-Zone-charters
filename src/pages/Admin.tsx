@@ -2016,7 +2016,7 @@ export default function Admin({ onNavigate }: AdminProps) {
                     placeholder="Summer launch promo"
                   />
                 </label>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid gap-3 sm:grid-cols-2">
                   <label className="block text-sm">
                     <span className="font-semibold text-slate-700">Type</span>
                     <select
@@ -2024,7 +2024,7 @@ export default function Admin({ onNavigate }: AdminProps) {
                       onChange={(e) =>
                         setPromoForm((f) => ({ ...f, discount_type: e.target.value as PromoDiscountType }))
                       }
-                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-slate-900"
+                      className="mt-1 min-h-11 w-full rounded-md border border-slate-300 px-3 py-2 text-slate-900"
                     >
                       <option value="percent">Percent</option>
                       <option value="fixed">Fixed $</option>
@@ -2038,12 +2038,12 @@ export default function Admin({ onNavigate }: AdminProps) {
                       step="0.01"
                       value={promoForm.discount_value}
                       onChange={(e) => setPromoForm((f) => ({ ...f, discount_value: e.target.value }))}
-                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-slate-900"
+                      className="mt-1 min-h-11 w-full rounded-md border border-slate-300 px-3 py-2 text-slate-900"
                       placeholder={promoForm.discount_type === 'percent' ? '50' : '25'}
                     />
                   </label>
                 </div>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid gap-3 sm:grid-cols-2">
                   <label className="block text-sm">
                     <span className="font-semibold text-slate-700">Max uses</span>
                     <input
@@ -2052,7 +2052,7 @@ export default function Admin({ onNavigate }: AdminProps) {
                       step="1"
                       value={promoForm.max_uses}
                       onChange={(e) => setPromoForm((f) => ({ ...f, max_uses: e.target.value }))}
-                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-slate-900"
+                      className="mt-1 min-h-11 w-full rounded-md border border-slate-300 px-3 py-2 text-slate-900"
                       placeholder="Optional"
                     />
                   </label>
@@ -2061,7 +2061,7 @@ export default function Admin({ onNavigate }: AdminProps) {
                     <select
                       value={promoForm.applies_to}
                       onChange={(e) => setPromoForm((f) => ({ ...f, applies_to: e.target.value as PromoAppliesTo }))}
-                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-slate-900"
+                      className="mt-1 min-h-11 w-full rounded-md border border-slate-300 px-3 py-2 text-slate-900"
                     >
                       {PROMO_APPLIES_OPTIONS.map((option) => (
                         <option key={option.value} value={option.value}>
@@ -2121,7 +2121,10 @@ export default function Admin({ onNavigate }: AdminProps) {
                 </div>
               </div>
             </div>
-            <div className="overflow-x-auto">
+
+              <AdminResponsiveList
+                desktop={
+                  <div className="overflow-x-auto">
               {promoCodesLoading ? (
                 <p className="px-4 py-8 text-sm text-slate-500">Loading promo codes...</p>
               ) : promoCodesError ? (
@@ -2207,7 +2210,88 @@ export default function Admin({ onNavigate }: AdminProps) {
                   </tbody>
                 </table>
               )}
-            </div>
+                  </div>
+                }
+                mobile={
+                  <div className="space-y-3 p-3">
+                    {promoCodesLoading ? (
+                      <p className="py-6 text-center text-sm text-slate-500">Loading promo codes...</p>
+                    ) : null}
+                    {promoCodesError ? (
+                      <p className="py-6 text-center text-sm text-red-600">{promoCodesError}</p>
+                    ) : null}
+                    {!promoCodesLoading && !promoCodesError && promoCodes.length === 0 ? (
+                      <p className="py-6 text-center text-sm text-slate-500">No promo codes yet.</p>
+                    ) : null}
+                    {!promoCodesLoading && !promoCodesError
+                      ? promoCodes.map((row) => (
+                          <MobileAdminCard
+                            key={`promo-m-${row.id}`}
+                            title={row.code}
+                            subtitle={row.description || undefined}
+                            badge={
+                              <StatusBadge tone={row.active ? 'success' : 'neutral'}>
+                                {row.active ? 'Active' : 'Inactive'}
+                              </StatusBadge>
+                            }
+                            fields={[
+                              {
+                                label: 'Discount',
+                                value:
+                                  row.discount_type === 'percent'
+                                    ? `${Number(row.discount_value).toFixed(2).replace(/\.00$/, '')}%`
+                                    : `$${Number(row.discount_value).toFixed(2)}`,
+                              },
+                              {
+                                label: 'Scope',
+                                value:
+                                  PROMO_APPLIES_OPTIONS.find((option) => option.value === row.applies_to)?.label ||
+                                  humanizeLabel(row.applies_to),
+                              },
+                              {
+                                label: 'Uses',
+                                value: `${row.used_count}${row.max_uses == null ? '' : ` / ${row.max_uses}`}`,
+                              },
+                              {
+                                label: 'Expires',
+                                value: row.expires_at
+                                  ? new Date(row.expires_at).toLocaleDateString()
+                                  : 'No expiration',
+                              },
+                            ]}
+                            actions={
+                              <AdminActions>
+                                <button
+                                  type="button"
+                                  onClick={() => editPromoCode(row)}
+                                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-800"
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={promoBusyId === row.id}
+                                  onClick={() => void setPromoActive(row, !row.active)}
+                                  className="rounded-lg bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800 disabled:opacity-50"
+                                >
+                                  {row.active ? 'Deactivate' : 'Activate'}
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={promoBusyId === row.id}
+                                  onClick={() => void deactivatePromoCode(row)}
+                                  className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm font-semibold text-red-800 disabled:opacity-50 sm:col-span-2"
+                                >
+                                  Delete
+                                </button>
+                              </AdminActions>
+                            }
+                          />
+                        ))
+                      : null}
+                  </div>
+                }
+              />
           </div>
         </div>
 
@@ -2443,7 +2527,10 @@ export default function Admin({ onNavigate }: AdminProps) {
               generation run. Scroll the list to see older posts.
             </p>
           </div>
-          <div className="max-h-[min(70vh,36rem)] overflow-x-auto overflow-y-auto">
+          
+          <AdminResponsiveList
+            desktop={
+              <div className="max-h-[min(70vh,36rem)] overflow-x-auto overflow-y-auto">
             {captainsLogArticles.length === 0 ? (
               <p className="px-4 py-6 text-sm text-slate-500">No articles yet.</p>
             ) : (
@@ -2505,7 +2592,58 @@ export default function Admin({ onNavigate }: AdminProps) {
                 </tbody>
               </table>
             )}
-          </div>
+              </div>
+            }
+            mobile={
+              <div className="max-h-[min(70vh,36rem)] space-y-3 overflow-y-auto p-3">
+                {captainsLogArticles.length === 0 ? (
+                  <p className="py-6 text-center text-sm text-slate-500">No articles yet.</p>
+                ) : (
+                  captainsLogArticles.map((a) => (
+                    <MobileAdminCard
+                      key={`cl-m-${a.id}`}
+                      title={a.title}
+                      subtitle={a.category}
+                      fields={[
+                        {
+                          label: 'Created',
+                          value: new Date(a.created_at).toLocaleDateString(),
+                        },
+                      ]}
+                      actions={
+                        <AdminActions>
+                          <a
+                            href={captainsLogArticlePath(a.slug)}
+                            className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-center text-sm font-semibold text-amber-900"
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            View
+                          </a>
+                          <button
+                            type="button"
+                            onClick={() => void handleEditCaptainsLogArticle(a.id)}
+                            disabled={!!captainsLogEditLoadingId || captainsLogSaving || captainsLogDeletingId === a.id}
+                            className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-800 disabled:opacity-50"
+                          >
+                            {captainsLogEditLoadingId === a.id ? 'Loading…' : 'Edit'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void handleDeleteCaptainsLogArticle(a.id, a.title)}
+                            disabled={captainsLogDeletingId === a.id}
+                            className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm font-semibold text-red-800 disabled:opacity-50 sm:col-span-2"
+                          >
+                            Delete
+                          </button>
+                        </AdminActions>
+                      }
+                    />
+                  ))
+                )}
+              </div>
+            }
+          />
         </div>
 
         <div className="mb-8 overflow-hidden rounded-xl border border-slate-200 bg-white shadow">
@@ -2513,7 +2651,10 @@ export default function Admin({ onNavigate }: AdminProps) {
             <h2 className="text-lg font-bold text-slate-900">Subscribers</h2>
             <p className="text-xs text-slate-500">Latest alert subscribers (max 50).</p>
           </div>
-          <div className="max-h-72 overflow-x-auto overflow-y-auto">
+          
+          <AdminResponsiveList
+            desktop={
+              <div className="max-h-72 overflow-x-auto overflow-y-auto">
             {subscribersLoading ? (
               <p className="px-4 py-6 text-sm text-slate-500">Loading subscribers…</p>
             ) : subscribersError ? (
@@ -2549,7 +2690,37 @@ export default function Admin({ onNavigate }: AdminProps) {
                 </tbody>
               </table>
             )}
-          </div>
+              </div>
+            }
+            mobile={
+              <div className="max-h-72 space-y-3 overflow-y-auto p-3">
+                {subscribersLoading ? (
+                  <p className="py-6 text-center text-sm text-slate-500">Loading subscribers…</p>
+                ) : subscribersError ? (
+                  <p className="py-6 text-center text-sm text-red-600">{subscribersError}</p>
+                ) : subscribers.length === 0 ? (
+                  <p className="py-6 text-center text-sm text-slate-500">No subscribers yet.</p>
+                ) : (
+                  subscribers.map((user) => (
+                    <MobileAdminCard
+                      key={`sub-m-${user.email}-${user.created_at}`}
+                      title={user.email}
+                      fields={[
+                        { label: 'Phone', value: user.phone || 'No phone' },
+                        {
+                          label: 'Joined',
+                          value: new Date(user.created_at).toLocaleString(undefined, {
+                            dateStyle: 'medium',
+                            timeStyle: 'short',
+                          }),
+                        },
+                      ]}
+                    />
+                  ))
+                )}
+              </div>
+            }
+          />
         </div>
 
         <div className="mb-8 overflow-hidden rounded-xl border border-slate-200 bg-white shadow">
@@ -2610,7 +2781,10 @@ export default function Admin({ onNavigate }: AdminProps) {
               permanent.
             </p>
           </div>
-          <div className="max-h-[28rem] overflow-x-auto overflow-y-auto">
+          
+          <AdminResponsiveList
+            desktop={
+              <div className="max-h-[28rem] overflow-x-auto overflow-y-auto">
             {contactInboxLoading ? (
               <p className="px-4 py-6 text-sm text-slate-500">Loading messages…</p>
             ) : contactInbox.length === 0 ? (
@@ -2701,7 +2875,83 @@ export default function Admin({ onNavigate }: AdminProps) {
                 </tbody>
               </table>
             )}
-          </div>
+              </div>
+            }
+            mobile={
+              <div className="max-h-[28rem] space-y-3 overflow-y-auto p-3">
+                {contactInboxLoading ? (
+                  <p className="py-6 text-center text-sm text-slate-500">Loading messages…</p>
+                ) : contactInbox.length === 0 ? (
+                  <p className="py-6 text-center text-sm text-slate-500">No messages yet.</p>
+                ) : (
+                  contactInbox.map((row) => (
+                    <MobileAdminCard
+                      key={`ci-m-${row.id}`}
+                      className={row.is_read ? undefined : 'border-amber-300 bg-amber-50/40'}
+                      title={row.full_name}
+                      subtitle={row.email}
+                      badge={
+                        <StatusBadge tone={row.is_read ? 'neutral' : 'warning'}>
+                          {row.is_read ? 'Read' : 'New'}
+                        </StatusBadge>
+                      }
+                      fields={[
+                        { label: 'Message', value: previewMessageBody(row.message) },
+                        {
+                          label: 'Date',
+                          value: new Date(row.created_at).toLocaleString(undefined, {
+                            dateStyle: 'medium',
+                            timeStyle: 'short',
+                          }),
+                        },
+                      ]}
+                      actions={
+                        <AdminActions>
+                          <button
+                            type="button"
+                            onClick={() => openContactReply(row)}
+                            className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-900"
+                          >
+                            Reply
+                          </button>
+                          {!row.is_read ? (
+                            <button
+                              type="button"
+                              onClick={() => void handleMarkContactMessageRead(row.id, true)}
+                              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800"
+                            >
+                              Mark read
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => void handleMarkContactMessageRead(row.id, false)}
+                              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-600"
+                            >
+                              Mark unread
+                            </button>
+                          )}
+                          <a
+                            href={`mailto:${row.email}`}
+                            className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-center text-sm font-semibold text-amber-800"
+                          >
+                            Email
+                          </a>
+                          <button
+                            type="button"
+                            onClick={() => void handleDeleteContactMessage(row.id)}
+                            className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm font-semibold text-red-800"
+                          >
+                            Delete
+                          </button>
+                        </AdminActions>
+                      }
+                    />
+                  ))
+                )}
+              </div>
+            }
+          />
         </div>
 
         {contactReplyRow ? (

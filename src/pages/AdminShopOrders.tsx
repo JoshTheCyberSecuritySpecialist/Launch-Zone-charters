@@ -9,6 +9,7 @@ import AdminResponsiveList from '../components/admin/AdminResponsiveList';
 import MobileAdminCard from '../components/admin/MobileAdminCard';
 import AdminActions from '../components/admin/AdminActions';
 import { humanizeLabel, shortId } from '../components/admin/adminDisplay';
+import AdminId from '../components/admin/AdminId';
 import { env } from '../config/env.js';
 
 type ShopOrderRow = {
@@ -116,15 +117,21 @@ function OrderDetailPanel({ order }: { order: ShopOrderRow }) {
         <dl className="mt-2 space-y-1 text-slate-700">
           <div>
             <dt className="inline font-medium">Checkout session: </dt>
-            <dd className="inline font-mono text-xs break-all">{order.stripe_session_id || '-'}</dd>
+            <dd className="inline">
+              <AdminId value={order.stripe_session_id} len={14} empty="-" />
+            </dd>
           </div>
           <div>
             <dt className="inline font-medium">Payment intent: </dt>
-            <dd className="inline font-mono text-xs break-all">{order.payment_intent_id || '-'}</dd>
+            <dd className="inline">
+              <AdminId value={order.payment_intent_id} len={14} empty="-" />
+            </dd>
           </div>
           <div>
             <dt className="inline font-medium">Charge: </dt>
-            <dd className="inline font-mono text-xs break-all">{order.stripe_charge_id || '-'}</dd>
+            <dd className="inline">
+              <AdminId value={order.stripe_charge_id} len={14} empty="-" />
+            </dd>
           </div>
         </dl>
       </div>

@@ -7,6 +7,7 @@ import FullPageLoader from '../components/FullPageLoader';
 import AdminShell from '../components/admin/AdminShell';
 import AdminAccessDenied from '../components/admin/AdminAccessDenied';
 import { humanizeLabel, shortId } from '../components/admin/adminDisplay';
+import AdminId from '../components/admin/AdminId';
 import { env } from '../config/env.js';
 import {
   CHARTER_MAX_PASSENGERS,
@@ -938,21 +939,15 @@ export default function AdminBookingDetails() {
             <div className="mt-4 space-y-1 text-xs text-slate-600">
               <div>
                 <span className="font-bold">Payment Intent:</span>{' '}
-                <span className="font-mono" title={booking.payment_intent_id || undefined}>
-                  {shortId(booking.payment_intent_id, 14)}
-                </span>
+                <AdminId value={booking.payment_intent_id} len={14} />
               </div>
               <div>
                 <span className="font-bold">Checkout Session:</span>{' '}
-                <span className="font-mono" title={booking.checkout_session_id || booking.stripe_payment_id || undefined}>
-                  {shortId(booking.checkout_session_id || booking.stripe_payment_id, 14)}
-                </span>
+                <AdminId value={booking.checkout_session_id || booking.stripe_payment_id} len={14} />
               </div>
               <div>
                 <span className="font-bold">Charge:</span>{' '}
-                <span className="font-mono" title={booking.stripe_charge_id || undefined}>
-                  {shortId(booking.stripe_charge_id, 14)}
-                </span>
+                <AdminId value={booking.stripe_charge_id} len={14} />
               </div>
             </div>
           </div>
@@ -1024,7 +1019,10 @@ export default function AdminBookingDetails() {
                 <div className="space-y-1 text-sm text-slate-700">
                   <div><span className="font-bold">Amount:</span> ${money(bookingDispute.amount)} {bookingDispute.currency?.toUpperCase()}</div>
                   <div><span className="font-bold">Reason:</span> {bookingDispute.reason?.replace(/_/g, ' ') || '-'}</div>
-                  <div><span className="font-bold">Stripe Dispute:</span> {bookingDispute.stripe_dispute_id}</div>
+                  <div>
+                    <span className="font-bold">Stripe Dispute:</span>{' '}
+                    <AdminId value={bookingDispute.stripe_dispute_id} len={14} />
+                  </div>
                   <div><span className="font-bold">Evidence due:</span> {bookingDispute.evidence_due_by ? new Date(bookingDispute.evidence_due_by).toLocaleString() : '-'}</div>
                 </div>
                 <div>

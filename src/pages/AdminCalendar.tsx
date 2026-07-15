@@ -6,6 +6,8 @@ import { useAuth } from '../contexts/useAuth';
 import FullPageLoader from '../components/FullPageLoader';
 import AdminShell from '../components/admin/AdminShell';
 import AdminAccessDenied from '../components/admin/AdminAccessDenied';
+import StatusBadge from '../components/admin/StatusBadge';
+import { humanizeLabel } from '../components/admin/adminDisplay';
 import { env } from '../config/env.js';
 import { adminCharterCapacityLines, isCaptainLedCharter } from '../lib/charterCapacity';
 
@@ -293,7 +295,12 @@ function nextRangeForDrop(draft: DragDraft, date: string, hour: number, boatId: 
 export default function AdminCalendar() {
   const { user, isAdmin, loading: authLoading } = useAuth();
   const navigate = useNavigate();
-  const [view, setView] = useState<CalendarView>('week');
+  const [view, setView] = useState<CalendarView>(() =>
+    typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches ? 'day' : 'week'
+  );
+  const [isNarrow, setIsNarrow] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches
+  );
   const [anchor, setAnchor] = useState(() => new Date());
   const [boats, setBoats] = useState<BoatRow[]>([]);
   const [bookings, setBookings] = useState<CalendarBooking[]>([]);
@@ -405,6 +412,20 @@ export default function AdminCalendar() {
   useEffect(() => {
     void loadBookings();
   }, [loadBookings]);
+
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 767px)');
+    const apply = () => {
+      const narrow = mq.matches;
+      setIsNarrow(narrow);
+      if (narrow) {
+        setView((prev) => (prev === 'week' || prev === 'month' ? 'day' : prev));
+      }
+    };
+    apply();
+    mq.addEventListener('change', apply);
+    return () => mq.removeEventListener('change', apply);
+  }, []);
 
   const openBooking = (booking: CalendarBooking) => {
     navigate(`/admin/bookings/${booking.id}`);
@@ -857,15 +878,39 @@ export default function AdminCalendar() {
     pending: bookings.filter((b) => b.status === 'pending_verification'),
   };
 
+  const selectedDayKey = ymd(anchor);
+  const weekStrip = useMemo(() => {
+    const from = startOfWeek(anchor);
+    return Array.from({ length: 7 }, (_, i) => addDays(from, i));
+  }, [anchor]);
+
+  const dayAgenda = useMemo(() => {
+    const dayBookings = (byDate.get(selectedDayKey) || []).filter((booking) =>
+      booking.status === 'hold' ? filters.showHolds : filters.showBookings
+    );
+    const dayItems = itemsByDate.get(selectedDayKey) || [];
+    const entries: Array<
+      | { kind: 'booking'; start: string; booking: CalendarBooking }
+      | { kind: 'item'; start: string; item: CalendarItem }
+    > = [
+      ...dayItems.map((item) => ({ kind: 'item' as const, start: item.start_time, item })),
+      ...dayBookings.map((booking) => ({ kind: 'booking' as const, start: booking.start_time, booking })),
+    ];
+    entries.sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
+    return entries;
+  }, [byDate, filters.showBookings, filters.showHolds, itemsByDate, selectedDayKey]);
+
   if (authLoading) return <FullPageLoader message="Checking admin access..." />;
   if (!isAdmin) {
     return <AdminAccessDenied signedIn={Boolean(user)} />;
   }
 
   const title =
-    view === 'month'
-      ? anchor.toLocaleDateString([], { month: 'long', year: 'numeric' })
-      : `${range.from.toLocaleDateString()} - ${addDays(range.to, -1).toLocaleDateString()}`;
+    isNarrow || view === 'day'
+      ? anchor.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
+      : view === 'month'
+        ? anchor.toLocaleDateString([], { month: 'long', year: 'numeric' })
+        : `${range.from.toLocaleDateString()} - ${addDays(range.to, -1).toLocaleDateString()}`;
 
   const renderBookingCard = (booking: CalendarBooking, compact = false) => (
     <div
@@ -1059,33 +1104,104 @@ export default function AdminCalendar() {
                 <h2 className="text-2xl font-bold">{title}</h2>
               </div>
               <div className="mt-3 flex flex-wrap gap-2">
-                {(['week', 'day', 'month'] as CalendarView[]).map((v) => (
+                {(isNarrow ? (['day'] as CalendarView[]) : (['week', 'day', 'month'] as CalendarView[])).map((v) => (
                   <button
                     key={v}
                     type="button"
                     onClick={() => setView(v)}
-                    className={`rounded-lg px-4 py-2 font-semibold capitalize ${view === v ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-800'}`}
+                    className={`min-h-11 rounded-lg px-4 py-2 font-semibold capitalize ${view === v ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-800'}`}
                   >
-                    {v}
+                    {isNarrow && v === 'day' ? 'Agenda' : v}
                   </button>
                 ))}
-                <button type="button" onClick={() => setAnchor(view === 'month' ? new Date(anchor.getFullYear(), anchor.getMonth() - 1, 1) : addDays(anchor, view === 'day' ? -1 : -7))} className="rounded-lg bg-slate-100 px-3 py-2">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setAnchor(
+                      isNarrow || view === 'day'
+                        ? addDays(anchor, -1)
+                        : view === 'month'
+                          ? new Date(anchor.getFullYear(), anchor.getMonth() - 1, 1)
+                          : addDays(anchor, -7)
+                    )
+                  }
+                  className="min-h-11 rounded-lg bg-slate-100 px-3 py-2"
+                  aria-label="Previous"
+                >
                   <ChevronLeft className="h-5 w-5" />
                 </button>
-                <button type="button" onClick={() => setAnchor(new Date())} className="rounded-lg bg-slate-900 px-5 py-3 text-lg font-black text-white">
+                <button type="button" onClick={() => setAnchor(new Date())} className="min-h-11 rounded-lg bg-slate-900 px-5 py-3 text-base font-black text-white sm:text-lg">
                   Today
                 </button>
-                <button type="button" onClick={() => setAnchor(view === 'month' ? new Date(anchor.getFullYear(), anchor.getMonth() + 1, 1) : addDays(anchor, view === 'day' ? 1 : 7))} className="rounded-lg bg-slate-100 px-3 py-2">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setAnchor(
+                      isNarrow || view === 'day'
+                        ? addDays(anchor, 1)
+                        : view === 'month'
+                          ? new Date(anchor.getFullYear(), anchor.getMonth() + 1, 1)
+                          : addDays(anchor, 7)
+                    )
+                  }
+                  className="min-h-11 rounded-lg bg-slate-100 px-3 py-2"
+                  aria-label="Next"
+                >
                   <ChevronRight className="h-5 w-5" />
                 </button>
-                <button type="button" onClick={() => void loadBookings()} className="inline-flex items-center gap-2 rounded-lg bg-amber-600 px-5 py-3 text-lg font-black text-white">
+                <button type="button" onClick={() => void loadBookings()} className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-amber-600 px-5 py-3 text-base font-black text-white sm:text-lg">
                   <RefreshCw className={`h-5 w-5 ${loading ? 'animate-spin' : ''}`} />
                   Refresh
                 </button>
               </div>
+              {isNarrow ? (
+                <div className="mt-3 space-y-3">
+                  <label className="block text-sm font-bold text-slate-700">
+                    Date
+                    <input
+                      type="date"
+                      value={selectedDayKey}
+                      onChange={(e) => {
+                        if (!e.target.value) return;
+                        const [y, m, d] = e.target.value.split('-').map(Number);
+                        setAnchor(new Date(y, m - 1, d, 12));
+                        setView('day');
+                      }}
+                      className="mt-1 min-h-11 w-full rounded-lg border border-slate-300 px-3 py-2 text-base"
+                    />
+                  </label>
+                  <div className="grid grid-cols-7 gap-1">
+                    {weekStrip.map((day) => {
+                      const key = ymd(day);
+                      const active = key === selectedDayKey;
+                      const count =
+                        ((byDate.get(key) || []).filter((b) =>
+                          b.status === 'hold' ? filters.showHolds : filters.showBookings
+                        ).length || 0) + ((itemsByDate.get(key) || []).length || 0);
+                      return (
+                        <button
+                          key={key}
+                          type="button"
+                          onClick={() => {
+                            setAnchor(day);
+                            setView('day');
+                          }}
+                          className={`min-h-14 rounded-lg px-1 py-2 text-center text-xs font-bold ${
+                            active ? 'bg-amber-600 text-white' : 'bg-slate-100 text-slate-800'
+                          }`}
+                        >
+                          <div>{day.toLocaleDateString([], { weekday: 'narrow' })}</div>
+                          <div className="text-sm">{day.getDate()}</div>
+                          {count > 0 ? <div className="mt-0.5 text-[10px] opacity-80">{count}</div> : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
             </div>
             <div className="grid gap-2 md:grid-cols-3 xl:grid-cols-6">
-              <select value={filters.location} onChange={(e) => setFilters((f) => ({ ...f, location: e.target.value }))} className="rounded-lg border px-3 py-2">
+              <select value={filters.location} onChange={(e) => setFilters((f) => ({ ...f, location: e.target.value }))} className="min-h-11 rounded-lg border px-3 py-2">
                 <option value="">All locations</option>
                 <option>Port Orange</option>
                 <option>Titusville</option>
@@ -1137,7 +1253,98 @@ export default function AdminCalendar() {
 
         <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
           <section className="overflow-hidden rounded-2xl bg-white shadow">
-            {view === 'month' ? (
+            {isNarrow ? (
+              <div className="p-4">
+                <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+                  <h3 className="text-lg font-black text-slate-900">Day agenda</h3>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => openAddChoice(selectedDayKey, 9, filters.boatId || null)}
+                      className="min-h-11 rounded-lg bg-green-700 px-4 py-2 text-sm font-bold text-white"
+                    >
+                      + Booking
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => openItemForm('blocked_time', selectedDayKey, 9)}
+                      className="min-h-11 rounded-lg bg-slate-700 px-4 py-2 text-sm font-bold text-white"
+                    >
+                      + Block
+                    </button>
+                  </div>
+                </div>
+                {dayAgenda.length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center">
+                    <p className="font-semibold text-slate-700">No bookings or blocks this day.</p>
+                    <button
+                      type="button"
+                      onClick={() => openAddChoice(selectedDayKey, 9, filters.boatId || null)}
+                      className="mt-4 min-h-11 rounded-lg bg-amber-600 px-5 py-2 font-bold text-white"
+                    >
+                      Create booking
+                    </button>
+                  </div>
+                ) : (
+                  <ul className="space-y-3">
+                    {dayAgenda.map((entry) =>
+                      entry.kind === 'booking' ? (
+                        <li key={`b-${entry.booking.id}`}>
+                          <button
+                            type="button"
+                            onClick={() => openBooking(entry.booking)}
+                            className={`w-full rounded-xl border p-4 text-left shadow-sm ${cardClass(entry.booking)}`}
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <div className="text-sm font-black">{timeLabel(entry.booking.start_time, entry.booking.end_time)}</div>
+                                <div className="mt-1 text-base font-bold">{entry.booking.customer_name}</div>
+                                <div className="text-sm text-slate-700">{entry.booking.boat_name}</div>
+                                <div className="text-xs text-slate-600">{entry.booking.rental_location || 'No location'}</div>
+                                {charterCapacityBlock(entry.booking, true)}
+                              </div>
+                              <StatusBadge
+                                tone={
+                                  entry.booking.status === 'cancelled'
+                                    ? 'danger'
+                                    : entry.booking.status === 'hold'
+                                      ? 'warning'
+                                      : 'success'
+                                }
+                              >
+                                {humanizeLabel(entry.booking.status)}
+                              </StatusBadge>
+                            </div>
+                            <div className="mt-3 text-sm font-bold text-amber-800 underline">Open booking</div>
+                          </button>
+                        </li>
+                      ) : (
+                        <li key={`i-${entry.item.id}`}>
+                          <button
+                            type="button"
+                            onClick={() => editItem(entry.item)}
+                            className="w-full rounded-xl border border-slate-300 bg-slate-50 p-4 text-left shadow-sm"
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <div className="text-sm font-black">
+                                  {entry.item.all_day ? 'All day' : timeLabel(entry.item.start_time, entry.item.end_time)}
+                                </div>
+                                <div className="mt-1 text-base font-bold">{entry.item.title}</div>
+                                <div className="text-xs text-slate-600">{humanizeLabel(entry.item.item_type)}</div>
+                              </div>
+                              <StatusBadge tone={entry.item.item_type === 'blocked_time' ? 'neutral' : 'info'}>
+                                {entry.item.item_type === 'blocked_time' ? 'Block' : 'Duty'}
+                              </StatusBadge>
+                            </div>
+                          </button>
+                        </li>
+                      )
+                    )}
+                  </ul>
+                )}
+              </div>
+            ) : view === 'month' ? (
               <div className="grid grid-cols-7 border-l border-t border-slate-200">
                 {range.days.map((day) => {
                   const key = ymd(day);
@@ -1180,7 +1387,13 @@ export default function AdminCalendar() {
               </div>
             ) : (
               <div className="overflow-x-auto">
-                <div className={`grid min-w-[900px] ${view === 'day' ? 'grid-cols-[90px_1fr]' : 'grid-cols-[90px_repeat(7,minmax(120px,1fr))]'}`}>
+                <div
+                  className={`grid ${
+                    view === 'day'
+                      ? 'min-w-0 grid-cols-[72px_1fr] md:grid-cols-[90px_1fr]'
+                      : 'min-w-[900px] grid-cols-[90px_repeat(7,minmax(120px,1fr))]'
+                  }`}
+                >
                   <div className="border-b border-r border-slate-200 bg-slate-50 p-3 text-xs font-bold uppercase text-slate-500">Time</div>
                   {range.days.map((day) => (
                     <div key={ymd(day)} className="border-b border-r border-slate-200 bg-slate-50 p-3 text-center font-bold">

@@ -2888,8 +2888,10 @@ export default function Admin({ onNavigate }: AdminProps) {
               Off-platform waiver and insurance uploads. Match to an existing booking, then approve or reject.
             </p>
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+          <AdminResponsiveList
+            desktop={
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
               <thead className="bg-slate-50">
                 <tr>
                   <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-600">Customer</th>
@@ -2917,7 +2919,7 @@ export default function Admin({ onNavigate }: AdminProps) {
                         {row.groupon_code ? (
                           <div className="mt-1 text-xs font-medium text-emerald-700">Groupon: {row.groupon_code}</div>
                         ) : null}
-                        <div className="mt-1 font-mono text-[10px] text-slate-400">{row.id}</div>
+                        <div className="mt-1 font-mono text-[10px] text-slate-400" title={row.id}>{shortId(row.id)}</div>
                       </td>
                       <td className="px-4 py-3 text-slate-800">
                         <div>{tripTypeLabel(row.trip_type)}</div>
@@ -2962,8 +2964,8 @@ export default function Admin({ onNavigate }: AdminProps) {
                           {row.admin_status.replace(/_/g, ' ')}
                         </span>
                         {row.matched_booking_id ? (
-                          <div className="mt-1 font-mono text-[10px] text-slate-500">
-                            → {row.matched_booking_id}
+                          <div className="mt-1 font-mono text-[10px] text-slate-500" title={row.matched_booking_id}>
+                            → {shortId(row.matched_booking_id)}
                           </div>
                         ) : null}
                       </td>
@@ -3006,7 +3008,7 @@ export default function Admin({ onNavigate }: AdminProps) {
                                       {new Date(s.start_time).toLocaleDateString()}
                                       {s.promo_code ? ` · ${s.promo_code}` : ''}
                                       <br />
-                                      <span className="font-mono text-[10px]">{s.id}</span>
+                                      <span className="font-mono text-[10px]" title={s.id}>{shortId(s.id)}</span>
                                     </button>
                                   </li>
                                 ))}
@@ -3059,7 +3061,154 @@ export default function Admin({ onNavigate }: AdminProps) {
                 )}
               </tbody>
             </table>
-          </div>
+              </div>
+            }
+
+            mobile={
+              <div className="space-y-3 p-3">
+                {preTripSubmissions.length === 0 ? (
+                  <p className="py-6 text-center text-sm text-slate-500">No pre-trip submissions yet.</p>
+                ) : null}
+                {preTripSubmissions.map((row) => (
+                  <MobileAdminCard
+                    key={`pre-m-${row.id}`}
+                    title={row.customer_name || 'Customer'}
+                    subtitle={row.email}
+                    badge={
+                      <StatusBadge tone={row.admin_status === 'approved' ? 'success' : row.admin_status === 'rejected' ? 'danger' : 'warning'}>
+                        {humanizeLabel(row.admin_status)}
+                      </StatusBadge>
+                    }
+                    fields={[
+                      { label: 'Phone', value: row.phone || '—', hideIfEmpty: true },
+                      { label: 'Trip', value: tripTypeLabel(row.trip_type) },
+                      {
+                        label: 'Requested',
+                        value: row.requested_trip_date
+                          ? new Date(row.requested_trip_date).toLocaleString()
+                          : '—',
+                        hideIfEmpty: true,
+                      },
+                      {
+                        label: 'Docs',
+                        value: `Waiver ${row.waiver_signed ? 'Yes' : 'No'} · License ${humanizeLabel(row.license_status)} · Insurance ${humanizeLabel(row.insurance_status)}`,
+                      },
+                      {
+                        label: 'Matched',
+                        value: row.matched_booking_id ? (
+                          <span className="font-mono text-xs" title={row.matched_booking_id}>
+                            {shortId(row.matched_booking_id)}
+                          </span>
+                        ) : (
+                          '—'
+                        ),
+                      },
+                      {
+                        label: 'Ref',
+                        value: (
+                          <span className="font-mono text-xs" title={row.id}>
+                            {shortId(row.id)}
+                          </span>
+                        ),
+                      },
+                    ]}
+                    actions={
+                      <AdminActions columns={1}>
+                        <label className="block text-sm font-semibold text-slate-700">
+                          Match booking
+                          <input
+                            type="text"
+                            placeholder="Booking UUID"
+                            value={preTripMatchIds[row.id] ?? row.matched_booking_id ?? ''}
+                            onChange={(e) =>
+                              setPreTripMatchIds((prev) => ({ ...prev, [row.id]: e.target.value }))
+                            }
+                            className="mt-1 min-h-11 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                          />
+                        </label>
+                        {(row.groupon_code || row.email) ? (
+                          <button
+                            type="button"
+                            disabled={preTripSuggestionsLoading === row.id}
+                            onClick={() => void loadPreTripSuggestions(row.id)}
+                            className="rounded-lg border border-cyan-300 bg-cyan-50 px-3 py-2 text-sm font-semibold text-cyan-900 disabled:opacity-50"
+                          >
+                            {preTripSuggestionsLoading === row.id ? 'Finding matches…' : 'Suggest matches'}
+                          </button>
+                        ) : null}
+                        {(preTripSuggestions[row.id] || []).length > 0 ? (
+                          <ul className="space-y-1">
+                            {preTripSuggestions[row.id].map((s) => (
+                              <li key={s.id}>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setPreTripMatchIds((prev) => ({ ...prev, [row.id]: s.id }))
+                                  }
+                                  className="w-full rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-left text-xs text-emerald-900"
+                                >
+                                  <span className="font-semibold">{s.match_reason}</span>
+                                  <br />
+                                  {s.customer_name || 'Customer'} · {new Date(s.start_time).toLocaleDateString()}
+                                  <br />
+                                  <span className="font-mono" title={s.id}>{shortId(s.id)}</span>
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : null}
+                        <textarea
+                          placeholder="Admin notes"
+                          rows={2}
+                          value={preTripNotes[row.id] ?? row.admin_notes ?? ''}
+                          onChange={(e) =>
+                            setPreTripNotes((prev) => ({ ...prev, [row.id]: e.target.value }))
+                          }
+                          className="min-h-11 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                        />
+                        <div className="grid grid-cols-3 gap-2">
+                          <button
+                            type="button"
+                            disabled={preTripActionBusy === row.id}
+                            onClick={() => void runPreTripAdminAction(row.id, 'match')}
+                            className="rounded-lg bg-cyan-700 px-2 py-2 text-sm font-semibold text-white disabled:opacity-40"
+                          >
+                            Match
+                          </button>
+                          <button
+                            type="button"
+                            disabled={preTripActionBusy === row.id}
+                            onClick={() => void runPreTripAdminAction(row.id, 'approve')}
+                            className="rounded-lg bg-green-600 px-2 py-2 text-sm font-semibold text-white disabled:opacity-40"
+                          >
+                            Approve
+                          </button>
+                          <button
+                            type="button"
+                            disabled={preTripActionBusy === row.id}
+                            onClick={() => void runPreTripAdminAction(row.id, 'reject')}
+                            className="rounded-lg bg-red-600 px-2 py-2 text-sm font-semibold text-white disabled:opacity-40"
+                          >
+                            Reject
+                          </button>
+                        </div>
+                        {row.license_url ? (
+                          <a href={row.license_url} target="_blank" rel="noopener noreferrer" className="text-center text-sm font-semibold text-blue-700 underline">
+                            View license
+                          </a>
+                        ) : null}
+                        {row.insurance_url ? (
+                          <a href={row.insurance_url} target="_blank" rel="noopener noreferrer" className="text-center text-sm font-semibold text-blue-700 underline">
+                            View insurance
+                          </a>
+                        ) : null}
+                      </AdminActions>
+                    }
+                  />
+                ))}
+              </div>
+            }
+          />
         </div>
 
         <div className="rounded-xl bg-white shadow">
@@ -3125,8 +3274,10 @@ export default function Admin({ onNavigate }: AdminProps) {
             ) : null}
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full">
+          <AdminResponsiveList
+            desktop={
+              <div className="overflow-x-auto">
+                <table className="w-full">
               <thead className="bg-slate-50">
                 <tr>
                   <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-600">
@@ -3180,17 +3331,20 @@ export default function Admin({ onNavigate }: AdminProps) {
                         </td>
                         <td className="px-4 py-4">
                           <div className="font-semibold text-slate-900">{amount}</div>
-                          <div className="mt-1 max-w-[16rem] break-all font-mono text-[11px] text-slate-500">
-                            {item.checkout_session_id || item.payment_intent_id || 'No Stripe id'}
+                          <div
+                            className="mt-1 max-w-[16rem] font-mono text-[11px] text-slate-500"
+                            title={item.checkout_session_id || item.payment_intent_id || undefined}
+                          >
+                            {shortId(item.checkout_session_id || item.payment_intent_id || 'No Stripe id', 14)}
                           </div>
                           <span className="mt-2 inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold capitalize text-amber-900">
-                            {item.status}
+                            {humanizeLabel(item.status)}
                           </span>
                         </td>
                         <td className="px-4 py-4 text-sm text-slate-700">
                           <div>{item.boats?.name || item.trip_type || 'Trip details unavailable'}</div>
                           {item.start_time ? <div>{new Date(item.start_time).toLocaleString()}</div> : null}
-                          {item.booking_id ? <div className="mt-1 font-mono text-[11px]">{item.booking_id}</div> : null}
+                          {item.booking_id ? <div className="mt-1 font-mono text-[11px]" title={item.booking_id}>{shortId(item.booking_id)}</div> : null}
                         </td>
                         <td className="px-4 py-4">
                           <div className="text-sm font-semibold capitalize text-slate-900">
@@ -3281,7 +3435,137 @@ export default function Admin({ onNavigate }: AdminProps) {
                 )}
               </tbody>
             </table>
-          </div>
+              </div>
+            }
+
+            mobile={
+              <div className="space-y-3 p-3">
+                {paymentRecoveryLoading ? (
+                  <p className="py-6 text-center text-sm text-slate-500">Loading unmatched payments...</p>
+                ) : null}
+                {!paymentRecoveryLoading && paymentRecoveryItems.length === 0 ? (
+                  <p className="py-6 text-center text-sm text-slate-500">
+                    No unmatched payments or failed booking jobs are currently open.
+                  </p>
+                ) : null}
+                {paymentRecoveryItems.map((item) => {
+                  const amount =
+                    item.amount == null
+                      ? 'Unknown'
+                      : `$${Number(item.amount).toFixed(2)} ${String(item.currency || 'usd').toUpperCase()}`;
+                  const stripeHref = item.checkout_session_id
+                    ? `https://dashboard.stripe.com/payments?query=${encodeURIComponent(item.checkout_session_id)}`
+                    : item.payment_intent_id
+                      ? `https://dashboard.stripe.com/payments/${encodeURIComponent(item.payment_intent_id)}`
+                      : '';
+                  const logs = paymentRecoveryLogs[item.id];
+                  return (
+                    <MobileAdminCard
+                      key={`pay-m-${item.id}`}
+                      title={item.customer_name || 'Unknown customer'}
+                      subtitle={item.customer_email || 'No email'}
+                      badge={
+                        <StatusBadge tone="warning">{humanizeLabel(item.status)}</StatusBadge>
+                      }
+                      fields={[
+                        { label: 'Amount', value: <span className="font-semibold">{amount}</span> },
+                        {
+                          label: 'Stripe',
+                          value: (
+                            <span
+                              className="font-mono text-xs"
+                              title={item.checkout_session_id || item.payment_intent_id || undefined}
+                            >
+                              {shortId(item.checkout_session_id || item.payment_intent_id || '—', 14)}
+                            </span>
+                          ),
+                        },
+                        {
+                          label: 'Trip',
+                          value: item.boats?.name || item.trip_type || 'Unavailable',
+                        },
+                        {
+                          label: 'When',
+                          value: item.start_time ? new Date(item.start_time).toLocaleString() : '—',
+                          hideIfEmpty: true,
+                        },
+                        { label: 'Reason', value: humanizeLabel(item.reason) },
+                        {
+                          label: 'Error',
+                          value: item.error || 'No error message recorded.',
+                        },
+                      ]}
+                      actions={
+                        <AdminActions>
+                          <button
+                            type="button"
+                            disabled={paymentRecoveryBusyId === item.id}
+                            onClick={() => void runPaymentRecoveryAction(item.id, 'retry')}
+                            className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                          >
+                            Retry booking
+                          </button>
+                          <button
+                            type="button"
+                            disabled={paymentRecoveryBusyId === item.id || !item.payment_intent_id}
+                            onClick={() => void runPaymentRecoveryAction(item.id, 'refund')}
+                            className="rounded-lg bg-red-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                          >
+                            Refund
+                          </button>
+                          <button
+                            type="button"
+                            disabled={paymentRecoveryBusyId === item.id}
+                            onClick={() => void loadPaymentRecoveryLogs(item.id)}
+                            className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 disabled:opacity-50"
+                          >
+                            View logs
+                          </button>
+                          <button
+                            type="button"
+                            disabled={paymentRecoveryBusyId === item.id}
+                            onClick={() => void runPaymentRecoveryAction(item.id, 'ignore')}
+                            className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-600 disabled:opacity-50"
+                          >
+                            Ignore
+                          </button>
+                          {stripeHref ? (
+                            <a
+                              href={stripeHref}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-center text-sm font-semibold text-slate-800 sm:col-span-2"
+                            >
+                              Open Stripe
+                            </a>
+                          ) : null}
+                          {item.customer_email ? (
+                            <a
+                              href={`mailto:${item.customer_email}`}
+                              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-center text-sm font-semibold text-slate-800 sm:col-span-2"
+                            >
+                              Email customer
+                            </a>
+                          ) : null}
+                          {logs ? (
+                            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700 sm:col-span-2">
+                              <div className="font-semibold">Recent logs</div>
+                              {(logs.webhooks || []).slice(0, 3).map((log) => (
+                                <div key={log.event_id} className="mt-1">
+                                  {log.event_type} · {log.processing_status}
+                                  {log.error ? ` · ${log.error}` : ''}
+                                </div>
+                              ))}
+                            </div>
+                          ) : null}
+                        </AdminActions>
+                      }
+                    />
+                  );
+                })}
+              </div>
+            }
+          />
         </div>
 
         <div className="relative rounded-xl bg-white shadow">

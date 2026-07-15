@@ -6,7 +6,7 @@ import { useAuth } from '../contexts/useAuth';
 import FullPageLoader from '../components/FullPageLoader';
 import AdminShell from '../components/admin/AdminShell';
 import AdminAccessDenied from '../components/admin/AdminAccessDenied';
-import { shortId } from '../components/admin/adminDisplay';
+import { humanizeLabel, shortId } from '../components/admin/adminDisplay';
 import { env } from '../config/env.js';
 import {
   CHARTER_MAX_PASSENGERS,
@@ -737,7 +737,8 @@ export default function AdminBookingDetails() {
   const checklistDone = ['ready_for_departure', 'completed'].includes(String(booking.status || ''));
   const bookingLink = `${window.location.origin}/waivers-insurance?bookingId=${booking.id}`;
 
-  const inputClass = 'mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-900';
+  const inputClass =
+    'mt-1 min-h-11 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-base text-slate-900 shadow-sm focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-200';
   const labelClass = 'block text-sm font-bold text-slate-700';
 
   return (
@@ -745,16 +746,24 @@ export default function AdminBookingDetails() {
       title="Booking Details"
       subtitle={<span title={booking.id}>Ref {shortId(booking.id, 8)}</span>}
       actions={
-        <Link
-          to="/admin/calendar"
-          className="inline-flex min-h-11 items-center rounded-lg bg-slate-800 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-700"
-        >
-          Calendar
-        </Link>
+        <>
+          <Link
+            to="/admin/bookings"
+            className="inline-flex min-h-11 items-center rounded-lg bg-slate-800 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-700"
+          >
+            Bookings
+          </Link>
+          <Link
+            to="/admin/calendar"
+            className="inline-flex min-h-11 items-center rounded-lg bg-slate-800 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-700"
+          >
+            Calendar
+          </Link>
+        </>
       }
     >
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
-        <section className="space-y-6">
+        <section className="order-2 space-y-6 lg:order-1">
           {notice ? (
             <div className={`rounded-lg px-4 py-3 font-semibold ${notice.variant === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
               {notice.text}
@@ -815,7 +824,16 @@ export default function AdminBookingDetails() {
                     })()}
                   </div>
                 ) : null}
-                <label className={`${labelClass} sm:col-span-2`}>Booking Source<select className={inputClass} value={form.source || ''} onChange={(e) => setField('source', e.target.value)}>{sourceOptions.map((s) => <option key={s} value={s}>{s}</option>)}</select></label>
+                <label className={`${labelClass} sm:col-span-2`}>
+                  Booking Source
+                  <select className={inputClass} value={form.source || ''} onChange={(e) => setField('source', e.target.value)}>
+                    {sourceOptions.map((s) => (
+                      <option key={s} value={s}>
+                        {humanizeLabel(s)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
               </div>
               <div className="mt-4 text-sm font-bold">
                 {!form.boatId ? <span className="text-slate-600">Select a boat first.</span> : null}
@@ -833,7 +851,7 @@ export default function AdminBookingDetails() {
                   <select className={inputClass} value={form.status || 'pending'} onChange={(e) => setField('status', e.target.value)}>
                     {statusOptions.map((status) => (
                       <option key={status} value={status}>
-                        {status.replace(/_/g, ' ')}
+                        {humanizeLabel(status)}
                       </option>
                     ))}
                   </select>
@@ -864,7 +882,16 @@ export default function AdminBookingDetails() {
               <label className={labelClass}>Amount Collected<input className={inputClass} type="number" value={form.amountCollected || ''} onChange={(e) => setField('amountCollected', e.target.value)} /></label>
               <label className={labelClass}>Remaining Balance<input className={inputClass} type="number" value={form.remainingBalance || ''} onChange={(e) => setField('remainingBalance', e.target.value)} /></label>
               <label className={labelClass}>Payment Method<select className={inputClass} value={form.paymentMethod || ''} onChange={(e) => setField('paymentMethod', e.target.value)}>{paymentMethods.map((m) => <option key={m} value={m}>{m || 'None'}</option>)}</select></label>
-              <label className={labelClass}>Payment Status<select className={inputClass} value={form.paymentStatus || 'pending'} onChange={(e) => setField('paymentStatus', e.target.value)}>{paymentStatuses.map((s) => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}</select></label>
+              <label className={labelClass}>
+                Payment Status
+                <select className={inputClass} value={form.paymentStatus || 'pending'} onChange={(e) => setField('paymentStatus', e.target.value)}>
+                  {paymentStatuses.map((s) => (
+                    <option key={s} value={s}>
+                      {humanizeLabel(s)}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <label className={`${labelClass} sm:col-span-2 lg:col-span-4`}>Discount Reason<input className={inputClass} value={form.discountReason || ''} onChange={(e) => setField('discountReason', e.target.value)} /></label>
             </div>
           </div>
@@ -888,15 +915,45 @@ export default function AdminBookingDetails() {
           </div>
         </section>
 
-        <aside className="space-y-5">
+        {/* Aside first on mobile so payment/actions stay reachable without long scroll */}
+        <aside className="order-1 space-y-5 lg:order-2">
+          <div className="rounded-2xl bg-white p-5 shadow lg:sticky lg:top-20">
+            <h2 className="text-xl font-black">Actions</h2>
+            <div className="mt-4 grid gap-2">
+              <button type="button" onClick={() => void save()} disabled={saving || availability === 'conflict'} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-3 font-bold text-white disabled:opacity-50"><Save className="h-4 w-4" />Save Changes</button>
+              {booking.status === 'hold' ? <button type="button" onClick={() => void runAction('confirm_hold')} className="min-h-11 rounded-lg bg-green-700 px-4 py-3 font-bold text-white">Convert Hold to Confirmed</button> : null}
+              <button type="button" onClick={() => void runAction('cancel')} className="min-h-11 rounded-lg bg-red-700 px-4 py-3 font-bold text-white">Cancel Booking</button>
+              <button type="button" onClick={() => void runAction('ready')} className="min-h-11 rounded-lg bg-cyan-700 px-4 py-3 font-bold text-white">Mark Ready for Departure</button>
+              <button type="button" onClick={() => void runAction('complete')} className="min-h-11 rounded-lg bg-slate-700 px-4 py-3 font-bold text-white">Mark Completed</button>
+              <button type="button" onClick={() => navigate(`/admin/staff-booking?boatId=${booking.boat_id || ''}&date=${form.date || ''}&startTime=${form.startTime || ''}&durationHours=${form.duration || '4'}&location=${encodeURIComponent(form.location || '')}`)} className="min-h-11 rounded-lg bg-purple-700 px-4 py-3 font-bold text-white">Duplicate Booking</button>
+              <button type="button" onClick={() => void runAction('send_confirmation')} className="min-h-11 rounded-lg bg-amber-600 px-4 py-3 font-bold text-white">Send Confirmation</button>
+              <button type="button" onClick={() => void navigator.clipboard.writeText(bookingLink)} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border px-4 py-3 font-bold"><Copy className="h-4 w-4" />Copy Booking Link</button>
+              <button type="button" onClick={() => window.print()} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border px-4 py-3 font-bold"><Printer className="h-4 w-4" />Print Booking</button>
+            </div>
+          </div>
           <div className="rounded-2xl bg-white p-5 shadow">
             <h2 className="text-xl font-black">Payment</h2>
             <p className="mt-3 text-3xl font-black">${money(form.finalPrice)}</p>
-            <p className="text-sm capitalize text-slate-600">{String(form.paymentStatus || 'pending').replace(/_/g, ' ')}</p>
+            <p className="text-sm capitalize text-slate-600">{humanizeLabel(String(form.paymentStatus || 'pending'))}</p>
             <div className="mt-4 space-y-1 text-xs text-slate-600">
-              <div><span className="font-bold">Payment Intent:</span> {booking.payment_intent_id || '-'}</div>
-              <div><span className="font-bold">Checkout Session:</span> {booking.checkout_session_id || booking.stripe_payment_id || '-'}</div>
-              <div><span className="font-bold">Charge:</span> {booking.stripe_charge_id || '-'}</div>
+              <div>
+                <span className="font-bold">Payment Intent:</span>{' '}
+                <span className="font-mono" title={booking.payment_intent_id || undefined}>
+                  {shortId(booking.payment_intent_id, 14)}
+                </span>
+              </div>
+              <div>
+                <span className="font-bold">Checkout Session:</span>{' '}
+                <span className="font-mono" title={booking.checkout_session_id || booking.stripe_payment_id || undefined}>
+                  {shortId(booking.checkout_session_id || booking.stripe_payment_id, 14)}
+                </span>
+              </div>
+              <div>
+                <span className="font-bold">Charge:</span>{' '}
+                <span className="font-mono" title={booking.stripe_charge_id || undefined}>
+                  {shortId(booking.stripe_charge_id, 14)}
+                </span>
+              </div>
             </div>
           </div>
 
@@ -1243,20 +1300,6 @@ export default function AdminBookingDetails() {
             </div>
           </div>
 
-          <div className="rounded-2xl bg-white p-5 shadow">
-            <h2 className="text-xl font-black">Actions</h2>
-            <div className="mt-4 grid gap-2">
-              <button type="button" onClick={() => void save()} disabled={saving || availability === 'conflict'} className="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-3 font-bold text-white disabled:opacity-50"><Save className="h-4 w-4" />Save Changes</button>
-              {booking.status === 'hold' ? <button type="button" onClick={() => void runAction('confirm_hold')} className="rounded-lg bg-green-700 px-4 py-3 font-bold text-white">Convert Hold to Confirmed</button> : null}
-              <button type="button" onClick={() => void runAction('cancel')} className="rounded-lg bg-red-700 px-4 py-3 font-bold text-white">Cancel Booking</button>
-              <button type="button" onClick={() => void runAction('ready')} className="rounded-lg bg-cyan-700 px-4 py-3 font-bold text-white">Mark Ready for Departure</button>
-              <button type="button" onClick={() => void runAction('complete')} className="rounded-lg bg-slate-700 px-4 py-3 font-bold text-white">Mark Completed</button>
-              <button type="button" onClick={() => navigate(`/admin/staff-booking?boatId=${booking.boat_id || ''}&date=${form.date || ''}&startTime=${form.startTime || ''}&durationHours=${form.duration || '4'}&location=${encodeURIComponent(form.location || '')}`)} className="rounded-lg bg-purple-700 px-4 py-3 font-bold text-white">Duplicate Booking</button>
-              <button type="button" onClick={() => void runAction('send_confirmation')} className="rounded-lg bg-amber-600 px-4 py-3 font-bold text-white">Send Confirmation</button>
-              <button type="button" onClick={() => void navigator.clipboard.writeText(bookingLink)} className="inline-flex items-center justify-center gap-2 rounded-lg border px-4 py-3 font-bold"><Copy className="h-4 w-4" />Copy Booking Link</button>
-              <button type="button" onClick={() => window.print()} className="inline-flex items-center justify-center gap-2 rounded-lg border px-4 py-3 font-bold"><Printer className="h-4 w-4" />Print Booking</button>
-            </div>
-          </div>
         </aside>
       </div>
 

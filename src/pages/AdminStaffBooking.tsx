@@ -378,13 +378,13 @@ export default function AdminStaffBooking() {
         ) : null}
 
         <div className="grid gap-6 lg:grid-cols-[minmax(0,1.7fr)_minmax(320px,0.9fr)]">
-          <section className="rounded-2xl bg-white p-5 shadow">
+          <section className="order-2 rounded-2xl bg-white p-5 shadow lg:order-1">
             <div className="mb-5 flex items-center gap-2">
               <CalendarPlus className="h-6 w-6 text-amber-600" />
               <h2 className="text-2xl font-bold">New Booking</h2>
             </div>
 
-            <div className="grid gap-4 md:grid-cols-2">
+            <div className="grid gap-4 sm:grid-cols-2">
               <label className={labelClass}>
                 Customer Name *
                 <input className={inputClass} value={form.customerName} onChange={(e) => setForm((p) => ({ ...p, customerName: e.target.value }))} autoFocus />
@@ -500,7 +500,7 @@ export default function AdminStaffBooking() {
                 Booking Source
                 <input className={inputClass} value={form.bookingSource} onChange={(e) => setForm((p) => ({ ...p, bookingSource: e.target.value }))} />
               </label>
-              <label className={`${labelClass} md:col-span-2`}>
+              <label className={`${labelClass} sm:col-span-2`}>
                 Staff Notes
                 <textarea className={`${inputClass} min-h-[120px]`} value={form.staffNotes} onChange={(e) => setForm((p) => ({ ...p, staffNotes: e.target.value }))} />
               </label>
@@ -522,7 +522,7 @@ export default function AdminStaffBooking() {
             </div>
           </section>
 
-          <aside className="rounded-2xl bg-white p-5 shadow">
+          <aside className="order-1 rounded-2xl bg-white p-5 shadow lg:order-2 lg:sticky lg:top-20 lg:self-start">
             <h2 className="text-2xl font-bold text-slate-900">Live Availability</h2>
             <div
               className={`mt-4 rounded-2xl border p-5 ${

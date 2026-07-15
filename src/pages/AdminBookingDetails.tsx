@@ -6,6 +6,7 @@ import { useAuth } from '../contexts/useAuth';
 import FullPageLoader from '../components/FullPageLoader';
 import AdminShell from '../components/admin/AdminShell';
 import AdminAccessDenied from '../components/admin/AdminAccessDenied';
+import { shortId } from '../components/admin/adminDisplay';
 import { env } from '../config/env.js';
 import {
   CHARTER_MAX_PASSENGERS,
@@ -742,7 +743,7 @@ export default function AdminBookingDetails() {
   return (
     <AdminShell
       title="Booking Details"
-      subtitle={booking.id}
+      subtitle={<span title={booking.id}>Ref {shortId(booking.id, 8)}</span>}
       actions={
         <Link
           to="/admin/calendar"

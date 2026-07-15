@@ -6,6 +6,11 @@ import { useAuth } from '../contexts/useAuth';
 import FullPageLoader from '../components/FullPageLoader';
 import AdminShell from '../components/admin/AdminShell';
 import AdminAccessDenied from '../components/admin/AdminAccessDenied';
+import AdminResponsiveList from '../components/admin/AdminResponsiveList';
+import MobileAdminCard from '../components/admin/MobileAdminCard';
+import AdminActions from '../components/admin/AdminActions';
+import StatusBadge from '../components/admin/StatusBadge';
+import { humanizeLabel, shortId } from '../components/admin/adminDisplay';
 import { env } from '../config/env.js';
 import { fetchJsonWithTimeout, withTimeout } from '../lib/adminDiagnostics';
 
@@ -231,49 +236,109 @@ export default function AdminOutbox() {
             <h2 className="flex items-center gap-2 text-xl font-black"><Mail className="h-5 w-5 text-amber-600" />Outbox</h2>
             <p className="text-sm text-slate-500">{items.length} message{items.length === 1 ? '' : 's'} shown</p>
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead className="bg-slate-50 text-xs uppercase text-slate-600">
-                <tr>
-                  {['Date/Time', 'Customer', 'Booking', 'Channel', 'Message Type', 'Recipient', 'Subject', 'Status', 'Sent By', 'Actions'].map((h) => (
-                    <th key={h} className="px-4 py-3">{h}</th>
+          {items.length === 0 ? (
+            <p className="px-4 py-8 text-center text-slate-500">No communications found.</p>
+          ) : (
+            <AdminResponsiveList
+              desktop={
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-sm">
+                    <thead className="bg-slate-50 text-xs uppercase text-slate-600">
+                      <tr>
+                        {['Date/Time', 'Customer', 'Booking', 'Channel', 'Message Type', 'Recipient', 'Subject', 'Status', 'Sent By', 'Actions'].map((h) => (
+                          <th key={h} className="px-4 py-3">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {items.map((row) => (
+                        <tr key={row.id} className={row.reviewed_at ? 'bg-white' : 'bg-amber-50/40'}>
+                          <td className="whitespace-nowrap px-4 py-4 font-semibold">{dateTime(row.sent_at || row.created_at)}</td>
+                          <td className="px-4 py-4">{row.customer_name}<div className="break-all text-xs text-slate-500">{row.customer_email}</div></td>
+                          <td className="px-4 py-4">
+                            {row.booking_id ? (
+                              <Link to={`/admin/bookings/${row.booking_id}`} className="font-bold text-amber-700 underline">Open Booking</Link>
+                            ) : row.customer_message_id ? (
+                              <Link to="/admin/bookings#contact-inbox" className="font-bold text-amber-700 underline">Contact Inbox</Link>
+                            ) : (
+                              <span className="text-slate-500">—</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-4 uppercase">{row.channel}</td>
+                          <td className="px-4 py-4 capitalize">{label(row.message_type)}</td>
+                          <td className="max-w-[220px] break-all px-4 py-4">{row.recipient}</td>
+                          <td className="max-w-[260px] px-4 py-4">{row.subject || '-'}</td>
+                          <td className="px-4 py-4"><span className={`rounded-full px-3 py-1 text-xs font-black capitalize ${statusClass(row.status)}`}>{label(row.status)}</span></td>
+                          <td className="max-w-[160px] break-all px-4 py-4 text-xs text-slate-600" title={row.sent_by || undefined}>
+                            {row.sent_by && row.sent_by.includes('@') ? row.sent_by : shortId(row.sent_by || 'system/admin', 12)}
+                          </td>
+                          <td className="px-4 py-4">
+                            <div className="flex flex-col gap-2">
+                              <button type="button" onClick={() => void viewMessage(row.id)} disabled={busyId === row.id} className="min-h-11 rounded-lg border px-3 py-2 font-bold hover:bg-slate-50">View Message</button>
+                              <button type="button" onClick={() => void resendMessage(row)} disabled={busyId === row.id} className="min-h-11 rounded-lg bg-green-700 px-3 py-2 font-bold text-white disabled:opacity-50">Resend</button>
+                              {!row.reviewed_at ? <button type="button" onClick={() => void markReviewed(row)} disabled={busyId === row.id} className="min-h-11 rounded-lg bg-amber-600 px-3 py-2 font-bold text-white disabled:opacity-50">Mark Reviewed</button> : null}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              }
+              mobile={
+                <div className="space-y-3 p-3">
+                  {items.map((row) => (
+                    <MobileAdminCard
+                      key={row.id}
+                      className={row.reviewed_at ? undefined : 'bg-amber-50/50'}
+                      title={row.customer_name || 'Customer'}
+                      subtitle={dateTime(row.sent_at || row.created_at)}
+                      badge={
+                        <StatusBadge tone={row.status === 'failed' ? 'danger' : row.status === 'sent' || row.status === 'delivered' ? 'success' : 'warning'}>
+                          {humanizeLabel(row.status)}
+                        </StatusBadge>
+                      }
+                      fields={[
+                        { label: 'Type', value: humanizeLabel(row.message_type) },
+                        { label: 'Channel', value: String(row.channel || '').toUpperCase() },
+                        { label: 'To', value: row.recipient },
+                        { label: 'Subject', value: row.subject || '—', hideIfEmpty: true },
+                        {
+                          label: 'Booking',
+                          value: row.booking_id ? (
+                            <Link to={`/admin/bookings/${row.booking_id}`} className="font-bold text-amber-700 underline">
+                              Open ({shortId(row.booking_id)})
+                            </Link>
+                          ) : row.customer_message_id ? (
+                            <Link to="/admin/bookings#contact-inbox" className="font-bold text-amber-700 underline">
+                              Contact Inbox
+                            </Link>
+                          ) : (
+                            '—'
+                          ),
+                        },
+                      ]}
+                      actions={
+                        <AdminActions>
+                          <button type="button" onClick={() => void viewMessage(row.id)} disabled={busyId === row.id} className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-bold hover:bg-slate-50 disabled:opacity-50">
+                            View Message
+                          </button>
+                          <button type="button" onClick={() => void resendMessage(row)} disabled={busyId === row.id} className="rounded-lg bg-green-700 px-3 py-2 text-sm font-bold text-white disabled:opacity-50">
+                            Resend
+                          </button>
+                          {!row.reviewed_at ? (
+                            <button type="button" onClick={() => void markReviewed(row)} disabled={busyId === row.id} className="rounded-lg bg-amber-600 px-3 py-2 text-sm font-bold text-white disabled:opacity-50 sm:col-span-2">
+                              Mark Reviewed
+                            </button>
+                          ) : null}
+                        </AdminActions>
+                      }
+                    />
                   ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {items.length === 0 ? (
-                  <tr><td colSpan={10} className="px-4 py-8 text-center text-slate-500">No communications found.</td></tr>
-                ) : items.map((row) => (
-                  <tr key={row.id} className={row.reviewed_at ? 'bg-white' : 'bg-amber-50/40'}>
-                    <td className="whitespace-nowrap px-4 py-4 font-semibold">{dateTime(row.sent_at || row.created_at)}</td>
-                    <td className="px-4 py-4">{row.customer_name}<div className="text-xs text-slate-500">{row.customer_email}</div></td>
-                    <td className="px-4 py-4">
-                      {row.booking_id ? (
-                        <Link to={`/admin/bookings/${row.booking_id}`} className="font-bold text-amber-700 underline">Open Booking</Link>
-                      ) : row.customer_message_id ? (
-                        <Link to="/admin#contact-inbox" className="font-bold text-amber-700 underline">Contact Inbox</Link>
-                      ) : (
-                        <span className="text-slate-500">—</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-4 uppercase">{row.channel}</td>
-                    <td className="px-4 py-4 capitalize">{label(row.message_type)}</td>
-                    <td className="max-w-[220px] break-all px-4 py-4">{row.recipient}</td>
-                    <td className="max-w-[260px] px-4 py-4">{row.subject || '-'}</td>
-                    <td className="px-4 py-4"><span className={`rounded-full px-3 py-1 text-xs font-black capitalize ${statusClass(row.status)}`}>{label(row.status)}</span></td>
-                    <td className="max-w-[160px] break-all px-4 py-4 text-xs text-slate-600">{row.sent_by || 'system/admin'}</td>
-                    <td className="px-4 py-4">
-                      <div className="flex flex-col gap-2">
-                        <button type="button" onClick={() => void viewMessage(row.id)} disabled={busyId === row.id} className="rounded-lg border px-3 py-2 font-bold hover:bg-slate-50">View Message</button>
-                        <button type="button" onClick={() => void resendMessage(row)} disabled={busyId === row.id} className="rounded-lg bg-green-700 px-3 py-2 font-bold text-white disabled:opacity-50">Resend</button>
-                        {!row.reviewed_at ? <button type="button" onClick={() => void markReviewed(row)} disabled={busyId === row.id} className="rounded-lg bg-amber-600 px-3 py-2 font-bold text-white disabled:opacity-50">Mark Reviewed</button> : null}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </div>
+              }
+            />
+          )}
         </section>
 
       {selected ? (
@@ -305,7 +370,7 @@ export default function AdminOutbox() {
               {selected.booking_id ? (
                 <Link to={`/admin/bookings/${selected.booking_id}`} className="rounded-xl bg-amber-600 px-5 py-4 text-center text-lg font-black text-white">Open Booking</Link>
               ) : (
-                <Link to="/admin#contact-inbox" className="rounded-xl bg-amber-600 px-5 py-4 text-center text-lg font-black text-white">Contact Inbox</Link>
+                <Link to="/admin/bookings#contact-inbox" className="rounded-xl bg-amber-600 px-5 py-4 text-center text-lg font-black text-white">Contact Inbox</Link>
               )}
             </div>
           </div>

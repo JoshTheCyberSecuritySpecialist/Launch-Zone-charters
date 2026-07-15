@@ -21,6 +21,11 @@ import { adminUpdatePreTripSubmission, fetchPreTripMatchSuggestions, type PreTri
 import { useAuth } from '../contexts/useAuth';
 import FullPageLoader from '../components/FullPageLoader';
 import AdminShell from '../components/admin/AdminShell';
+import AdminResponsiveList from '../components/admin/AdminResponsiveList';
+import MobileAdminCard from '../components/admin/MobileAdminCard';
+import AdminActions from '../components/admin/AdminActions';
+import StatusBadge from '../components/admin/StatusBadge';
+import { humanizeLabel, shortId } from '../components/admin/adminDisplay';
 import { env } from '../config/env.js';
 import { uploadCaptainsLogHeroImage } from '../lib/storageUpload';
 import {
@@ -2438,7 +2443,7 @@ export default function Admin({ onNavigate }: AdminProps) {
               generation run. Scroll the list to see older posts.
             </p>
           </div>
-          <div className="max-h-[min(70vh,36rem)] overflow-y-auto">
+          <div className="max-h-[min(70vh,36rem)] overflow-x-auto overflow-y-auto">
             {captainsLogArticles.length === 0 ? (
               <p className="px-4 py-6 text-sm text-slate-500">No articles yet.</p>
             ) : (
@@ -2508,7 +2513,7 @@ export default function Admin({ onNavigate }: AdminProps) {
             <h2 className="text-lg font-bold text-slate-900">Subscribers</h2>
             <p className="text-xs text-slate-500">Latest alert subscribers (max 50).</p>
           </div>
-          <div className="max-h-72 overflow-y-auto">
+          <div className="max-h-72 overflow-x-auto overflow-y-auto">
             {subscribersLoading ? (
               <p className="px-4 py-6 text-sm text-slate-500">Loading subscribers…</p>
             ) : subscribersError ? (
@@ -2564,7 +2569,7 @@ export default function Admin({ onNavigate }: AdminProps) {
               </button>
             </div>
           </div>
-          <div className="max-h-72 overflow-y-auto">
+          <div className="max-h-72 overflow-x-auto overflow-y-auto">
             {alertsLoading ? (
               <p className="px-4 py-6 text-sm text-slate-500">Loading alerts…</p>
             ) : alertsError ? (
@@ -2605,7 +2610,7 @@ export default function Admin({ onNavigate }: AdminProps) {
               permanent.
             </p>
           </div>
-          <div className="max-h-[28rem] overflow-y-auto">
+          <div className="max-h-[28rem] overflow-x-auto overflow-y-auto">
             {contactInboxLoading ? (
               <p className="px-4 py-6 text-sm text-slate-500">Loading messages…</p>
             ) : contactInbox.length === 0 ? (
@@ -3304,14 +3309,14 @@ export default function Admin({ onNavigate }: AdminProps) {
                     <option value="cancelled">Cancelled</option>
                   </select>
                 </label>
-                <label className="flex min-w-[240px] flex-col text-sm font-medium text-slate-700">
+                <label className="flex w-full flex-col text-sm font-medium text-slate-700 sm:min-w-[240px] sm:w-auto">
                   Search by email
                   <input
                     type="search"
                     value={emailSearch}
                     onChange={(e) => setEmailSearch(e.target.value)}
                     placeholder="customer@email.com"
-                    className="mt-1 rounded-lg border border-slate-300 px-3 py-2 text-slate-900 shadow-sm focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                    className="mt-1 min-h-11 w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-900 shadow-sm focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
                   />
                 </label>
               </div>
@@ -3322,8 +3327,10 @@ export default function Admin({ onNavigate }: AdminProps) {
               record; <span className="font-medium text-slate-700">Delete</span> only removes unpaid draft bookings.
             </p>
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full">
+          <AdminResponsiveList
+            desktop={
+              <div className="overflow-x-auto">
+                <table className="w-full">
               <thead className="bg-slate-50">
                 <tr>
                   <th className="px-6 py-3 text-left text-xs font-semibold uppercase text-slate-600">
@@ -3673,7 +3680,159 @@ export default function Admin({ onNavigate }: AdminProps) {
                 })}
               </tbody>
             </table>
-          </div>
+              </div>
+            }
+
+            mobile={
+              <div className="space-y-3 p-3">
+                {bookings.length === 0 ? (
+                  <p className="py-6 text-center text-sm text-slate-500">No bookings on this page.</p>
+                ) : null}
+                {bookings.map((booking) => {
+                  const canApproveReject =
+                    booking.status === 'pending' || booking.status === 'pending_verification';
+                  const stripePid = booking.stripe_payment_id;
+                  const hasStripePayment = stripePid != null && String(stripePid).trim() !== '';
+                  const payStatus = String(booking.payment_status || 'pending');
+                  const canDeleteBooking =
+                    canApproveReject && !hasStripePayment && payStatus !== 'deposit_paid';
+                  const canCancelBooking =
+                    booking.status !== 'cancelled' && booking.status !== 'completed';
+                  const licenseDocHref =
+                    booking.license_url?.trim() || booking.customers?.id_document_url || '';
+                  const insuranceDocHref =
+                    booking.insurance_url?.trim() || booking.customers?.insurance_proof_url || '';
+                  const buoy = buoyVerificationRow(booking.user_verifications);
+                  const insuranceProofHref =
+                    insuranceDocHref || buoy?.buoy_proof_url?.trim() || '';
+                  const waiverDone =
+                    booking.waiver_signed === true ||
+                    (Array.isArray(booking.waivers) && booking.waivers.length > 0);
+                  return (
+                    <MobileAdminCard
+                      key={`m-${booking.id}`}
+                      title={booking.customers?.full_name || 'Customer'}
+                      subtitle={booking.customers?.email || undefined}
+                      badge={
+                        <StatusBadge
+                          tone={
+                            booking.status === 'cancelled'
+                              ? 'danger'
+                              : booking.status === 'confirmed' || booking.status === 'ready_for_departure'
+                                ? 'success'
+                                : 'warning'
+                          }
+                        >
+                          {humanizeLabel(booking.status)}
+                        </StatusBadge>
+                      }
+                      fields={[
+                        { label: 'Boat', value: booking.boats?.name || '—' },
+                        {
+                          label: 'Date',
+                          value: new Date(booking.start_time).toLocaleDateString(),
+                        },
+                        {
+                          label: 'Total',
+                          value: (
+                            <span className="font-semibold">
+                              ${parseFloat(String(booking.total_price)).toFixed(2)}
+                            </span>
+                          ),
+                        },
+                        {
+                          label: 'Waiver',
+                          value: waiverDone ? (
+                            <span className="font-semibold text-green-700">Yes</span>
+                          ) : (
+                            <span className="text-slate-500">No</span>
+                          ),
+                        },
+                        {
+                          label: 'License',
+                          value: humanizeLabel(String(booking.license_status || 'pending')),
+                        },
+                        {
+                          label: 'Insurance',
+                          value: humanizeLabel(String(booking.insurance_status || 'pending')),
+                        },
+                        {
+                          label: 'Docs',
+                          value: `L: ${licenseDocHref ? 'Yes' : 'No'} · I: ${insuranceProofHref ? 'Yes' : 'No'}`,
+                        },
+                        {
+                          label: 'Ref',
+                          value: (
+                            <span className="font-mono text-xs" title={booking.id}>
+                              {shortId(booking.id)}
+                            </span>
+                          ),
+                        },
+                      ]}
+                      actions={
+                        <AdminActions>
+                          <Link
+                            to={`/admin/bookings/${booking.id}`}
+                            className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white"
+                          >
+                            Details
+                          </Link>
+                          <button
+                            type="button"
+                            disabled={!canApproveReject || tableLoading}
+                            onClick={() => void handleApprove(booking.id)}
+                            className="rounded-lg bg-green-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-40"
+                          >
+                            Approve
+                          </button>
+                          <button
+                            type="button"
+                            disabled={tableLoading}
+                            onClick={() => void copyWaiversLink(booking.id)}
+                            className="rounded-lg border border-cyan-300 bg-cyan-50 px-3 py-2 text-sm font-semibold text-cyan-900 disabled:opacity-40"
+                          >
+                            Copy waivers link
+                          </button>
+                          <button
+                            type="button"
+                            disabled={booking.status !== 'confirmed' || tableLoading}
+                            onClick={() => void handleReadyForDeparture(booking.id)}
+                            className="rounded-lg bg-cyan-700 px-3 py-2 text-sm font-semibold text-white disabled:opacity-40"
+                          >
+                            Ready for departure
+                          </button>
+                          <button
+                            type="button"
+                            disabled={!canCancelBooking || tableLoading}
+                            onClick={() => void handleCancelBooking(booking.id)}
+                            className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 disabled:opacity-40"
+                          >
+                            Cancel booking
+                          </button>
+                          <button
+                            type="button"
+                            disabled={!canDeleteBooking || tableLoading}
+                            onClick={() => void handleDelete(booking.id)}
+                            className="inline-flex items-center justify-center gap-1 rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm font-medium text-red-800 disabled:opacity-40"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                            Delete
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedIncidentBookingId(booking.id)}
+                            className="rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-800 sm:col-span-2"
+                          >
+                            Incidents ({incidentCounts[booking.id] ?? 0})
+                          </button>
+                        </AdminActions>
+                      }
+                    />
+                  );
+                })}
+              </div>
+            }
+          />
 
           <div className="flex flex-col items-center justify-between gap-4 border-t border-slate-200 px-6 py-4 sm:flex-row">
             <button

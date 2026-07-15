@@ -6,6 +6,10 @@ import { useAuth } from '../contexts/useAuth';
 import FullPageLoader from '../components/FullPageLoader';
 import AdminShell from '../components/admin/AdminShell';
 import AdminAccessDenied from '../components/admin/AdminAccessDenied';
+import AdminResponsiveList from '../components/admin/AdminResponsiveList';
+import MobileAdminCard from '../components/admin/MobileAdminCard';
+import StatusBadge from '../components/admin/StatusBadge';
+import { humanizeLabel, shortId } from '../components/admin/adminDisplay';
 import { env } from '../config/env.js';
 import { fetchJsonWithTimeout, withTimeout } from '../lib/adminDiagnostics';
 
@@ -363,69 +367,127 @@ export default function AdminDisputes() {
             <div className="border-b border-slate-100 px-4 py-3">
               <h2 className="text-lg font-black">Disputes</h2>
             </div>
-            <div className="overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
-                  <tr>
-                    <th className="px-4 py-3">Customer</th>
-                    <th className="px-4 py-3">Trip</th>
-                    <th className="px-4 py-3">Amount</th>
-                    <th className="px-4 py-3">Status</th>
-                    <th className="px-4 py-3">Reason</th>
-                    <th className="px-4 py-3">Due</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {items.length === 0 ? (
-                    <tr>
-                      <td colSpan={6} className="px-4 py-8 text-center text-slate-500">
-                        No disputes found.
-                      </td>
-                    </tr>
-                  ) : (
-                    items.map((row) => {
+            {items.length === 0 ? (
+              <p className="px-4 py-8 text-center text-slate-500">No disputes found.</p>
+            ) : (
+              <AdminResponsiveList
+                desktop={
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full text-sm">
+                      <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+                        <tr>
+                          <th className="px-4 py-3">Customer</th>
+                          <th className="px-4 py-3">Trip</th>
+                          <th className="px-4 py-3">Amount</th>
+                          <th className="px-4 py-3">Status</th>
+                          <th className="px-4 py-3">Reason</th>
+                          <th className="px-4 py-3">Due</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {items.map((row) => {
+                          const customer = row.bookings?.customers;
+                          return (
+                            <tr
+                              key={row.id}
+                              className={`cursor-pointer border-t border-slate-100 hover:bg-amber-50 ${selectedId === row.id ? 'bg-amber-50' : ''}`}
+                              onClick={() => void loadDetail(row.id)}
+                            >
+                              <td className="px-4 py-3">
+                                <div className="font-bold">{customer?.full_name || 'Unlinked'}</div>
+                                <div className="break-all text-xs text-slate-500">{customer?.email || '-'}</div>
+                              </td>
+                              <td className="px-4 py-3">
+                                {row.booking_id ? (
+                                  <Link
+                                    to={`/admin/bookings/${row.booking_id}`}
+                                    className="font-semibold text-amber-700 hover:underline"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    {dateTime(row.bookings?.start_time)}
+                                  </Link>
+                                ) : (
+                                  <span className="text-slate-500">Not linked</span>
+                                )}
+                              </td>
+                              <td className="px-4 py-3 font-semibold">{money(row.amount, row.currency)}</td>
+                              <td className="px-4 py-3">
+                                <span className={`rounded-full px-2 py-1 text-xs font-bold ${statusClass(row.status)}`}>
+                                  {label(row.status)}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3">{label(row.reason)}</td>
+                              <td className="px-4 py-3">
+                                <div>{dateTime(row.evidence_due_by)}</div>
+                                <div className="text-xs font-semibold text-amber-700">{deadlineCountdown(row.evidence_due_by)}</div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                }
+                mobile={
+                  <div className="space-y-3 p-3">
+                    {items.map((row) => {
                       const customer = row.bookings?.customers;
                       return (
-                        <tr
+                        <MobileAdminCard
                           key={row.id}
-                          className={`cursor-pointer border-t border-slate-100 hover:bg-amber-50 ${selectedId === row.id ? 'bg-amber-50' : ''}`}
+                          className={selectedId === row.id ? 'border-amber-400 bg-amber-50/60' : undefined}
+                          title={customer?.full_name || 'Unlinked'}
+                          subtitle={customer?.email || undefined}
+                          badge={
+                            <StatusBadge tone={row.status === 'won' ? 'success' : row.status === 'lost' ? 'danger' : 'warning'}>
+                              {humanizeLabel(row.status)}
+                            </StatusBadge>
+                          }
+                          fields={[
+                            { label: 'Amount', value: <span className="font-semibold">{money(row.amount, row.currency)}</span> },
+                            { label: 'Reason', value: humanizeLabel(row.reason) },
+                            {
+                              label: 'Trip',
+                              value: row.booking_id ? (
+                                <Link
+                                  to={`/admin/bookings/${row.booking_id}`}
+                                  className="font-semibold text-amber-700 underline"
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  {dateTime(row.bookings?.start_time)}
+                                </Link>
+                              ) : (
+                                'Not linked'
+                              ),
+                            },
+                            {
+                              label: 'Due',
+                              value: (
+                                <span>
+                                  {dateTime(row.evidence_due_by)}
+                                  <span className="mt-0.5 block text-xs font-semibold text-amber-700">
+                                    {deadlineCountdown(row.evidence_due_by)}
+                                  </span>
+                                </span>
+                              ),
+                            },
+                            {
+                              label: 'Dispute',
+                              value: (
+                                <span className="font-mono text-xs" title={row.stripe_dispute_id}>
+                                  {shortId(row.stripe_dispute_id, 12)}
+                                </span>
+                              ),
+                            },
+                          ]}
                           onClick={() => void loadDetail(row.id)}
-                        >
-                          <td className="px-4 py-3">
-                            <div className="font-bold">{customer?.full_name || 'Unlinked'}</div>
-                            <div className="text-xs text-slate-500">{customer?.email || '-'}</div>
-                          </td>
-                          <td className="px-4 py-3">
-                            {row.booking_id ? (
-                              <Link
-                                to={`/admin/bookings/${row.booking_id}`}
-                                className="font-semibold text-amber-700 hover:underline"
-                                onClick={(e) => e.stopPropagation()}
-                              >
-                                {dateTime(row.bookings?.start_time)}
-                              </Link>
-                            ) : (
-                              <span className="text-slate-500">Not linked</span>
-                            )}
-                          </td>
-                          <td className="px-4 py-3 font-semibold">{money(row.amount, row.currency)}</td>
-                          <td className="px-4 py-3">
-                            <span className={`rounded-full px-2 py-1 text-xs font-bold ${statusClass(row.status)}`}>
-                              {label(row.status)}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3">{label(row.reason)}</td>
-                          <td className="px-4 py-3">
-                            <div>{dateTime(row.evidence_due_by)}</div>
-                            <div className="text-xs font-semibold text-amber-700">{deadlineCountdown(row.evidence_due_by)}</div>
-                          </td>
-                        </tr>
+                        />
                       );
-                    })
-                  )}
-                </tbody>
-              </table>
-            </div>
+                    })}
+                  </div>
+                }
+              />
+            )}
           </section>
 
           <aside className="rounded-2xl bg-white p-5 shadow">
@@ -454,10 +516,30 @@ export default function AdminDisputes() {
                 <div className="space-y-2 text-sm">
                   <div><span className="font-bold">Amount:</span> {money(detail.dispute.amount, detail.dispute.currency)}</div>
                   <div><span className="font-bold">Reason:</span> {label(detail.dispute.reason)}</div>
-                  <div><span className="font-bold">Stripe Dispute:</span> {detail.dispute.stripe_dispute_id}</div>
-                  <div><span className="font-bold">Charge:</span> {detail.dispute.stripe_charge_id || '-'}</div>
-                  <div><span className="font-bold">Payment Intent:</span> {detail.dispute.payment_intent_id || '-'}</div>
-                  <div><span className="font-bold">Checkout Session:</span> {detail.dispute.checkout_session_id || '-'}</div>
+                  <div>
+                    <span className="font-bold">Stripe Dispute:</span>{' '}
+                    <span className="font-mono text-xs" title={detail.dispute.stripe_dispute_id}>
+                      {shortId(detail.dispute.stripe_dispute_id, 14)}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="font-bold">Charge:</span>{' '}
+                    <span className="font-mono text-xs" title={detail.dispute.stripe_charge_id || undefined}>
+                      {shortId(detail.dispute.stripe_charge_id, 14)}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="font-bold">Payment Intent:</span>{' '}
+                    <span className="font-mono text-xs" title={detail.dispute.payment_intent_id || undefined}>
+                      {shortId(detail.dispute.payment_intent_id, 14)}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="font-bold">Checkout Session:</span>{' '}
+                    <span className="font-mono text-xs" title={detail.dispute.checkout_session_id || undefined}>
+                      {shortId(detail.dispute.checkout_session_id, 14)}
+                    </span>
+                  </div>
                   <div><span className="font-bold">Evidence due:</span> {dateTime(detail.dispute.evidence_due_by)}</div>
                 </div>
 

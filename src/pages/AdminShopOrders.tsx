@@ -5,6 +5,10 @@ import { useAuth } from '../contexts/useAuth';
 import FullPageLoader from '../components/FullPageLoader';
 import AdminShell from '../components/admin/AdminShell';
 import AdminAccessDenied from '../components/admin/AdminAccessDenied';
+import AdminResponsiveList from '../components/admin/AdminResponsiveList';
+import MobileAdminCard from '../components/admin/MobileAdminCard';
+import AdminActions from '../components/admin/AdminActions';
+import { humanizeLabel, shortId } from '../components/admin/adminDisplay';
 import { env } from '../config/env.js';
 
 type ShopOrderRow = {
@@ -297,121 +301,210 @@ export default function AdminShopOrders() {
         </div>
 
         <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow">
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[960px] text-left text-sm">
-              <thead className="border-b border-slate-200 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
-                <tr>
-                  <th className="w-8 px-2 py-3" aria-label="Expand" />
-                  <th className="px-4 py-3">Order #</th>
-                  <th className="px-4 py-3">Customer</th>
-                  <th className="px-4 py-3">Email</th>
-                  <th className="px-4 py-3">Qty</th>
-                  <th className="px-4 py-3">Amount Paid</th>
-                  <th className="px-4 py-3">Order Date</th>
-                  <th className="px-4 py-3">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {loading && orders.length === 0 ? (
-                  <tr>
-                    <td colSpan={8} className="px-4 py-8 text-center text-slate-500">
-                      Loading shop orders…
-                    </td>
-                  </tr>
-                ) : null}
-                {!loading && orders.length === 0 ? (
-                  <tr>
-                    <td colSpan={8} className="px-4 py-8 text-center text-slate-500">
-                      {filter === 'queue'
-                        ? 'No paid orders in the fulfillment queue.'
-                        : 'No shop orders match this filter.'}
-                    </td>
-                  </tr>
-                ) : null}
+          {loading && orders.length === 0 ? (
+            <p className="px-4 py-8 text-center text-slate-500">Loading shop orders…</p>
+          ) : null}
+          {!loading && orders.length === 0 ? (
+            <p className="px-4 py-8 text-center text-slate-500">
+              {filter === 'queue'
+                ? 'No paid orders in the fulfillment queue.'
+                : 'No shop orders match this filter.'}
+            </p>
+          ) : null}
+
+          <AdminResponsiveList
+            desktop={
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[960px] text-left text-sm">
+                  <thead className="border-b border-slate-200 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                    <tr>
+                      <th className="w-8 px-2 py-3" aria-label="Expand" />
+                      <th className="px-4 py-3">Order #</th>
+                      <th className="px-4 py-3">Customer</th>
+                      <th className="px-4 py-3">Email</th>
+                      <th className="px-4 py-3">Qty</th>
+                      <th className="px-4 py-3">Amount Paid</th>
+                      <th className="px-4 py-3">Order Date</th>
+                      <th className="px-4 py-3">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {orders.map((order) => {
+                      const isUnpaid = order.is_unpaid ?? !order.is_paid;
+                      const expanded = expandedId === order.id;
+                      return (
+                        <Fragment key={order.id}>
+                          <tr
+                            className={`border-b border-slate-100 hover:bg-slate-50/80 ${
+                              isUnpaid ? 'bg-slate-50/60 text-slate-500' : ''
+                            }`}
+                          >
+                            <td className="px-2 py-3">
+                              <button
+                                type="button"
+                                onClick={() => setExpandedId(expanded ? null : order.id)}
+                                className="min-h-11 min-w-11 rounded p-2 text-slate-500 hover:bg-slate-200"
+                                aria-expanded={expanded}
+                                aria-label={expanded ? 'Collapse order details' : 'Expand order details'}
+                              >
+                                {expanded ? (
+                                  <ChevronDown className="h-4 w-4" aria-hidden />
+                                ) : (
+                                  <ChevronRight className="h-4 w-4" aria-hidden />
+                                )}
+                              </button>
+                            </td>
+                            <td className="px-4 py-3 font-mono font-semibold text-slate-900">
+                              {order.order_number}
+                            </td>
+                            <td className="px-4 py-3">
+                              {isUnpaid ? (
+                                <span className="italic text-slate-400">—</span>
+                              ) : (
+                                order.customer_name || order.shipping_name || '-'
+                              )}
+                            </td>
+                            <td className="max-w-[220px] break-all px-4 py-3">
+                              {isUnpaid ? (
+                                <span className="italic text-slate-400">—</span>
+                              ) : (
+                                order.email || '-'
+                              )}
+                            </td>
+                            <td className="px-4 py-3">{order.quantity}</td>
+                            <td className="px-4 py-3">
+                              <span
+                                className={`font-medium ${isUnpaid ? 'text-slate-400 line-through decoration-slate-300' : ''}`}
+                              >
+                                {formatMoney(order.amount_paid, order.currency, isUnpaid)}
+                              </span>
+                              {isUnpaid ? (
+                                <span className="ml-2 rounded bg-slate-200 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-600">
+                                  Not paid
+                                </span>
+                              ) : null}
+                            </td>
+                            <td className="px-4 py-3 text-slate-600">
+                              {formatDate(order.paid_at || order.created_at)}
+                            </td>
+                            <td className="px-4 py-3">
+                              <select
+                                value={order.status}
+                                disabled={busyId === order.id || isUnpaid}
+                                onChange={(e) => void updateStatus(order, e.target.value)}
+                                className={`min-h-11 rounded-md border border-slate-300 px-2 py-2 text-xs font-semibold capitalize disabled:cursor-not-allowed disabled:opacity-60 ${statusClass(order.status, isUnpaid)}`}
+                                aria-label={`Update status for order ${order.order_number}`}
+                                title={isUnpaid ? 'Unpaid checkouts cannot be fulfilled' : undefined}
+                              >
+                                {STATUS_OPTIONS.map((status) => (
+                                  <option key={status} value={status}>
+                                    {humanizeLabel(status)}
+                                  </option>
+                                ))}
+                              </select>
+                            </td>
+                          </tr>
+                          {expanded ? (
+                            <tr>
+                              <td colSpan={8} className="p-0">
+                                <OrderDetailPanel order={order} />
+                              </td>
+                            </tr>
+                          ) : null}
+                        </Fragment>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            }
+            mobile={
+              <div className="space-y-3 p-3">
                 {orders.map((order) => {
                   const isUnpaid = order.is_unpaid ?? !order.is_paid;
                   const expanded = expandedId === order.id;
                   return (
-                    <Fragment key={order.id}>
-                      <tr
-                        className={`border-b border-slate-100 hover:bg-slate-50/80 ${
-                          isUnpaid ? 'bg-slate-50/60 text-slate-500' : ''
-                        }`}
-                      >
-                        <td className="px-2 py-3">
+                    <MobileAdminCard
+                      key={order.id}
+                      className={isUnpaid ? 'bg-slate-50/80' : undefined}
+                      title={order.order_number}
+                      subtitle={
+                        isUnpaid
+                          ? 'Not paid'
+                          : order.customer_name || order.shipping_name || 'Customer'
+                      }
+                      badge={
+                        <span
+                          className={`rounded-full px-2.5 py-1 text-xs font-semibold capitalize ${statusClass(order.status, isUnpaid)}`}
+                        >
+                          {humanizeLabel(order.status)}
+                        </span>
+                      }
+                      fields={[
+                        {
+                          label: 'Email',
+                          value: isUnpaid ? '—' : order.email || '—',
+                          hideIfEmpty: true,
+                        },
+                        { label: 'Qty', value: order.quantity },
+                        {
+                          label: 'Paid',
+                          value: (
+                            <span className={isUnpaid ? 'line-through text-slate-400' : 'font-semibold'}>
+                              {formatMoney(order.amount_paid, order.currency, isUnpaid)}
+                            </span>
+                          ),
+                        },
+                        {
+                          label: 'Date',
+                          value: formatDate(order.paid_at || order.created_at),
+                        },
+                        {
+                          label: 'Session',
+                          value: (
+                            <span className="font-mono text-xs" title={order.stripe_session_id || undefined}>
+                              {shortId(order.stripe_session_id, 10)}
+                            </span>
+                          ),
+                          hideIfEmpty: true,
+                        },
+                      ]}
+                      actions={
+                        <AdminActions columns={1}>
+                          <label className="block text-sm font-semibold text-slate-700">
+                            Status
+                            <select
+                              value={order.status}
+                              disabled={busyId === order.id || isUnpaid}
+                              onChange={(e) => void updateStatus(order, e.target.value)}
+                              className={`mt-1 min-h-11 w-full rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold capitalize disabled:cursor-not-allowed disabled:opacity-60 ${statusClass(order.status, isUnpaid)}`}
+                              aria-label={`Update status for order ${order.order_number}`}
+                            >
+                              {STATUS_OPTIONS.map((status) => (
+                                <option key={status} value={status}>
+                                  {humanizeLabel(status)}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
                           <button
                             type="button"
                             onClick={() => setExpandedId(expanded ? null : order.id)}
-                            className="rounded p-1 text-slate-500 hover:bg-slate-200"
+                            className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-800"
                             aria-expanded={expanded}
-                            aria-label={expanded ? 'Collapse order details' : 'Expand order details'}
                           >
-                            {expanded ? (
-                              <ChevronDown className="h-4 w-4" aria-hidden />
-                            ) : (
-                              <ChevronRight className="h-4 w-4" aria-hidden />
-                            )}
+                            {expanded ? 'Hide details' : 'Show details'}
                           </button>
-                        </td>
-                        <td className="px-4 py-3 font-mono font-semibold text-slate-900">{order.order_number}</td>
-                        <td className="px-4 py-3">
-                          {isUnpaid ? (
-                            <span className="italic text-slate-400">—</span>
-                          ) : (
-                            order.customer_name || order.shipping_name || '-'
-                          )}
-                        </td>
-                        <td className="px-4 py-3">
-                          {isUnpaid ? (
-                            <span className="italic text-slate-400">—</span>
-                          ) : (
-                            order.email || '-'
-                          )}
-                        </td>
-                        <td className="px-4 py-3">{order.quantity}</td>
-                        <td className="px-4 py-3">
-                          <span
-                            className={`font-medium ${isUnpaid ? 'text-slate-400 line-through decoration-slate-300' : ''}`}
-                          >
-                            {formatMoney(order.amount_paid, order.currency, isUnpaid)}
-                          </span>
-                          {isUnpaid ? (
-                            <span className="ml-2 rounded bg-slate-200 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-600">
-                              Not paid
-                            </span>
-                          ) : null}
-                        </td>
-                        <td className="px-4 py-3 text-slate-600">{formatDate(order.paid_at || order.created_at)}</td>
-                        <td className="px-4 py-3">
-                          <select
-                            value={order.status}
-                            disabled={busyId === order.id || isUnpaid}
-                            onChange={(e) => void updateStatus(order, e.target.value)}
-                            className={`rounded-md border border-slate-300 px-2 py-1 text-xs font-semibold capitalize disabled:cursor-not-allowed disabled:opacity-60 ${statusClass(order.status, isUnpaid)}`}
-                            aria-label={`Update status for order ${order.order_number}`}
-                            title={isUnpaid ? 'Unpaid checkouts cannot be fulfilled' : undefined}
-                          >
-                            {STATUS_OPTIONS.map((status) => (
-                              <option key={status} value={status}>
-                                {status}
-                              </option>
-                            ))}
-                          </select>
-                        </td>
-                      </tr>
-                      {expanded ? (
-                        <tr>
-                          <td colSpan={8} className="p-0">
-                            <OrderDetailPanel order={order} />
-                          </td>
-                        </tr>
-                      ) : null}
-                    </Fragment>
+                        </AdminActions>
+                      }
+                    >
+                      {expanded ? <div className="-mx-1 mt-2"><OrderDetailPanel order={order} /></div> : null}
+                    </MobileAdminCard>
                   );
                 })}
-              </tbody>
-            </table>
-          </div>
+              </div>
+            }
+          />
         </div>
     </AdminShell>
   );

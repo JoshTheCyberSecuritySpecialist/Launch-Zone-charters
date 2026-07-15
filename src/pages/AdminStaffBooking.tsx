@@ -6,6 +6,10 @@ import { useAuth } from '../contexts/useAuth';
 import FullPageLoader from '../components/FullPageLoader';
 import AdminShell from '../components/admin/AdminShell';
 import AdminAccessDenied from '../components/admin/AdminAccessDenied';
+import AdminResponsiveList from '../components/admin/AdminResponsiveList';
+import MobileAdminCard from '../components/admin/MobileAdminCard';
+import StatusBadge from '../components/admin/StatusBadge';
+import { humanizeLabel } from '../components/admin/adminDisplay';
 import { env } from '../config/env.js';
 import { PRICING, captainFeeForHours } from '../config/pricing';
 import { CHARTER_MAX_PASSENGERS, validateCharterPassengerCount } from '../lib/charterCapacity';
@@ -579,46 +583,72 @@ export default function AdminStaffBooking() {
               {todayLoading ? 'Refreshing...' : 'Refresh'}
             </button>
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left">
-              <thead className="bg-slate-50 text-xs uppercase text-slate-600">
-                <tr>
-                  <th className="px-5 py-3">Time</th>
-                  <th className="px-5 py-3">Customer</th>
-                  <th className="px-5 py-3">Boat</th>
-                  <th className="px-5 py-3">Location</th>
-                  <th className="px-5 py-3">Status</th>
-                  <th className="px-5 py-3">Payment Status</th>
-                  <th className="px-5 py-3">Source</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {todayRows.length === 0 ? (
-                  <tr>
-                    <td colSpan={7} className="px-5 py-8 text-center text-slate-500">
-                      No staff bookings yet today.
-                    </td>
-                  </tr>
-                ) : (
-                  todayRows.map((row) => (
-                    <tr key={row.id} className="hover:bg-slate-50">
-                      <td className="px-5 py-4 font-semibold">
-                        <Link to={`/admin/bookings/${row.id}`} className="text-amber-700 hover:text-amber-800 hover:underline">
-                          {timeLabel(row.start_time, row.end_time)}
+          {todayRows.length === 0 ? (
+            <p className="px-5 py-8 text-center text-slate-500">No staff bookings yet today.</p>
+          ) : (
+            <AdminResponsiveList
+              desktop={
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left">
+                    <thead className="bg-slate-50 text-xs uppercase text-slate-600">
+                      <tr>
+                        <th className="px-5 py-3">Time</th>
+                        <th className="px-5 py-3">Customer</th>
+                        <th className="px-5 py-3">Boat</th>
+                        <th className="px-5 py-3">Location</th>
+                        <th className="px-5 py-3">Status</th>
+                        <th className="px-5 py-3">Payment Status</th>
+                        <th className="px-5 py-3">Source</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {todayRows.map((row) => (
+                        <tr key={row.id} className="hover:bg-slate-50">
+                          <td className="px-5 py-4 font-semibold">
+                            <Link to={`/admin/bookings/${row.id}`} className="text-amber-700 hover:text-amber-800 hover:underline">
+                              {timeLabel(row.start_time, row.end_time)}
+                            </Link>
+                          </td>
+                          <td className="px-5 py-4">{row.customers?.full_name || row.customers?.phone || '-'}</td>
+                          <td className="px-5 py-4">{row.boats?.name || '-'}</td>
+                          <td className="px-5 py-4">{row.rental_location || '-'}</td>
+                          <td className="px-5 py-4 capitalize">{row.status.replace(/_/g, ' ')}</td>
+                          <td className="px-5 py-4 capitalize">{String(row.payment_status || 'pending').replace(/_/g, ' ')}</td>
+                          <td className="px-5 py-4">{row.booking_source || 'admin'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              }
+              mobile={
+                <div className="space-y-3 p-3">
+                  {todayRows.map((row) => (
+                    <MobileAdminCard
+                      key={row.id}
+                      title={row.customers?.full_name || row.customers?.phone || 'Customer'}
+                      subtitle={timeLabel(row.start_time, row.end_time)}
+                      badge={<StatusBadge tone="info">{humanizeLabel(row.status)}</StatusBadge>}
+                      fields={[
+                        { label: 'Boat', value: row.boats?.name || '—' },
+                        { label: 'Location', value: row.rental_location || '—' },
+                        { label: 'Payment', value: humanizeLabel(String(row.payment_status || 'pending')) },
+                        { label: 'Source', value: humanizeLabel(row.booking_source || 'admin') },
+                      ]}
+                      actions={
+                        <Link
+                          to={`/admin/bookings/${row.id}`}
+                          className="inline-flex min-h-11 w-full items-center justify-center rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white"
+                        >
+                          Open details
                         </Link>
-                      </td>
-                      <td className="px-5 py-4">{row.customers?.full_name || row.customers?.phone || '-'}</td>
-                      <td className="px-5 py-4">{row.boats?.name || '-'}</td>
-                      <td className="px-5 py-4">{row.rental_location || '-'}</td>
-                      <td className="px-5 py-4 capitalize">{row.status.replace(/_/g, ' ')}</td>
-                      <td className="px-5 py-4 capitalize">{String(row.payment_status || 'pending').replace(/_/g, ' ')}</td>
-                      <td className="px-5 py-4">{row.booking_source || 'admin'}</td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
+                      }
+                    />
+                  ))}
+                </div>
+              }
+            />
+          )}
         </section>
     </AdminShell>
   );

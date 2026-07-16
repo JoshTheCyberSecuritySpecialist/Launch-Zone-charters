@@ -103,17 +103,27 @@ export default function AdminPreTrip() {
     void loadPreTripSubmissions();
   }, [authLoading, isAdmin, loadPreTripSubmissions]);
 
-  const loadPreTripSuggestions = useCallback(async (submissionId: string) => {
+  const loadPreTripSuggestions = useCallback(async (submissionId: string, query?: string) => {
     setPreTripSuggestionsLoading(submissionId);
     try {
       const token = await getAdminToken();
-      if (!token) return;
-      const out = await withTimeout('Admin pre-trip match suggestions', fetchPreTripMatchSuggestions(token, submissionId), 15000);
+      if (!token) {
+        setNotice({ variant: 'error', text: 'Sign in again to load booking matches.' });
+        return;
+      }
+      const out = await withTimeout(
+        'Admin pre-trip match suggestions',
+        fetchPreTripMatchSuggestions(token, submissionId, query),
+        15000
+      );
       if (out.ok) {
         setPreTripSuggestions((prev) => ({ ...prev, [submissionId]: out.suggestions }));
         if (out.suggestions.length === 1) {
           setSelectedMatchId((prev) => ({ ...prev, [submissionId]: out.suggestions[0].id }));
         }
+      } else {
+        setPreTripSuggestions((prev) => ({ ...prev, [submissionId]: [] }));
+        setNotice({ variant: 'error', text: out.error || 'Could not search for bookings.' });
       }
     } catch (err) {
       setNotice({ variant: 'error', text: describeError(err, 'Could not load match suggestions.') });
@@ -162,7 +172,7 @@ export default function AdminPreTrip() {
     if ((action === 'match' || action === 'approve') && !matched_booking_id) {
       setNotice({
         variant: 'error',
-        text: 'Pick a matching booking from the suggestions first.',
+        text: 'Tap a booking card first, then tap Approve.',
       });
       return;
     }
@@ -334,6 +344,7 @@ export default function AdminPreTrip() {
                             submissionId={row.id}
                             matchedBookingId={row.matched_booking_id}
                             customerEmail={row.email}
+                            customerName={row.customer_name}
                             suggestions={preTripSuggestions[row.id]}
                             suggestionsLoading={preTripSuggestionsLoading === row.id}
                             selectedId={selectedMatchId[row.id] || null}
@@ -341,6 +352,7 @@ export default function AdminPreTrip() {
                               setSelectedMatchId((prev) => ({ ...prev, [row.id]: bookingId }))
                             }
                             onLoadSuggestions={() => void loadPreTripSuggestions(row.id)}
+                            onSearch={(query) => void loadPreTripSuggestions(row.id, query)}
                           />
                           <textarea
                             placeholder="Admin notes"
@@ -444,6 +456,7 @@ export default function AdminPreTrip() {
                         submissionId={row.id}
                         matchedBookingId={row.matched_booking_id}
                         customerEmail={row.email}
+                        customerName={row.customer_name}
                         suggestions={preTripSuggestions[row.id]}
                         suggestionsLoading={preTripSuggestionsLoading === row.id}
                         selectedId={selectedMatchId[row.id] || null}
@@ -451,6 +464,7 @@ export default function AdminPreTrip() {
                           setSelectedMatchId((prev) => ({ ...prev, [row.id]: bookingId }))
                         }
                         onLoadSuggestions={() => void loadPreTripSuggestions(row.id)}
+                        onSearch={(query) => void loadPreTripSuggestions(row.id, query)}
                       />
                       <textarea
                         placeholder="Admin notes"

@@ -6573,10 +6573,12 @@ app.get('/api/admin/pre-trip-submissions/:id/suggestions', async (req, res) => {
 
     const { data: submission, error: sErr } = await supabase
       .from('pre_trip_submissions')
-      .select('id, email, phone, groupon_code, requested_trip_date')
+      .select('id, email, phone, groupon_code, requested_trip_date, customer_name')
       .eq('id', submissionId)
       .maybeSingle();
     if (sErr || !submission) return res.status(404).json({ error: 'Submission not found' });
+
+    const manualQuery = String(req.query.q || '').trim();
 
     const suggestions = [];
     const seen = new Set();
@@ -6617,12 +6619,12 @@ app.get('/api/admin/pre-trip-submissions/:id/suggestions', async (req, res) => {
       }
     }
 
-    const emailNorm = normalizeEmailParam(submission.email);
+    const emailNorm = normalizeEmailParam(manualQuery || submission.email);
     if (emailNorm) {
       const { data: customers } = await supabase
         .from('customers')
         .select('id, full_name, email, phone')
-        .ilike('email', emailNorm);
+        .ilike('email', `%${emailNorm.replace(/[%_]/g, '')}%`);
 
       for (const c of customers || []) {
         const { data: bookings } = await supabase
@@ -6638,13 +6640,120 @@ app.get('/api/admin/pre-trip-submissions/:id/suggestions', async (req, res) => {
           const reason =
             submission.phone && phoneDigitsMatch(c.phone, submission.phone)
               ? 'Email and phone match'
-              : 'Email match';
+              : manualQuery
+                ? 'Email search match'
+                : 'Email match';
           pushCandidate(b, c, boat, reason);
         }
       }
     }
 
-    return res.json({ suggestions: suggestions.slice(0, 8) });
+    const phoneToMatch = manualQuery || submission.phone;
+    if (phoneToMatch && normalizePhoneDigits(phoneToMatch).length >= 10) {
+      const { data: customers } = await supabase
+        .from('customers')
+        .select('id, full_name, email, phone')
+        .limit(400);
+
+      for (const c of customers || []) {
+        if (!phoneDigitsMatch(c.phone, phoneToMatch)) continue;
+        const { data: bookings } = await supabase
+          .from('bookings')
+          .select('id, customer_id, start_time, status, promo_code, boats(name)')
+          .eq('customer_id', c.id)
+          .not('status', 'eq', 'cancelled')
+          .order('start_time', { ascending: false })
+          .limit(3);
+
+        for (const b of bookings || []) {
+          const boat = Array.isArray(b.boats) ? b.boats[0] : b.boats;
+          pushCandidate(b, c, boat, 'Phone match');
+        }
+      }
+    }
+
+    const nameQuery = manualQuery || String(submission.customer_name || '').trim();
+    if (nameQuery.length >= 3 && !manualQuery.includes('@')) {
+      const safeName = nameQuery.replace(/[%_]/g, '').slice(0, 80);
+      const { data: customers } = await supabase
+        .from('customers')
+        .select('id, full_name, email, phone')
+        .ilike('full_name', `%${safeName}%`)
+        .limit(8);
+
+      for (const c of customers || []) {
+        const { data: bookings } = await supabase
+          .from('bookings')
+          .select('id, customer_id, start_time, status, promo_code, boats(name)')
+          .eq('customer_id', c.id)
+          .not('status', 'eq', 'cancelled')
+          .order('start_time', { ascending: false })
+          .limit(2);
+
+        for (const b of bookings || []) {
+          const boat = Array.isArray(b.boats) ? b.boats[0] : b.boats;
+          pushCandidate(b, c, boat, manualQuery ? 'Name search match' : 'Name match');
+        }
+      }
+    }
+
+    if (submission.requested_trip_date) {
+      const anchor = new Date(submission.requested_trip_date);
+      if (Number.isFinite(anchor.getTime())) {
+        const windowStart = new Date(anchor);
+        windowStart.setDate(windowStart.getDate() - 3);
+        const windowEnd = new Date(anchor);
+        windowEnd.setDate(windowEnd.getDate() + 3);
+
+        const { data: dateBookings } = await supabase
+          .from('bookings')
+          .select('id, customer_id, start_time, status, promo_code, boats(name)')
+          .gte('start_time', windowStart.toISOString())
+          .lte('start_time', windowEnd.toISOString())
+          .not('status', 'eq', 'cancelled')
+          .order('start_time', { ascending: true })
+          .limit(12);
+
+        for (const b of dateBookings || []) {
+          const { data: customer } = await supabase
+            .from('customers')
+            .select('full_name, email, phone')
+            .eq('id', b.customer_id)
+            .maybeSingle();
+          const boat = Array.isArray(b.boats) ? b.boats[0] : b.boats;
+          pushCandidate(b, customer, boat, 'Trip date match');
+        }
+      }
+    }
+
+    if (groupon && suggestions.length === 0) {
+      const emailForGroupon = normalizeEmailParam(submission.email);
+      if (emailForGroupon) {
+        const { data: customers } = await supabase
+          .from('customers')
+          .select('id, full_name, email, phone')
+          .ilike('email', `%${emailForGroupon.replace(/[%_]/g, '')}%`);
+
+        for (const c of customers || []) {
+          const { data: bookings } = await supabase
+            .from('bookings')
+            .select('id, customer_id, start_time, status, promo_code, boats(name)')
+            .eq('customer_id', c.id)
+            .not('status', 'eq', 'cancelled')
+            .order('start_time', { ascending: false })
+            .limit(5);
+
+          for (const b of bookings || []) {
+            const promo = String(b.promo_code || '').toUpperCase();
+            if (!promo.includes('GROUPON') && !promo.includes('GROUPONFUN')) continue;
+            const boat = Array.isArray(b.boats) ? b.boats[0] : b.boats;
+            pushCandidate(b, c, boat, 'Groupon customer match');
+          }
+        }
+      }
+    }
+
+    return res.json({ suggestions: suggestions.slice(0, 12) });
   } catch (err) {
     console.error('[admin/pre-trip-suggestions]', err);
     return res.status(500).json({ error: 'Failed' });

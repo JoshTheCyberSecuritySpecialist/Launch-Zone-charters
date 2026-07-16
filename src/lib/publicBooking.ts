@@ -289,14 +289,19 @@ export type PreTripMatchSuggestion = {
 
 export async function fetchPreTripMatchSuggestions(
   token: string,
-  submissionId: string
+  submissionId: string,
+  query?: string
 ): Promise<{ ok: true; suggestions: PreTripMatchSuggestion[] } | { ok: false; error: string }> {
   if (!env.apiUrlConfigured || !env.apiUrl) {
     return { ok: false, error: 'API not configured' };
   }
 
+  const params = new URLSearchParams();
+  if (query?.trim()) params.set('q', query.trim());
+  const qs = params.toString();
+
   const res = await fetch(
-    `${env.apiUrl}/api/admin/pre-trip-submissions/${encodeURIComponent(submissionId)}/suggestions`,
+    `${env.apiUrl}/api/admin/pre-trip-submissions/${encodeURIComponent(submissionId)}/suggestions${qs ? `?${qs}` : ''}`,
     { headers: { Authorization: `Bearer ${token}` } }
   );
   const payload = (await res.json().catch(() => ({}))) as {

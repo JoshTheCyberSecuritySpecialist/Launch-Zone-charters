@@ -259,7 +259,7 @@ export default function AdminOutbox() {
                             {row.booking_id ? (
                               <Link to={`/admin/bookings/${row.booking_id}`} className="font-bold text-amber-700 underline">Open Booking</Link>
                             ) : row.customer_message_id ? (
-                              <Link to="/admin/bookings#contact-inbox" className="font-bold text-amber-700 underline">Contact Inbox</Link>
+                              <Link to="/admin/messages" className="font-bold text-amber-700 underline">Contact Inbox</Link>
                             ) : (
                               <span className="text-slate-500">—</span>
                             )}

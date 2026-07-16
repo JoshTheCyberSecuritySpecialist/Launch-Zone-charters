@@ -23,6 +23,12 @@ import BookingDepositCancel from './pages/BookingDepositCancel';
 import VerifyBooking from './pages/VerifyBooking';
 import Admin from './pages/Admin';
 import AdminOperationsDashboard from './pages/AdminOperationsDashboard';
+import AdminBookingsHub from './pages/AdminBookingsHub';
+import AdminApprovals from './pages/AdminApprovals';
+import AdminMessages from './pages/AdminMessages';
+import AdminPreTrip from './pages/AdminPreTrip';
+import AdminPromoCodes from './pages/AdminPromoCodes';
+import AdminCaptainsLog from './pages/AdminCaptainsLog';
 import AdminBoats from './pages/AdminBoats';
 import AdminStaffBooking from './pages/AdminStaffBooking';
 import AdminCalendar from './pages/AdminCalendar';
@@ -114,10 +120,16 @@ function AppLayout() {
           <Route path="/refund-policy" element={<RefundPolicy />} />
           <Route path="/admin-login" element={<AdminLogin onNavigate={onNavigate} />} />
           <Route path="/admin" element={<AdminOperationsDashboard />} />
-          <Route path="/admin/bookings" element={<Admin onNavigate={onNavigate} />} />
+          <Route path="/admin/bookings" element={<AdminBookingsHub />} />
+          <Route path="/admin/bookings/list" element={<Admin onNavigate={onNavigate} />} />
+          <Route path="/admin/bookings/:id" element={<AdminBookingDetails />} />
           <Route path="/admin/staff-booking" element={<AdminStaffBooking />} />
           <Route path="/admin/calendar" element={<AdminCalendar />} />
-          <Route path="/admin/bookings/:id" element={<AdminBookingDetails />} />
+          <Route path="/admin/approvals" element={<AdminApprovals />} />
+          <Route path="/admin/messages" element={<AdminMessages />} />
+          <Route path="/admin/pre-trip" element={<AdminPreTrip />} />
+          <Route path="/admin/promo-codes" element={<AdminPromoCodes />} />
+          <Route path="/admin/captains-log" element={<AdminCaptainsLog />} />
           <Route path="/admin/outbox" element={<AdminOutbox />} />
           <Route path="/admin/disputes" element={<AdminDisputes />} />
           <Route path="/admin/shop-orders" element={<AdminShopOrders />} />

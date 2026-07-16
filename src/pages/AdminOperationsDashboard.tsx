@@ -265,7 +265,10 @@ export default function AdminOperationsDashboard() {
             ['Disputes', '/admin/disputes'],
             ['Shop Orders', '/admin/shop-orders'],
             ["Today's Trips", '#today-trips'],
-            ['Customers', '/admin/bookings'],
+            ['Bookings Hub', '/admin/bookings'],
+            ['All Bookings', '/admin/bookings/list'],
+            ['Messages', '/admin/messages'],
+            ['Approvals', '/admin/approvals'],
             ['Blocked Dates', '/admin/calendar'],
           ].map(([label, href]) => (
             <a key={label} href={href} className="rounded-2xl bg-white p-4 text-center font-black text-slate-900 shadow hover:bg-amber-50">

@@ -723,7 +723,7 @@ export default function AdminBookingDetails() {
             >
               Retry
             </button>
-            <Link to="/admin/bookings" className="rounded-lg bg-slate-200 px-6 py-3 font-bold text-slate-900">
+            <Link to="/admin/bookings/list" className="rounded-lg bg-slate-200 px-6 py-3 font-bold text-slate-900">
               Back to Bookings
             </Link>
           </div>
@@ -749,10 +749,16 @@ export default function AdminBookingDetails() {
       actions={
         <>
           <Link
-            to="/admin/bookings"
+            to="/admin/bookings/list"
             className="inline-flex min-h-11 items-center rounded-lg bg-slate-800 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-700"
           >
-            Bookings
+            All Bookings
+          </Link>
+          <Link
+            to="/admin/bookings"
+            className="inline-flex min-h-11 items-center rounded-lg border border-slate-600 bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800"
+          >
+            Hub
           </Link>
           <Link
             to="/admin/calendar"

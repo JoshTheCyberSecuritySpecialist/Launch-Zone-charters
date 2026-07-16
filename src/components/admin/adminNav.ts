@@ -8,6 +8,8 @@ export type AdminNavItem = {
 export const ADMIN_NAV_ITEMS: AdminNavItem[] = [
   { label: 'Dashboard', to: '/admin', match: 'exact' },
   { label: 'Bookings', to: '/admin/bookings', match: 'prefix' },
+  { label: 'Approvals', to: '/admin/approvals', match: 'exact' },
+  { label: 'Messages', to: '/admin/messages', match: 'exact' },
   { label: 'Staff Booking', to: '/admin/staff-booking', match: 'exact' },
   { label: 'Calendar', to: '/admin/calendar', match: 'exact' },
   { label: 'Outbox', to: '/admin/outbox', match: 'exact' },

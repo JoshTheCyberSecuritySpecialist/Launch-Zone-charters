@@ -5,18 +5,27 @@ import { LOGO_ALT } from '../ui/Logo';
 import { SITE_LOGO_PATH } from '../../constants/branding';
 import { useAuth } from '../../contexts/useAuth';
 import { ADMIN_NAV_ITEMS, isAdminNavActive } from './adminNav';
+import AdminBottomNav from './AdminBottomNav';
 
 type AdminShellProps = {
   title: string;
+  /** Shorter title on phones (defaults to title) */
+  mobileTitle?: string;
   subtitle?: ReactNode;
-  /** Page-specific CTAs (refresh, create, etc.) */
+  /** Hide subtitle below md breakpoint */
+  hideSubtitleOnMobile?: boolean;
+  /** Page-specific CTAs — desktop header row only */
   actions?: ReactNode;
+  /** Icon buttons in the top bar (e.g. refresh) — visible on all breakpoints */
+  headerActions?: ReactNode;
   /** Full-bleed strip under the shell header (e.g. calendar tools) */
   belowHeader?: ReactNode;
   children: ReactNode;
   /** Content max width */
   maxWidth?: '5xl' | '7xl';
   className?: string;
+  /** Show fixed mobile bottom nav (default true) */
+  showMobileBottomNav?: boolean;
 };
 
 const MAX_WIDTH: Record<NonNullable<AdminShellProps['maxWidth']>, string> = {
@@ -26,12 +35,16 @@ const MAX_WIDTH: Record<NonNullable<AdminShellProps['maxWidth']>, string> = {
 
 export default function AdminShell({
   title,
+  mobileTitle,
   subtitle,
+  hideSubtitleOnMobile = false,
   actions,
+  headerActions,
   belowHeader,
   children,
   maxWidth = '7xl',
   className = '',
+  showMobileBottomNav = true,
 }: AdminShellProps) {
   const { signOut, user } = useAuth();
   const navigate = useNavigate();
@@ -70,6 +83,7 @@ export default function AdminShell({
   };
 
   const widthClass = MAX_WIDTH[maxWidth];
+  const displayMobileTitle = mobileTitle || title;
 
   return (
     <div className={`min-h-screen bg-slate-50 text-slate-900 ${className}`.trim()}>
@@ -89,7 +103,7 @@ export default function AdminShell({
 
             <Link
               to="/admin"
-              className="inline-flex shrink-0 items-center"
+              className="hidden shrink-0 items-center sm:inline-flex"
               aria-label="Admin dashboard"
               onClick={() => setMenuOpen(false)}
             >
@@ -103,11 +117,24 @@ export default function AdminShell({
             </Link>
 
             <div className="min-w-0 flex-1">
-              <h1 className="truncate text-lg font-bold leading-tight sm:text-2xl">{title}</h1>
+              <h1 className="truncate text-lg font-bold leading-tight md:text-2xl">
+                <span className="md:hidden">{displayMobileTitle}</span>
+                <span className="hidden md:inline">{title}</span>
+              </h1>
               {subtitle ? (
-                <div className="mt-0.5 truncate text-xs text-slate-400 sm:text-sm">{subtitle}</div>
+                <div
+                  className={`mt-0.5 truncate text-xs text-slate-400 sm:text-sm ${
+                    hideSubtitleOnMobile ? 'hidden min-[390px]:block' : ''
+                  }`}
+                >
+                  {subtitle}
+                </div>
               ) : null}
             </div>
+
+            {headerActions ? (
+              <div className="flex shrink-0 items-center gap-1">{headerActions}</div>
+            ) : null}
 
             {actions ? (
               <div className="hidden flex-wrap items-center justify-end gap-2 lg:flex">{actions}</div>
@@ -148,10 +175,6 @@ export default function AdminShell({
             })}
           </nav>
 
-          {actions ? (
-            <div className="flex flex-wrap gap-2 pb-3 lg:hidden">{actions}</div>
-          ) : null}
-
           {user?.email ? (
             <p className="sr-only">Signed in as {user.email}</p>
           ) : null}
@@ -160,9 +183,15 @@ export default function AdminShell({
 
       {belowHeader}
 
-      <div className={`mx-auto ${widthClass} px-3 py-5 sm:px-6 sm:py-6 lg:px-8`}>
+      <div
+        className={`mx-auto ${widthClass} px-3 py-5 sm:px-6 sm:py-6 lg:px-8 ${
+          showMobileBottomNav ? 'pb-24 md:pb-6' : ''
+        }`}
+      >
         {children}
       </div>
+
+      {showMobileBottomNav ? <AdminBottomNav /> : null}
 
       {/* Mobile drawer */}
       {menuOpen ? (

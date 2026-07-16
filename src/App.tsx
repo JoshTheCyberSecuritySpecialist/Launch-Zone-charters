@@ -29,6 +29,7 @@ import AdminMessages from './pages/AdminMessages';
 import AdminPreTrip from './pages/AdminPreTrip';
 import AdminPromoCodes from './pages/AdminPromoCodes';
 import AdminCaptainsLog from './pages/AdminCaptainsLog';
+import AdminMoreTools from './pages/AdminMoreTools';
 import AdminBoats from './pages/AdminBoats';
 import AdminStaffBooking from './pages/AdminStaffBooking';
 import AdminCalendar from './pages/AdminCalendar';
@@ -120,6 +121,7 @@ function AppLayout() {
           <Route path="/refund-policy" element={<RefundPolicy />} />
           <Route path="/admin-login" element={<AdminLogin onNavigate={onNavigate} />} />
           <Route path="/admin" element={<AdminOperationsDashboard />} />
+          <Route path="/admin/more" element={<AdminMoreTools />} />
           <Route path="/admin/bookings" element={<AdminBookingsHub />} />
           <Route path="/admin/bookings/list" element={<Admin onNavigate={onNavigate} />} />
           <Route path="/admin/bookings/:id" element={<AdminBookingDetails />} />

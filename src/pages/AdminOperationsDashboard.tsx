@@ -1,12 +1,28 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertTriangle, CalendarDays, CloudSun, DollarSign, ShipWheel, Users } from 'lucide-react';
+import {
+  AlertTriangle,
+  CalendarDays,
+  CloudSun,
+  DollarSign,
+  FileCheck2,
+  LayoutGrid,
+  Mail,
+  PlusCircle,
+  RefreshCw,
+  Ship,
+  ShipWheel,
+  Users,
+} from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/useAuth';
 import FullPageLoader from '../components/FullPageLoader';
 import AdminShell from '../components/admin/AdminShell';
 import AdminAccessDenied from '../components/admin/AdminAccessDenied';
 import AdminResponsiveList from '../components/admin/AdminResponsiveList';
+import AdminQuickActionCard from '../components/admin/AdminQuickActionCard';
+import AdminDashboardCard from '../components/admin/AdminDashboardCard';
+import { useAdminQuickCounts } from '../components/admin/useAdminQuickCounts';
 import { humanizeLabel } from '../components/admin/adminDisplay';
 import LoadingSection from '../components/admin/LoadingSection';
 import { env } from '../config/env.js';
@@ -159,6 +175,50 @@ export default function AdminOperationsDashboard() {
     void loadDashboard();
   }, [authLoading, isAdmin, loadDashboard]);
 
+  const { counts, countsLoading, reloadCounts } = useAdminQuickCounts(isAdmin && !authLoading);
+
+  useEffect(() => {
+    if (authLoading || !isAdmin) return;
+    const refresh = () => {
+      void loadDashboard();
+      void reloadCounts();
+    };
+    window.addEventListener('focus', refresh);
+    return () => window.removeEventListener('focus', refresh);
+  }, [authLoading, isAdmin, loadDashboard, reloadCounts]);
+
+  const todayTrips = payload?.todayTrips || [];
+  const actionRequired = payload?.actionRequired || [];
+
+  const nextTrip = useMemo(() => {
+    if (todayTrips.length === 0) return null;
+    const now = Date.now();
+    const sorted = [...todayTrips].sort(
+      (a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime()
+    );
+    return sorted.find((t) => new Date(t.start_time).getTime() >= now) || sorted[0];
+  }, [todayTrips]);
+
+  const paperworkMissing = useMemo(
+    () => todayTrips.filter((t) => !t.waiver_done || !t.insurance_done || !t.license_done).length,
+    [todayTrips]
+  );
+
+  const refreshHeaderAction = (
+    <button
+      type="button"
+      onClick={() => {
+        void loadDashboard();
+        void reloadCounts();
+      }}
+      disabled={loading}
+      className="inline-flex h-11 w-11 items-center justify-center rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-50"
+      aria-label={loading ? 'Refreshing' : 'Refresh dashboard'}
+    >
+      <RefreshCw className={`h-5 w-5 ${loading ? 'animate-spin' : ''}`} aria-hidden />
+    </button>
+  );
+
   const sourceRows = useMemo(() => Object.entries(payload?.bookingSources || {}).sort((a, b) => b[1] - a[1]), [payload]);
 
   if (authLoading) {
@@ -202,7 +262,13 @@ export default function AdminOperationsDashboard() {
 
   if (loading && !payload) {
     return (
-      <AdminShell title="Operations Dashboard" subtitle="Today's trips, paperwork, boats, revenue, and alerts">
+      <AdminShell
+        title="Operations Dashboard"
+        mobileTitle="Operations"
+        subtitle="Launch Zone Admin"
+        hideSubtitleOnMobile
+        headerActions={refreshHeaderAction}
+      >
         <LoadingSection message="Loading operations dashboard…" />
       </AdminShell>
     );
@@ -247,11 +313,17 @@ export default function AdminOperationsDashboard() {
   return (
     <AdminShell
       title="Operations Dashboard"
-      subtitle="Today's trips, paperwork, boats, revenue, and alerts"
+      mobileTitle="Operations"
+      subtitle="Launch Zone Admin"
+      hideSubtitleOnMobile
+      headerActions={refreshHeaderAction}
       actions={
         <button
           type="button"
-          onClick={() => void loadDashboard()}
+          onClick={() => {
+            void loadDashboard();
+            void reloadCounts();
+          }}
           disabled={loading}
           className="min-h-11 rounded-lg bg-slate-800 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-700 disabled:opacity-60"
         >
@@ -259,30 +331,193 @@ export default function AdminOperationsDashboard() {
         </button>
       }
     >
-      <div className="space-y-6">
+      <div className="space-y-5 lg:space-y-6">
         {notice ? <div className="rounded-lg bg-red-100 px-4 py-3 font-semibold text-red-800">{notice}</div> : null}
 
-        <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
-          {[
-            ['New Staff Booking', '/admin/staff-booking'],
-            ['Calendar', '/admin/calendar'],
-            ['Outbox', '/admin/outbox'],
-            ['Disputes', '/admin/disputes'],
-            ['Shop Orders', '/admin/shop-orders'],
-            ["Today's Trips", '#today-trips'],
-            ['Bookings Hub', '/admin/bookings'],
-            ['All Bookings', '/admin/bookings/list'],
-            ['Messages', '/admin/messages'],
-            ['Approvals', '/admin/approvals'],
-            ['Blocked Dates', '/admin/calendar'],
-          ].map(([label, href]) => (
-            <a key={label} href={href} className="rounded-2xl bg-white p-4 text-center font-black text-slate-900 shadow hover:bg-amber-50">
-              {label}
-            </a>
-          ))}
+        {/* ——— Compact mobile command dashboard ——— */}
+        <section className="space-y-5">
+          <article className="rounded-2xl border border-amber-200 bg-gradient-to-br from-amber-50 to-white p-5 shadow-sm">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-xl font-black text-slate-900">Today&apos;s Operations</h2>
+                <p className="mt-1 text-base text-slate-700">
+                  <span className="font-bold">{todayTrips.length}</span> trip{todayTrips.length === 1 ? '' : 's'} today
+                </p>
+              </div>
+              {actionRequired.length > 0 ? (
+                <span className="rounded-full bg-red-100 px-3 py-1 text-sm font-bold text-red-800">
+                  {actionRequired.length} urgent
+                </span>
+              ) : null}
+            </div>
+            {nextTrip ? (
+              <dl className="mt-4 space-y-1 text-base text-slate-800">
+                <div>
+                  <dt className="inline font-semibold text-slate-600">Next trip: </dt>
+                  <dd className="inline">{timeLabel(nextTrip.start_time, nextTrip.end_time)}</dd>
+                </div>
+                <div>
+                  <dt className="inline font-semibold text-slate-600">Customer: </dt>
+                  <dd className="inline">{nextTrip.customer_name}</dd>
+                </div>
+                {nextTrip.booking_type === 'charter' ? (
+                  <div>
+                    <dt className="inline font-semibold text-slate-600">Guests: </dt>
+                    <dd className="inline">{nextTrip.passenger_count}</dd>
+                  </div>
+                ) : null}
+              </dl>
+            ) : (
+              <p className="mt-4 text-base text-slate-600">No departures scheduled today.</p>
+            )}
+            {paperworkMissing > 0 ? (
+              <p className="mt-3 text-base font-semibold text-amber-900">
+                {paperworkMissing} trip{paperworkMissing === 1 ? '' : 's'} missing paperwork
+              </p>
+            ) : null}
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <a
+                href="#mobile-today-detail"
+                onClick={() => {
+                  const el = document.getElementById('mobile-today-detail');
+                  if (el instanceof HTMLDetailsElement) el.open = true;
+                }}
+                className="inline-flex min-h-11 items-center justify-center rounded-xl bg-slate-900 px-3 text-center text-sm font-bold text-white lg:hidden"
+              >
+                View Trips
+              </a>
+              <Link
+                to="/admin/calendar"
+                className="inline-flex min-h-11 items-center justify-center rounded-xl border border-slate-300 bg-white px-3 text-center text-sm font-bold text-slate-900"
+              >
+                Calendar
+              </Link>
+              <a
+                href="#today-trips"
+                className="hidden min-h-11 items-center justify-center rounded-xl bg-slate-900 px-3 text-center text-sm font-bold text-white lg:inline-flex"
+              >
+                View Trips
+              </a>
+            </div>
+          </article>
+
+          <div>
+            <h2 className="text-lg font-black text-slate-900">Quick Actions</h2>
+            <div className="mt-3 grid grid-cols-1 gap-3 min-[350px]:grid-cols-2">
+              <AdminQuickActionCard
+                to="/admin/staff-booking"
+                title="New Booking"
+                description="Create a reservation"
+                icon={<PlusCircle className="h-5 w-5" />}
+              />
+              <AdminQuickActionCard
+                to="/admin/messages"
+                title="Messages"
+                description={
+                  countsLoading
+                    ? 'Loading…'
+                    : counts.unreadMessages > 0
+                      ? `${counts.unreadMessages} unread`
+                      : 'Contact inbox'
+                }
+                icon={<Mail className="h-5 w-5" />}
+                badge={counts.unreadMessages > 0 ? String(counts.unreadMessages) : null}
+                highlight={counts.unreadMessages > 0}
+              />
+              <AdminQuickActionCard
+                to="/admin/approvals"
+                title="Approvals"
+                description={
+                  countsLoading
+                    ? 'Loading…'
+                    : counts.pendingApprovals > 0
+                      ? `${counts.pendingApprovals} need review`
+                      : 'All clear'
+                }
+                icon={<FileCheck2 className="h-5 w-5" />}
+                badge={counts.pendingApprovals > 0 ? String(counts.pendingApprovals) : null}
+                highlight={counts.pendingApprovals > 0}
+              />
+              <AdminQuickActionCard
+                to="/admin/calendar"
+                title="Calendar"
+                description="View schedule"
+                icon={<CalendarDays className="h-5 w-5" />}
+              />
+            </div>
+          </div>
+
+          <div>
+            <h2 className="text-lg font-black text-slate-900">Bookings</h2>
+            <div className="mt-3 grid grid-cols-1 gap-3 min-[350px]:grid-cols-2">
+              <AdminQuickActionCard
+                to="/admin/bookings/list"
+                title="All Bookings"
+                description="Search every reservation"
+                icon={<Ship className="h-5 w-5" />}
+              />
+              <AdminQuickActionCard
+                to="/admin/staff-booking"
+                title="Staff Booking"
+                description="Book for a customer"
+                icon={<PlusCircle className="h-5 w-5" />}
+              />
+            </div>
+          </div>
+
+          <AdminDashboardCard
+            to="/admin/more"
+            title="More Tools"
+            description="Outbox, disputes, shop, promo codes, and more"
+            icon={<LayoutGrid className="h-6 w-6" />}
+            status="Open menu"
+          />
         </section>
 
-        <section className="grid gap-5 lg:grid-cols-[minmax(0,1.5fr)_minmax(320px,0.8fr)]">
+        {/* Mobile: expandable today detail */}
+        <details id="mobile-today-detail" className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm lg:hidden">
+          <summary className="cursor-pointer text-lg font-black text-slate-900">
+            Today&apos;s trips &amp; schedule
+          </summary>
+          <div className="mt-4 space-y-4">
+            {todayTrips.length === 0 ? (
+              <p className="text-slate-600">No departures today.</p>
+            ) : (
+              todayTrips.map((trip) => (
+                <Link
+                  key={trip.id}
+                  to={`/admin/bookings/${trip.id}`}
+                  className="block rounded-xl border border-slate-200 p-4 hover:border-amber-300"
+                >
+                  <div className="font-bold text-slate-900">{trip.customer_name}</div>
+                  <div className="text-sm text-slate-600">
+                    {timeLabel(trip.start_time, trip.end_time)} · {trip.boat_name}
+                  </div>
+                </Link>
+              ))
+            )}
+            {actionRequired.length > 0 ? (
+              <div>
+                <h3 className="font-bold text-red-800">Needs attention</h3>
+                <ul className="mt-2 space-y-2">
+                  {actionRequired.slice(0, 6).map((item) => (
+                    <li key={`${item.booking_id}-${item.type}`}>
+                      <Link
+                        to={`/admin/bookings/${item.booking_id}`}
+                        className="block rounded-lg bg-red-50 px-3 py-2 text-sm font-semibold text-red-900"
+                      >
+                        {item.label} — {item.customer_name}
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+          </div>
+        </details>
+
+        {/* ——— Full ops detail (desktop) ——— */}
+        <div className="hidden space-y-6 lg:block">
           <div id="today-trips" className="rounded-2xl bg-white p-5 shadow">
             <div className="flex items-center gap-2">
               <Users className="h-5 w-5 text-amber-600" />
@@ -347,7 +582,6 @@ export default function AdminOperationsDashboard() {
               {(payload?.actionRequired || []).length === 0 ? <p className="text-slate-500">Nothing needs attention.</p> : null}
             </div>
           </div>
-        </section>
 
         <section className="rounded-2xl bg-white p-5 shadow">
           <div className="flex items-center gap-2">
@@ -513,6 +747,7 @@ export default function AdminOperationsDashboard() {
             ))}
           </div>
         </section>
+        </div>
       </div>
     </AdminShell>
   );

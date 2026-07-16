@@ -12,6 +12,7 @@ export const ADMIN_NAV_ITEMS: AdminNavItem[] = [
   { label: 'Messages', to: '/admin/messages', match: 'exact' },
   { label: 'Staff Booking', to: '/admin/staff-booking', match: 'exact' },
   { label: 'Calendar', to: '/admin/calendar', match: 'exact' },
+  { label: 'More', to: '/admin/more', match: 'exact' },
   { label: 'Outbox', to: '/admin/outbox', match: 'exact' },
   { label: 'Disputes', to: '/admin/disputes', match: 'exact' },
   { label: 'Shop Orders', to: '/admin/shop-orders', match: 'exact' },

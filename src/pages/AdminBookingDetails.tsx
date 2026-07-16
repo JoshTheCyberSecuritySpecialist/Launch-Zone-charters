@@ -7,6 +7,7 @@ import FullPageLoader from '../components/FullPageLoader';
 import AdminShell from '../components/admin/AdminShell';
 import AdminAccessDenied from '../components/admin/AdminAccessDenied';
 import { humanizeLabel, shortId } from '../components/admin/adminDisplay';
+import LoadingSection from '../components/admin/LoadingSection';
 import AdminId from '../components/admin/AdminId';
 import { env } from '../config/env.js';
 import {
@@ -706,7 +707,13 @@ export default function AdminBookingDetails() {
   if (!isAdmin) {
     return <AdminAccessDenied signedIn={Boolean(user)} />;
   }
-  if (loading && !detail) return <FullPageLoader message="Loading booking details…" />;
+  if (loading && !detail) {
+    return (
+      <AdminShell title="Booking Details" subtitle="Loading reservation…">
+        <LoadingSection message="Loading booking details…" />
+      </AdminShell>
+    );
+  }
   if (!booking) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">

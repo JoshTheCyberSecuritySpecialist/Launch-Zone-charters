@@ -8,6 +8,7 @@ import AdminShell from '../components/admin/AdminShell';
 import AdminAccessDenied from '../components/admin/AdminAccessDenied';
 import AdminResponsiveList from '../components/admin/AdminResponsiveList';
 import { humanizeLabel } from '../components/admin/adminDisplay';
+import LoadingSection from '../components/admin/LoadingSection';
 import { env } from '../config/env.js';
 import { adminCharterCapacityLines } from '../lib/charterCapacity';
 import { fetchJsonWithTimeout, withTimeout } from '../lib/adminDiagnostics';
@@ -200,7 +201,11 @@ export default function AdminOperationsDashboard() {
   }
 
   if (loading && !payload) {
-    return <FullPageLoader message="Loading operations dashboard…" />;
+    return (
+      <AdminShell title="Operations Dashboard" subtitle="Today's trips, paperwork, boats, revenue, and alerts">
+        <LoadingSection message="Loading operations dashboard…" />
+      </AdminShell>
+    );
   }
 
   if (!payload) {

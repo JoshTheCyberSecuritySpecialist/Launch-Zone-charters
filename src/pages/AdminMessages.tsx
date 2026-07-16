@@ -11,6 +11,7 @@ import AdminResponsiveList from '../components/admin/AdminResponsiveList';
 import MobileAdminCard from '../components/admin/MobileAdminCard';
 import AdminActions from '../components/admin/AdminActions';
 import StatusBadge from '../components/admin/StatusBadge';
+import LoadingSection from '../components/admin/LoadingSection';
 import { env } from '../config/env.js';
 import { fetchJsonWithTimeout, withTimeout } from '../lib/adminDiagnostics';
 
@@ -202,7 +203,8 @@ export default function AdminMessages() {
   if (!isAdmin) {
     return <AdminAccessDenied signedIn={Boolean(user)} />;
   }
-  if (contactInboxLoading && !hasLoaded) return <FullPageLoader message="Loading customer messages…" />;
+
+  const initialLoading = contactInboxLoading && !hasLoaded;
 
   return (
     <AdminShell
@@ -236,6 +238,9 @@ export default function AdminMessages() {
           </p>
         </div>
 
+        {initialLoading ? (
+          <LoadingSection message="Loading customer messages…" className="m-4" />
+        ) : (
         <AdminResponsiveList
           desktop={
             <div className="max-h-[28rem] overflow-x-auto overflow-y-auto">
@@ -406,6 +411,7 @@ export default function AdminMessages() {
             </div>
           }
         />
+        )}
       </div>
 
       {contactReplyRow ? (

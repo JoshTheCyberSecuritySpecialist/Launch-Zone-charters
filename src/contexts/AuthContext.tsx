@@ -1,4 +1,4 @@
-import { createContext, useCallback, useEffect, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 import { logSupabaseError } from '../lib/supabaseErrors';
@@ -26,6 +26,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isAdmin, setIsAdmin] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [authAttempt, setAuthAttempt] = useState(0);
+  const bootstrappedRef = useRef(false);
+  const verifiedUserIdRef = useRef<string | null>(null);
 
   const loading = initializing || verifying;
 
@@ -133,22 +135,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const applySession = useCallback(
-    async (session: Session | null) => {
-      setVerifying(true);
+    async (session: Session | null, options?: { silent?: boolean }) => {
+      if (!options?.silent) {
+        setVerifying(true);
+      }
       setAuthError(null);
       try {
         const u = session?.user ?? null;
-        adminDebugLog('auth:session:apply', { hasSession: Boolean(session), hasUser: Boolean(u) });
+        adminDebugLog('auth:session:apply', { hasSession: Boolean(session), hasUser: Boolean(u), silent: options?.silent });
         setUser(u);
         await checkAdminStatus(u, session?.access_token ?? null);
+        verifiedUserIdRef.current = u?.id ?? null;
       } catch (err) {
         const message = describeError(err, 'Could not restore admin session.');
         console.error('[AuthContext.applySession]', message);
         setUser(null);
         setIsAdmin(false);
+        verifiedUserIdRef.current = null;
         setAuthError(message);
       } finally {
-        setVerifying(false);
+        if (!options?.silent) {
+          setVerifying(false);
+        }
       }
     },
     [checkAdminStatus]
@@ -183,6 +191,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       } finally {
         if (!cancelled) {
+          bootstrappedRef.current = true;
           setInitializing(false);
         }
       }
@@ -192,6 +201,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event, session) => {
       adminDebugLog('auth:state-change', { event, hasSession: Boolean(session) });
+      const nextUserId = session?.user?.id ?? null;
+
+      if (event === 'INITIAL_SESSION' && bootstrappedRef.current) {
+        return;
+      }
+
+      if (
+        event === 'TOKEN_REFRESHED' &&
+        nextUserId &&
+        nextUserId === verifiedUserIdRef.current &&
+        session?.user
+      ) {
+        setUser(session.user);
+        return;
+      }
+
       void applySession(session);
     });
 
@@ -225,6 +250,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
     setIsAdmin(false);
     setAuthError(null);
+    verifiedUserIdRef.current = null;
     adminDebugLog('auth:sign-out');
   }, []);
 

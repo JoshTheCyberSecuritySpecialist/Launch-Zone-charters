@@ -20,6 +20,7 @@ import AdminResponsiveList from '../components/admin/AdminResponsiveList';
 import MobileAdminCard from '../components/admin/MobileAdminCard';
 import AdminActions from '../components/admin/AdminActions';
 import StatusBadge from '../components/admin/StatusBadge';
+import LoadingSection from '../components/admin/LoadingSection';
 import { humanizeLabel, shortId } from '../components/admin/adminDisplay';
 import { env } from '../config/env.js';
 import {
@@ -954,7 +955,11 @@ export default function Admin({ onNavigate }: AdminProps) {
   }
 
   if (loading && bookings.length === 0 && !tableLoading) {
-    return <FullPageLoader message="Loading dashboard…" />;
+    return (
+      <AdminShell title="All Bookings" subtitle="Search and manage reservations">
+        <LoadingSection message="Loading bookings…" />
+      </AdminShell>
+    );
   }
 
   if (loadError && bookings.length === 0) {

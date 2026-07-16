@@ -10,6 +10,7 @@ import AdminResponsiveList from '../components/admin/AdminResponsiveList';
 import MobileAdminCard from '../components/admin/MobileAdminCard';
 import AdminActions from '../components/admin/AdminActions';
 import StatusBadge from '../components/admin/StatusBadge';
+import LoadingSection from '../components/admin/LoadingSection';
 import { humanizeLabel, shortId } from '../components/admin/adminDisplay';
 import { env } from '../config/env.js';
 import { fetchJsonWithTimeout, withTimeout } from '../lib/adminDiagnostics';
@@ -180,7 +181,8 @@ export default function AdminOutbox() {
   if (!isAdmin) {
     return <AdminAccessDenied signedIn={Boolean(user)} />;
   }
-  if (loading && !hasLoaded) return <FullPageLoader message="Loading communications outbox…" />;
+
+  const initialLoading = loading && !hasLoaded;
 
   return (
     <AdminShell
@@ -236,7 +238,9 @@ export default function AdminOutbox() {
             <h2 className="flex items-center gap-2 text-xl font-black"><Mail className="h-5 w-5 text-amber-600" />Outbox</h2>
             <p className="text-sm text-slate-500">{items.length} message{items.length === 1 ? '' : 's'} shown</p>
           </div>
-          {items.length === 0 ? (
+          {initialLoading ? (
+            <LoadingSection message="Loading communications…" className="m-4" />
+          ) : items.length === 0 ? (
             <p className="px-4 py-8 text-center text-slate-500">No communications found.</p>
           ) : (
             <AdminResponsiveList
@@ -310,7 +314,7 @@ export default function AdminOutbox() {
                               Open ({shortId(row.booking_id)})
                             </Link>
                           ) : row.customer_message_id ? (
-                            <Link to="/admin/bookings#contact-inbox" className="font-bold text-amber-700 underline">
+                            <Link to="/admin/messages" className="font-bold text-amber-700 underline">
                               Contact Inbox
                             </Link>
                           ) : (
@@ -370,7 +374,7 @@ export default function AdminOutbox() {
               {selected.booking_id ? (
                 <Link to={`/admin/bookings/${selected.booking_id}`} className="rounded-xl bg-amber-600 px-5 py-4 text-center text-lg font-black text-white">Open Booking</Link>
               ) : (
-                <Link to="/admin/bookings#contact-inbox" className="rounded-xl bg-amber-600 px-5 py-4 text-center text-lg font-black text-white">Contact Inbox</Link>
+                <Link to="/admin/messages" className="rounded-xl bg-amber-600 px-5 py-4 text-center text-lg font-black text-white">Contact Inbox</Link>
               )}
             </div>
           </div>

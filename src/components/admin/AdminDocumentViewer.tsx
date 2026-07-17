@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Download, ExternalLink, X } from 'lucide-react';
+import { Download, ExternalLink } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { withTimeout } from '../../lib/adminDiagnostics';
 import {
@@ -9,6 +9,7 @@ import {
   type AdminDocumentContext,
   type AdminDocumentKind,
 } from '../../lib/adminDocuments';
+import AdminModalShell from './AdminModalShell';
 
 type Props = {
   context: AdminDocumentContext;
@@ -34,6 +35,8 @@ export default function AdminDocumentViewer({
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [meta, setMeta] = useState<AdminDocumentAccessMeta | null>(null);
+
+  const titleId = `admin-doc-title-${recordId}-${document}`;
 
   const getAdminToken = useCallback(async () => {
     const {
@@ -63,6 +66,12 @@ export default function AdminDocumentViewer({
     void loadAccess();
   }, [loadAccess, open]);
 
+  const handleClose = () => {
+    setOpen(false);
+    setMeta(null);
+    setError(null);
+  };
+
   const handleDownload = async () => {
     setDownloading(true);
     setError(null);
@@ -91,77 +100,53 @@ export default function AdminDocumentViewer({
         {label}
       </button>
 
-      {open ? (
-        <div
-          className="fixed inset-0 z-[60] flex items-end justify-center bg-black/50 p-0 sm:items-center sm:p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby={`admin-doc-title-${recordId}-${document}`}
-        >
-          <div className="flex max-h-[92vh] w-full max-w-4xl flex-col overflow-hidden rounded-t-2xl bg-white shadow-xl sm:rounded-2xl">
-            <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-3 sm:px-5">
-              <div>
-                <h2 id={`admin-doc-title-${recordId}-${document}`} className="text-lg font-black text-slate-900">
-                  {label}
-                </h2>
-                {meta?.fileName ? (
-                  <p className="mt-0.5 text-xs text-slate-500">{meta.fileName}</p>
-                ) : null}
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  disabled={loading || downloading}
-                  onClick={() => void handleDownload()}
-                  className="inline-flex min-h-10 items-center gap-1 rounded-lg border border-slate-300 px-3 py-2 text-sm font-bold text-slate-800 hover:bg-slate-50 disabled:opacity-50"
-                >
-                  <Download className="h-4 w-4" aria-hidden />
-                  {downloading ? 'Downloading…' : 'Download'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setOpen(false);
-                    setMeta(null);
-                    setError(null);
-                  }}
-                  className="inline-flex min-h-10 min-w-10 items-center justify-center rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50"
-                  aria-label="Close document viewer"
-                >
-                  <X className="h-5 w-5" />
-                </button>
-              </div>
+      <AdminModalShell
+        open={open}
+        onClose={handleClose}
+        titleId={titleId}
+        title={label}
+        subtitle={meta?.fileName || null}
+        headerActions={
+          <button
+            type="button"
+            disabled={loading || downloading}
+            onClick={() => void handleDownload()}
+            className="inline-flex min-h-11 items-center gap-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-bold text-slate-800 hover:bg-slate-50 disabled:opacity-50"
+          >
+            <Download className="h-4 w-4" aria-hidden />
+            {downloading ? 'Downloading…' : 'Download'}
+          </button>
+        }
+      >
+        <div className="p-3 sm:p-4">
+          {loading ? (
+            <p className="py-8 text-center text-sm font-semibold text-slate-600">Loading document…</p>
+          ) : error ? (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-800">
+              {error}
             </div>
-
-            <div className="min-h-[240px] flex-1 overflow-auto bg-slate-100 p-3 sm:p-4">
-              {loading ? (
-                <p className="py-8 text-center text-sm font-semibold text-slate-600">Loading document…</p>
-              ) : error ? (
-                <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-800">
-                  {error}
-                </div>
-              ) : meta?.viewMode === 'image' && meta.signedUrl ? (
-                <img
-                  src={meta.signedUrl}
-                  alt={label}
-                  className="mx-auto max-h-[70vh] w-auto max-w-full rounded-lg bg-white object-contain shadow"
-                />
-              ) : meta?.viewMode === 'pdf' && meta.signedUrl ? (
-                <iframe
-                  title={label}
-                  src={meta.signedUrl}
-                  className="h-[70vh] w-full rounded-lg border border-slate-200 bg-white"
-                />
-              ) : meta ? (
-                <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                  <p className="font-semibold">Preview unavailable for this file type.</p>
-                  <p className="mt-1">Use Download to open the file on your device.</p>
-                </div>
-              ) : null}
+          ) : meta?.viewMode === 'image' && meta.signedUrl ? (
+            <img
+              src={meta.signedUrl}
+              alt={label}
+              className="mx-auto w-auto max-w-full rounded-lg bg-white object-contain shadow"
+              style={{ maxHeight: 'calc(92dvh - 8rem)' }}
+            />
+          ) : meta?.viewMode === 'pdf' && meta.signedUrl ? (
+            <iframe
+              title={label}
+              src={meta.signedUrl}
+              className="w-full rounded-lg border border-slate-200 bg-white"
+              style={{ height: 'calc(92dvh - 8rem)', minHeight: '240px' }}
+            />
+          ) : meta ? (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              <p className="font-semibold">Preview unavailable for this file type.</p>
+              <p className="mt-1">Use Download to open the file on your device.</p>
             </div>
-          </div>
+          ) : null}
         </div>
-      ) : null}
+      </AdminModalShell>
     </>
   );
 }

@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { supabase } from '../../lib/supabase';
-import { withTimeout } from '../../lib/adminDiagnostics';
+import { fetchAdminSharedCounts } from '../../lib/adminHeadCounts';
 
 export type AdminQuickCounts = {
   unreadMessages: number;
@@ -12,40 +11,22 @@ const EMPTY: AdminQuickCounts = {
   pendingApprovals: 0,
 };
 
-/** Lightweight head-count queries for dashboard badges. */
+/** Lightweight head-count queries for dashboard badges (uses shared cache). */
 export function useAdminQuickCounts(enabled: boolean) {
   const [counts, setCounts] = useState<AdminQuickCounts>(EMPTY);
   const [loading, setLoading] = useState(true);
 
-  const reload = useCallback(async () => {
+  const reload = useCallback(async (force = false) => {
     if (!enabled) {
       setLoading(false);
       return;
     }
     setLoading(true);
     try {
-      const [unread, pendingBookings, pendingPreTrip] = await withTimeout(
-        'Admin quick counts',
-        Promise.all([
-          supabase
-            .from('contact_messages')
-            .select('*', { count: 'exact', head: true })
-            .eq('is_read', false),
-          supabase
-            .from('bookings')
-            .select('*', { count: 'exact', head: true })
-            .in('status', ['pending', 'pending_verification']),
-          supabase
-            .from('pre_trip_submissions')
-            .select('*', { count: 'exact', head: true })
-            .eq('admin_status', 'pending'),
-        ]),
-        12000
-      );
-
+      const shared = await fetchAdminSharedCounts({ force });
       setCounts({
-        unreadMessages: unread.count ?? 0,
-        pendingApprovals: (pendingBookings.count ?? 0) + (pendingPreTrip.count ?? 0),
+        unreadMessages: shared.unreadMessages,
+        pendingApprovals: shared.pendingBookings + shared.pendingPreTrip,
       });
     } catch {
       setCounts(EMPTY);

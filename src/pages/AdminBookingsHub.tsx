@@ -18,6 +18,7 @@ import FullPageLoader from '../components/FullPageLoader';
 import AdminShell from '../components/admin/AdminShell';
 import AdminAccessDenied from '../components/admin/AdminAccessDenied';
 import AdminDashboardCard from '../components/admin/AdminDashboardCard';
+import { fetchAdminSharedCounts } from '../lib/adminHeadCounts';
 import { withTimeout } from '../lib/adminDiagnostics';
 
 type HubCounts = {
@@ -47,31 +48,14 @@ export default function AdminBookingsHub() {
   const [countsLoading, setCountsLoading] = useState(true);
   const [countsError, setCountsError] = useState<string | null>(null);
 
-  const loadCounts = useCallback(async () => {
+  const loadCounts = useCallback(async (force = false) => {
     setCountsLoading(true);
     setCountsError(null);
     try {
-      const [
-        pendingApprovals,
-        unreadMessages,
-        pendingPreTrip,
-        activePromos,
-        openPaymentRecovery,
-      ] = await withTimeout(
+      const [shared, activePromos, openPaymentRecovery] = await withTimeout(
         'Admin hub counts',
         Promise.all([
-          supabase
-            .from('bookings')
-            .select('*', { count: 'exact', head: true })
-            .in('status', ['pending', 'pending_verification']),
-          supabase
-            .from('contact_messages')
-            .select('*', { count: 'exact', head: true })
-            .eq('is_read', false),
-          supabase
-            .from('pre_trip_submissions')
-            .select('*', { count: 'exact', head: true })
-            .eq('admin_status', 'pending'),
+          fetchAdminSharedCounts({ force }),
           supabase
             .from('promo_codes')
             .select('*', { count: 'exact', head: true })
@@ -85,21 +69,14 @@ export default function AdminBookingsHub() {
       );
 
       setCounts({
-        pendingApprovals: pendingApprovals.error ? 0 : pendingApprovals.count ?? 0,
-        unreadMessages: unreadMessages.error ? 0 : unreadMessages.count ?? 0,
-        pendingPreTrip: pendingPreTrip.error ? 0 : pendingPreTrip.count ?? 0,
-        // Promo list is API-managed; count may be blocked by RLS — treat as optional.
+        pendingApprovals: shared.pendingBookings,
+        unreadMessages: shared.unreadMessages,
+        pendingPreTrip: shared.pendingPreTrip,
         activePromos: activePromos.error ? 0 : activePromos.count ?? 0,
         openPaymentRecovery: openPaymentRecovery.error
           ? 0
           : openPaymentRecovery.count ?? 0,
       });
-
-      const criticalError =
-        pendingApprovals.error || unreadMessages.error || pendingPreTrip.error;
-      if (criticalError) {
-        setCountsError(criticalError.message || 'Some counts could not load.');
-      }
     } catch (err) {
       setCountsError(err instanceof Error ? err.message : 'Could not load dashboard counts.');
       setCounts(EMPTY_COUNTS);
@@ -130,7 +107,7 @@ export default function AdminBookingsHub() {
       actions={
         <button
           type="button"
-          onClick={() => void loadCounts()}
+          onClick={() => void loadCounts(true)}
           disabled={countsLoading}
           className="min-h-11 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 disabled:opacity-50"
         >
@@ -141,7 +118,7 @@ export default function AdminBookingsHub() {
       {countsError ? (
         <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-950">
           {countsError}{' '}
-          <button type="button" className="underline" onClick={() => void loadCounts()}>
+          <button type="button" className="underline" onClick={() => void loadCounts(true)}>
             Retry
           </button>
         </div>

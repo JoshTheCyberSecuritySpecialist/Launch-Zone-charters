@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   AlertTriangle,
@@ -176,15 +176,20 @@ export default function AdminOperationsDashboard() {
   }, [authLoading, isAdmin, loadDashboard]);
 
   const { counts, countsLoading, reloadCounts } = useAdminQuickCounts(isAdmin && !authLoading);
+  const lastBackgroundRefreshRef = useRef(0);
+  const BACKGROUND_REFRESH_MS = 60_000;
 
   useEffect(() => {
     if (authLoading || !isAdmin) return;
-    const refresh = () => {
+    const refreshIfStale = () => {
+      const now = Date.now();
+      if (now - lastBackgroundRefreshRef.current < BACKGROUND_REFRESH_MS) return;
+      lastBackgroundRefreshRef.current = now;
       void loadDashboard();
       void reloadCounts();
     };
-    window.addEventListener('focus', refresh);
-    return () => window.removeEventListener('focus', refresh);
+    window.addEventListener('focus', refreshIfStale);
+    return () => window.removeEventListener('focus', refreshIfStale);
   }, [authLoading, isAdmin, loadDashboard, reloadCounts]);
 
   const todayTrips = payload?.todayTrips || [];
@@ -209,7 +214,7 @@ export default function AdminOperationsDashboard() {
       type="button"
       onClick={() => {
         void loadDashboard();
-        void reloadCounts();
+        void reloadCounts(true);
       }}
       disabled={loading}
       className="inline-flex h-11 w-11 items-center justify-center rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-50"
@@ -322,7 +327,7 @@ export default function AdminOperationsDashboard() {
           type="button"
           onClick={() => {
             void loadDashboard();
-            void reloadCounts();
+            void reloadCounts(true);
           }}
           disabled={loading}
           className="min-h-11 rounded-lg bg-slate-800 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-700 disabled:opacity-60"

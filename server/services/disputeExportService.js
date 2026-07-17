@@ -5,6 +5,7 @@ const archiver = require('archiver');
 const fetch = require('node-fetch');
 const documentUrlValidation = require('./documentUrlValidation');
 const disputeEvidenceService = require('./disputeEvidenceService');
+const waiverPdfService = require('./waiverPdfService');
 
 const LOGO_CANDIDATES = [
   'rocket-launch-boat-rentals-titusville-florida-launch-zone-charters-logo-indian-river-lagoon.png',
@@ -30,6 +31,30 @@ function safeFileName(value, fallback = 'file') {
   return cleaned || fallback;
 }
 
+function buildEvidencePackageFileName(customerName, referenceDate) {
+  const slug = safeFileName(customerName || 'Customer', 'Customer');
+  const datePart = referenceDate ? String(referenceDate).slice(0, 10) : new Date().toISOString().slice(0, 10);
+  return `LaunchZone-Booking-${slug}-${datePart}.zip`;
+}
+
+function buildEvidencePdfFileName(customerName, referenceDate) {
+  const slug = safeFileName(customerName || 'Customer', 'Customer');
+  const datePart = referenceDate ? String(referenceDate).slice(0, 10) : new Date().toISOString().slice(0, 10);
+  return `LaunchZone-Booking-${slug}-${datePart}.pdf`;
+}
+
+function documentZipName(label, extension) {
+  switch (label) {
+    case 'license':
+      return `Driver_License.${extension}`;
+    case 'insurance':
+      return `Insurance.${extension}`;
+    case 'buoy-insurance-proof':
+      return `Buoy_Insurance_Proof.${extension}`;
+    default:
+      return `documents/${safeFileName(label)}.${extension}`;
+  }
+}
 function extensionFromPath(objectPath, fallback = 'bin') {
   const ext = path.extname(String(objectPath || '')).replace(/^\./, '').toLowerCase();
   return ext || fallback;
@@ -130,18 +155,31 @@ async function collectExportFiles(supabase, pkg) {
     if (!downloaded) continue;
     documents.push({
       label: item.label,
-      zipName: `documents/${safeFileName(item.label)}.${downloaded.extension}`,
+      zipName: documentZipName(item.label, downloaded.extension),
       buffer: downloaded.buffer,
     });
   }
 
   const receiptFile = pkg.receiptUrl ? await downloadReceipt(pkg.receiptUrl) : null;
 
+  let signedWaiverPdf = null;
+  try {
+    const waiverPkg = await waiverPdfService.loadBookingWaiverPackage(supabase, pkg.bookingId);
+    if (waiverPkg?.signatureText && waiverPkg.signatureText !== '—') {
+      signedWaiverPdf = await waiverPdfService.buildSignedWaiverPdf(waiverPkg);
+    }
+  } catch (err) {
+    console.warn('[dispute-export] signed waiver pdf failed:', err.message || err);
+  }
+
   return {
     documents,
     waiverText: waiver?.waiver_content ? String(waiver.waiver_content) : null,
+    signedWaiverPdf,
     receiptFile,
     receiptUrl: pkg.receiptUrl || null,
+    customerName: customer?.full_name || null,
+    bookingCreatedAt: booking.created_at || null,
   };
 }
 
@@ -174,7 +212,7 @@ async function buildEvidencePdf(pkg) {
     }
 
     doc.font('Helvetica-Bold').fontSize(18).fillColor('#0f172a').text('Launch Zone Charters', { align: 'center' });
-    doc.font('Helvetica').fontSize(12).fillColor('#475569').text('Stripe Dispute Evidence Packet', { align: 'center' });
+    doc.font('Helvetica').fontSize(12).fillColor('#475569').text('Legal Evidence Package — Booking Summary', { align: 'center' });
     doc.moveDown(1);
 
     writePdfSection(doc, 'Summary Header', pkg.sections.header);
@@ -198,6 +236,40 @@ async function buildEvidencePdf(pkg) {
   });
 }
 
+async function buildActivityTimelinePdf(pkg) {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ margin: 48, size: 'LETTER' });
+    const chunks = [];
+    doc.on('data', (chunk) => chunks.push(chunk));
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    doc.on('error', reject);
+
+    doc.font('Helvetica-Bold').fontSize(16).fillColor('#0f172a').text('Launch Zone Charters — Activity Timeline');
+    doc.moveDown(0.5);
+    doc.font('Helvetica').fontSize(10).fillColor('#475569').text(`Booking ID: ${pkg.bookingId}`);
+    doc.text(`Generated: ${new Date().toLocaleString()}`);
+    doc.moveDown(1);
+
+    const timelineLines = Array.isArray(pkg.sections?.communicationTimeline)
+      ? pkg.sections.communicationTimeline
+      : [];
+    const bookingLines = Array.isArray(pkg.sections?.bookingTimeline) ? pkg.sections.bookingTimeline : [];
+    const merged = [...bookingLines, ...timelineLines].filter(Boolean);
+
+    if (merged.length === 0) {
+      doc.font('Helvetica').fontSize(10).fillColor('#1e293b').text('No timeline entries recorded.');
+    } else {
+      doc.font('Helvetica').fontSize(10).fillColor('#1e293b');
+      for (const line of merged) {
+        doc.text(String(line), { lineGap: 2 });
+        doc.moveDown(0.25);
+      }
+    }
+
+    doc.end();
+  });
+}
+
 async function buildEvidenceZip(supabase, pkg) {
   const files = await collectExportFiles(supabase, pkg);
   const archive = archiver('zip', { zlib: { level: 9 } });
@@ -211,8 +283,8 @@ async function buildEvidenceZip(supabase, pkg) {
     archive.append(pkg.summary, { name: 'evidence-summary.txt' });
 
     buildEvidencePdf(pkg)
-      .then((pdfBuffer) => {
-        archive.append(pdfBuffer, { name: 'evidence-summary.pdf' });
+      .then(async (pdfBuffer) => {
+        archive.append(pdfBuffer, { name: 'Booking_Summary.pdf' });
         archive.append(JSON.stringify({ timeline: pkg.timeline, generatedAt: new Date().toISOString() }, null, 2), {
           name: 'timeline.json',
         });
@@ -220,11 +292,22 @@ async function buildEvidenceZip(supabase, pkg) {
         archive.append(pkg.sections.refundPolicy.join('\n'), { name: 'refund-policy.txt' });
 
         if (files.waiverText) {
-          archive.append(files.waiverText, { name: 'waiver.txt' });
+          archive.append(files.waiverText, { name: 'Original_Waiver_Text.txt' });
+        }
+
+        if (files.signedWaiverPdf) {
+          archive.append(files.signedWaiverPdf, { name: 'Signed_Waiver.pdf' });
         }
 
         for (const docFile of files.documents) {
           archive.append(docFile.buffer, { name: docFile.zipName });
+        }
+
+        try {
+          const timelinePdf = await buildActivityTimelinePdf(pkg);
+          archive.append(timelinePdf, { name: 'Activity_Timeline.pdf' });
+        } catch (err) {
+          console.warn('[dispute-export] activity timeline pdf failed:', err.message || err);
         }
 
         if (files.receiptFile) {
@@ -303,7 +386,10 @@ async function submitEvidenceToStripe(stripe, supabase, { disputeId, adminId }) 
 }
 
 module.exports = {
+  buildActivityTimelinePdf,
+  buildEvidencePackageFileName,
   buildEvidencePdf,
+  buildEvidencePdfFileName,
   buildEvidenceZip,
   collectExportFiles,
   loadEvidencePackage,

@@ -79,7 +79,7 @@ async function loadBookingWaiverPackage(supabase, bookingId) {
   const { data, error } = await supabase
     .from('bookings')
     .select(
-      'id, waiver_signed, waiver_signed_at, terms_accepted, damage_fee_acknowledged, customers(full_name, email), waivers(electronic_signature, signature_date, ip_address, waiver_content, accepted)'
+      'id, waiver_signed, waiver_signed_at, terms_accepted, damage_fee_acknowledged, customers(full_name, email), waivers(electronic_signature, signature_date, ip_address, waiver_content, waiver_version, waiver_version_effective_at, accepted)'
     )
     .eq('id', bookingId)
     .maybeSingle();
@@ -115,6 +115,8 @@ async function loadBookingWaiverPackage(supabase, bookingId) {
     signedAt: waiver?.signature_date || data.waiver_signed_at,
     ipAddress: waiver?.ip_address || null,
     waiverContent: waiver?.waiver_content || DEFAULT_WAIVER_CONTENT,
+    waiverVersion: waiver?.waiver_version || null,
+    waiverVersionEffectiveAt: waiver?.waiver_version_effective_at || null,
     termsAccepted: Boolean(data.terms_accepted),
     damageFeeAcknowledged: Boolean(data.damage_fee_acknowledged),
     waiverAccepted: waiver?.accepted !== false,
@@ -157,6 +159,8 @@ async function loadPreTripWaiverPackage(supabase, submissionId) {
     signedAt: data.waiver_signed_at || data.created_at,
     ipAddress: null,
     waiverContent: DEFAULT_WAIVER_CONTENT,
+    waiverVersion: null,
+    waiverVersionEffectiveAt: null,
     termsAccepted: true,
     damageFeeAcknowledged: true,
     waiverAccepted: true,
@@ -167,7 +171,7 @@ async function loadPreTripWaiverPackage(supabase, submissionId) {
 
 function buildSignedWaiverPdf(pkg) {
   return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ margin: 48, size: 'LETTER' });
+    const doc = new PDFDocument({ margin: 48, size: 'LETTER', bufferPages: true });
     const chunks = [];
     doc.on('data', (chunk) => chunks.push(chunk));
     doc.on('end', () => resolve(Buffer.concat(chunks)));
@@ -202,6 +206,8 @@ function buildSignedWaiverPdf(pkg) {
       `Record ID: ${pkg.recordId}`,
       `Sign source: ${pkg.source}`,
       pkg.tripType ? `Trip type: ${tripTypeLabel(pkg.tripType)}` : null,
+      pkg.waiverVersion ? `Waiver version: ${pkg.waiverVersion}` : null,
+      pkg.waiverVersionEffectiveAt ? `Waiver version effective: ${formatWhen(pkg.waiverVersionEffectiveAt)}` : null,
       `Generated: ${formatWhen(new Date().toISOString())}`,
     ].filter(Boolean));
 
@@ -245,6 +251,19 @@ function buildSignedWaiverPdf(pkg) {
         'This PDF is generated from data stored in Launch Zone Charters systems. It documents a typed electronic signature only. No pen-and-ink or drawn signature image is stored or reproduced.',
         { lineGap: 2 }
       );
+
+    const range = doc.bufferedPageRange();
+    for (let i = range.start; i <= range.count; i += 1) {
+      doc.switchToPage(i);
+      doc
+        .font('Helvetica')
+        .fontSize(8)
+        .fillColor('#94a3b8')
+        .text(`Page ${i + 1} of ${range.count + 1}`, doc.page.margins.left, doc.page.height - 36, {
+          align: 'center',
+          width: doc.page.width - doc.page.margins.left - doc.page.margins.right,
+        });
+    }
 
     doc.end();
   });

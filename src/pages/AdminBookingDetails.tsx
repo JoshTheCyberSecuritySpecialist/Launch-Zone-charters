@@ -9,8 +9,7 @@ import AdminAccessDenied from '../components/admin/AdminAccessDenied';
 import { humanizeLabel, shortId } from '../components/admin/adminDisplay';
 import LoadingSection from '../components/admin/LoadingSection';
 import AdminId from '../components/admin/AdminId';
-import AdminDocumentViewer from '../components/admin/AdminDocumentViewer';
-import AdminSignatureVerification from '../components/admin/AdminSignatureVerification';
+import AdminLegalEvidencePanel from '../components/admin/AdminLegalEvidencePanel';
 import { env } from '../config/env.js';
 import {
   CHARTER_MAX_PASSENGERS,
@@ -20,7 +19,15 @@ import {
 import { withTimeout } from '../lib/adminDiagnostics';
 
 type BoatRow = { id: string; name: string; type?: string | null };
-type TimelineEvent = { id: string; event_type: string; message: string | null; created_at: string };
+type TimelineEvent = {
+  id: string;
+  event_type: string;
+  actor_type?: string | null;
+  message: string | null;
+  created_at: string;
+  kind?: 'activity' | 'communication';
+  channel?: string;
+};
 type CommunicationRow = {
   id: string;
   channel: 'email' | 'sms';
@@ -135,8 +142,14 @@ const ymd = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.ge
 const hhmm = (d: Date) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 const money = (v: unknown) => (Number(v || 0)).toFixed(2);
 
-function docBadge(done: boolean) {
-  return done ? 'bg-green-100 text-green-800 border-green-200' : 'bg-red-100 text-red-800 border-red-200';
+function evidencePackageFileName(customerName: string | null | undefined, createdAt: string | null | undefined, ext: 'zip' | 'pdf') {
+  const slug = String(customerName || 'Customer')
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 80) || 'Customer';
+  const datePart = createdAt ? String(createdAt).slice(0, 10) : new Date().toISOString().slice(0, 10);
+  return `LaunchZone-Booking-${slug}-${datePart}.${ext}`;
 }
 
 function formatEventName(value: string) {
@@ -361,14 +374,17 @@ export default function AdminBookingDetails() {
         const payload = (await res.json().catch(() => ({}))) as { error?: string };
         throw new Error(payload.error || 'Download failed.');
       }
+      const disposition = res.headers.get('Content-Disposition') || '';
+      const match = disposition.match(/filename="([^"]+)"/i);
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement('a');
       anchor.href = url;
-      anchor.download = filename;
+      anchor.download = match?.[1] || filename;
       anchor.click();
       URL.revokeObjectURL(url);
       setNotice({ variant: 'success', text: `${kind.toUpperCase()} downloaded.` });
+      await load();
     } catch (err) {
       setNotice({ variant: 'error', text: err instanceof Error ? err.message : 'Download failed.' });
     } finally {
@@ -426,6 +442,27 @@ export default function AdminBookingDetails() {
       (Number.isFinite(end.getTime()) && end.toISOString() !== booking.end_time)
     );
   }, [booking, form.boatId, form.date, form.endTime, form.startTime]);
+
+  const auditTimeline = useMemo(() => {
+    const activityRows: TimelineEvent[] = (detail?.timeline || []).map((row) => ({
+      ...row,
+      kind: 'activity' as const,
+    }));
+    const commRows: TimelineEvent[] = (detail?.communications || []).map((row) => ({
+      id: row.id,
+      event_type: row.message_type,
+      actor_type: row.sent_by ? 'admin' : 'system',
+      message: row.subject
+        ? `${row.channel.toUpperCase()}: ${row.subject}`
+        : `${row.channel.toUpperCase()} to ${row.recipient}`,
+      created_at: row.sent_at || row.created_at,
+      kind: 'communication' as const,
+      channel: row.channel,
+    }));
+    return [...activityRows, ...commRows].sort(
+      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    );
+  }, [detail?.communications, detail?.timeline]);
 
   useEffect(() => {
     if (!scheduleChanged || !form.boatId || !form.date || !form.startTime || !form.endTime) {
@@ -748,7 +785,15 @@ export default function AdminBookingDetails() {
   const bookingCustomer = Array.isArray(booking.customers) ? booking.customers[0] : booking.customers;
   const hasLicenseDoc = Boolean(booking.license_url || bookingCustomer?.id_document_url);
   const hasInsuranceDoc = Boolean(booking.insurance_url || bookingCustomer?.insurance_proof_url);
+  const verification = Array.isArray(booking.user_verifications)
+    ? booking.user_verifications[0]
+    : booking.user_verifications;
+  const hasBuoyDoc = Boolean(verification?.buoy_proof_url);
   const bookingLink = `${window.location.origin}/waivers-insurance?bookingId=${booking.id}`;
+  const evidenceFileBase = evidencePackageFileName(bookingCustomer?.full_name, booking.created_at, 'zip').replace(
+    /\.zip$/,
+    ''
+  );
 
   const inputClass =
     'mt-1 min-h-11 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-base text-slate-900 shadow-sm focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-200';
@@ -921,11 +966,24 @@ export default function AdminBookingDetails() {
           </div>
 
           <div className="rounded-2xl bg-white p-5 shadow">
-            <h2 className="text-xl font-black">Timeline</h2>
+            <h2 className="text-xl font-black">Audit Timeline</h2>
+            <p className="mt-1 text-sm text-slate-500">Append-only activity, communications, and system events.</p>
             <div className="mt-4 space-y-3">
-              {detail.timeline.map((event) => (
-                <div key={event.id} className="rounded-xl border border-slate-200 p-3">
-                  <div className="font-bold">{formatEventName(event.event_type)}</div>
+              {auditTimeline.map((event) => (
+                <div key={`${event.kind}-${event.id}`} className="rounded-xl border border-slate-200 p-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="font-bold">{formatEventName(event.event_type)}</div>
+                    {event.actor_type ? (
+                      <span className="rounded bg-slate-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-600">
+                        {event.actor_type}
+                      </span>
+                    ) : null}
+                    {event.kind === 'communication' ? (
+                      <span className="rounded bg-blue-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-blue-800">
+                        {event.channel}
+                      </span>
+                    ) : null}
+                  </div>
                   <div className="text-sm text-slate-600">{event.message || '-'}</div>
                   <div className="text-xs text-slate-400">{new Date(event.created_at).toLocaleString()}</div>
                 </div>
@@ -1127,74 +1185,34 @@ export default function AdminBookingDetails() {
             )}
           </div>
 
-          <div className="rounded-2xl bg-white p-5 shadow">
-            <h2 className="text-xl font-black">Signed Waiver</h2>
-            <p className="mt-1 text-sm text-slate-600">
-              Verification record only — typed name and timestamps, not a drawn signature image.
-            </p>
-            <div className="mt-4">
-              {waiverDone && id ? (
-                <AdminSignatureVerification
-                  variant="panel"
-                  mode="booking"
-                  bookingId={id}
-                  data={{
-                    waiver_signed: booking.waiver_signed,
-                    waiver_signed_at: booking.waiver_signed_at,
-                    terms_accepted: booking.terms_accepted,
-                    damage_fee_acknowledged: booking.damage_fee_acknowledged,
-                    waivers: booking.waivers,
-                  }}
-                />
-              ) : (
-                <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-900">
-                  Waiver not signed yet.
-                </p>
-              )}
-            </div>
-          </div>
-
-          <div className="rounded-2xl bg-white p-5 shadow">
-            <h2 className="text-xl font-black">Documents</h2>
-            <div className="mt-4 space-y-3">
-              <div className={`rounded-lg border px-3 py-2 font-bold ${docBadge(waiverDone)}`}>
-                Waiver status: {waiverDone ? 'Complete' : 'Missing'}
-              </div>
-              <div className={`rounded-lg border px-3 py-2 font-bold ${docBadge(insuranceDone)}`}>
-                <div className="flex flex-wrap items-center gap-2">
-                  <span>Insurance: {insuranceDone ? 'Complete' : 'Missing'}</span>
-                  {id && hasInsuranceDoc ? (
-                    <AdminDocumentViewer
-                      context="booking"
-                      recordId={id}
-                      document="insurance"
-                      label="View"
-                      available={hasInsuranceDoc}
-                      linkClassName="text-sm font-bold underline"
-                    />
-                  ) : null}
-                </div>
-              </div>
-              <div className={`rounded-lg border px-3 py-2 font-bold ${docBadge(licenseDone)}`}>
-                <div className="flex flex-wrap items-center gap-2">
-                  <span>License: {licenseDone ? 'Complete' : 'Missing'}</span>
-                  {id && hasLicenseDoc ? (
-                    <AdminDocumentViewer
-                      context="booking"
-                      recordId={id}
-                      document="license"
-                      label="View"
-                      available={hasLicenseDoc}
-                      linkClassName="text-sm font-bold underline"
-                    />
-                  ) : null}
-                </div>
-              </div>
-              <div className={`rounded-lg border px-3 py-2 font-bold ${docBadge(checklistDone)}`}>
-                Trip Checklist: {checklistDone ? 'Complete' : 'Missing'}
-              </div>
-            </div>
-          </div>
+          <AdminLegalEvidencePanel
+            bookingId={id || booking.id}
+            booking={booking}
+            waiverDone={waiverDone}
+            insuranceDone={insuranceDone}
+            licenseDone={licenseDone}
+            hasLicenseDoc={hasLicenseDoc}
+            hasInsuranceDoc={hasInsuranceDoc}
+            hasBuoyDoc={hasBuoyDoc}
+            checklistDone={checklistDone}
+            evidenceLoading={evidenceLoading}
+            exportLoading={exportLoading === 'pdf' || exportLoading === 'zip' ? exportLoading : null}
+            onGenerateSummary={() => void generateEvidence()}
+            onDownloadPdf={() =>
+              void downloadExport(
+                `/api/admin/bookings/${encodeURIComponent(id || booking.id)}/evidence-pdf`,
+                `${evidenceFileBase}.pdf`,
+                'pdf'
+              )
+            }
+            onDownloadZip={() =>
+              void downloadExport(
+                `/api/admin/bookings/${encodeURIComponent(id || booking.id)}/evidence-zip`,
+                `${evidenceFileBase}.zip`,
+                'zip'
+              )
+            }
+          />
 
           <div className="rounded-2xl bg-white p-5 shadow">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">

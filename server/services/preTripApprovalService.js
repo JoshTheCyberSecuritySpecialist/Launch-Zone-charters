@@ -1,6 +1,4 @@
-/**
- * Admin pre-trip approve / reject / match — booking sync and submission updates.
- */
+const waiverContent = require('../content/waiverContent');
 
 const REVIEWABLE_STATUSES = ['pending', 'matched'];
 
@@ -102,14 +100,15 @@ async function applySubmissionToBooking(supabase, submission, bookingId, request
     if (wSelErr) {
       logOpFailure('waivers', 'select', wSelErr);
     } else if (!existingWaiver) {
+      const waiverFields = waiverContent.waiverInsertFields('rental');
       const { error: wInsErr } = await supabase.from('waivers').insert({
         booking_id: bookingId,
         customer_id: booking.customer_id,
         electronic_signature: submission.waiver_signature,
         signature_date: submission.waiver_signed_at || new Date().toISOString(),
         ip_address: requestIp,
-        waiver_content: 'Florida Boating Liability Waiver - from pre-trip submission',
         accepted: true,
+        ...waiverFields,
       });
       if (wInsErr) logOpFailure('waivers', 'insert', wInsErr);
     }

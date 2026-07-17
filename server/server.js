@@ -22,6 +22,7 @@ const documentUrlValidation = require('./services/documentUrlValidation');
 const preTripSubmissionGuard = require('./services/preTripSubmissionGuard');
 const preTripAdminActions = require('./services/preTripAdminActions');
 const preTripApprovalService = require('./services/preTripApprovalService');
+const waiverContent = require('./content/waiverContent');
 const bookingReliability = require('./services/bookingReliability');
 const bookingCommunications = require('./services/bookingCommunications');
 const shopService = require('./services/shopService');
@@ -1105,17 +1106,16 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
   }
 
   if (waiverAccepted && waiverSignature.length > 0) {
-    const waiverContent = String(
-      waiver?.waiverContent || waiver?.content || 'Florida Boating Liability Waiver - Full content stored in terms'
-    ).trim();
+    const bookingMode = isCharterBooking ? 'charter' : 'rental';
+    const waiverFields = waiverContent.waiverInsertFields(bookingMode);
     const { error: waiverErr } = await supabase.from('waivers').insert({
       booking_id: bookingRow.id,
       customer_id: customerRow.id,
       electronic_signature: waiverSignature,
       signature_date: legalAcceptedAt,
       ip_address: requestIp,
-      waiver_content: waiverContent,
       accepted: true,
+      ...waiverFields,
     });
     if (waiverErr) {
       console.warn('[finalize-checkout-session] waiver insert:', waiverErr.message);
@@ -1125,6 +1125,16 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
         payment_intent_id: paymentIntentId || null,
         event_type: 'waiver_insert_failed',
         message: waiverErr.message,
+      });
+    } else {
+      await bookingReliability.insertActivity(supabase, {
+        booking_id: bookingRow.id,
+        checkout_session_id: stripeSessionId,
+        payment_intent_id: paymentIntentId || null,
+        event_type: 'waiver_signed',
+        actor_type: 'customer',
+        message: 'Customer signed waiver during checkout.',
+        payload: { waiver_version: waiverFields.waiver_version },
       });
     }
   }
@@ -2580,7 +2590,7 @@ async function loadAdminBookingDetail(id) {
   const { data: booking, error } = await supabase
     .from('bookings')
     .select(
-      '*, customers(id, full_name, email, phone, id_document_url, insurance_proof_url), boats(id, name, type, hourly_rate, half_day_rate, full_day_rate), waivers(id, electronic_signature, signature_date, ip_address, waiver_content, accepted), user_verifications(*)'
+      '*, customers(id, full_name, email, phone, id_document_url, insurance_proof_url), boats(id, name, type, hourly_rate, half_day_rate, full_day_rate), waivers(id, electronic_signature, signature_date, ip_address, waiver_content, waiver_version, waiver_version_effective_at, accepted), user_verifications(*)'
     )
     .eq('id', id)
     .maybeSingle();
@@ -3618,8 +3628,21 @@ app.get('/api/admin/bookings/:id/evidence-pdf', async (req, res) => {
       adminId: adminUser.id,
       format: 'pdf',
     });
+    await bookingReliability.insertActivity(supabase, {
+      booking_id: id,
+      event_type: 'evidence_package_downloaded',
+      actor_type: 'admin',
+      actor_id: adminUser.id || null,
+      message: 'Legal evidence package PDF downloaded.',
+      payload: { format: 'pdf' },
+    });
+    const customerName =
+      pkg?.sections?.header?.find((line) => String(line).toLowerCase().startsWith('customer:'))?.split(':').slice(1).join(':').trim() ||
+      linked?.booking?.customers?.full_name ||
+      '';
+    const fileName = disputeExportService.buildEvidencePdfFileName(customerName, linked?.booking?.created_at);
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="booking-evidence-${id.slice(0, 8)}.pdf"`);
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
     return res.send(pdfBuffer);
   } catch (err) {
     console.error('[admin-booking-evidence-pdf]', err);
@@ -3645,8 +3668,21 @@ app.get('/api/admin/bookings/:id/evidence-zip', async (req, res) => {
       adminId: adminUser.id,
       format: 'zip',
     });
+    await bookingReliability.insertActivity(supabase, {
+      booking_id: id,
+      event_type: 'evidence_package_downloaded',
+      actor_type: 'admin',
+      actor_id: adminUser.id || null,
+      message: 'Legal evidence package ZIP downloaded.',
+      payload: { format: 'zip' },
+    });
+    const customerName =
+      pkg?.sections?.header?.find((line) => String(line).toLowerCase().startsWith('customer:'))?.split(':').slice(1).join(':').trim() ||
+      linked?.booking?.customers?.full_name ||
+      '';
+    const fileName = disputeExportService.buildEvidencePackageFileName(customerName, linked?.booking?.created_at);
     res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', `attachment; filename="booking-evidence-${id.slice(0, 8)}.zip"`);
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
     return res.send(zipBuffer);
   } catch (err) {
     console.error('[admin-booking-evidence-zip]', err);
@@ -6160,7 +6196,7 @@ app.post('/api/booking-sign-waiver', async (req, res) => {
 
     const { data: booking, error: bErr } = await supabase
       .from('bookings')
-      .select('id, customer_id, waiver_signed, status')
+      .select('id, customer_id, waiver_signed, status, booking_type')
       .eq('id', bookingId)
       .maybeSingle();
     if (bErr || !booking) return res.status(404).json({ error: 'Booking not found' });
@@ -6196,17 +6232,26 @@ app.post('/api/booking-sign-waiver', async (req, res) => {
         return res.status(500).json({ error: 'Could not save waiver on booking' });
       }
 
+      const waiverFields = waiverContent.waiverInsertFields(booking.booking_type || 'rental');
       const { error: wErr } = await supabase.from('waivers').insert({
         booking_id: bookingId,
         customer_id: customer.id,
         electronic_signature: signature,
         signature_date: signedAt,
         ip_address: requestIp,
-        waiver_content: 'Florida Boating Liability Waiver - signed via Waivers & Insurance page',
         accepted: true,
+        ...waiverFields,
       });
       if (wErr) {
         console.warn('[booking-sign-waiver] waiver insert:', wErr.message);
+      } else {
+        await bookingReliability.insertActivity(supabase, {
+          booking_id: bookingId,
+          event_type: 'waiver_signed',
+          actor_type: 'customer',
+          message: 'Customer signed waiver via Waivers & Insurance page.',
+          payload: { waiver_version: waiverFields.waiver_version },
+        });
       }
     }
 

@@ -18,6 +18,8 @@ type BookingWaiver = {
   signature_date?: string | null;
   ip_address?: string | null;
   waiver_content?: string | null;
+  waiver_version?: string | null;
+  waiver_version_effective_at?: string | null;
   accepted?: boolean | null;
 };
 
@@ -246,6 +248,14 @@ export default function AdminSignatureVerification(props: Props) {
         <p className="mt-2 text-slate-600">
           <span className="font-semibold text-slate-700">Signed:</span> {formatWhen(signedAt)}
         </p>
+        {'waiver_version' in (waiver || {}) && waiver?.waiver_version ? (
+          <p className="mt-1 text-slate-600">
+            <span className="font-semibold text-slate-700">Waiver version:</span> {waiver.waiver_version}
+            {waiver.waiver_version_effective_at
+              ? ` (effective ${formatWhen(waiver.waiver_version_effective_at)})`
+              : ''}
+          </p>
+        ) : null}
         {waiver?.ip_address ? (
           <p className="mt-1 text-slate-600">
             <span className="font-semibold text-slate-700">IP:</span> {waiver.ip_address}

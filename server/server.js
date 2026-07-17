@@ -21,6 +21,7 @@ const bookingAccess = require('./services/bookingAccess');
 const documentUrlValidation = require('./services/documentUrlValidation');
 const preTripSubmissionGuard = require('./services/preTripSubmissionGuard');
 const preTripAdminActions = require('./services/preTripAdminActions');
+const preTripApprovalService = require('./services/preTripApprovalService');
 const bookingReliability = require('./services/bookingReliability');
 const bookingCommunications = require('./services/bookingCommunications');
 const shopService = require('./services/shopService');
@@ -6472,97 +6473,6 @@ app.post('/api/public/pre-trip-submission', async (req, res) => {
   }
 });
 
-async function copyPreTripSubmissionToBooking(submission, bookingId, requestIp, options = {}) {
-  const verifyLicense = Boolean(options.verifyLicense);
-  const { data: booking, error: bErr } = await supabase
-    .from('bookings')
-    .select('id, customer_id, waiver_signed, license_url, insurance_url, license_status, insurance_status')
-    .eq('id', bookingId)
-    .maybeSingle();
-  if (bErr || !booking) {
-    const err = new Error('Booking not found');
-    err.statusCode = 404;
-    throw err;
-  }
-
-  const bookingUpdates = { updated_at: new Date().toISOString() };
-  if (submission.license_url) {
-    if (!booking.license_url) {
-      bookingUpdates.license_url = submission.license_url;
-    }
-    if (verifyLicense) {
-      bookingUpdates.license_status = 'verified';
-    } else if (!booking.license_url) {
-      bookingUpdates.license_status = 'pending';
-    }
-  }
-  if (submission.insurance_url) {
-    bookingUpdates.insurance_url = submission.insurance_url;
-    bookingUpdates.insurance_status =
-      submission.insurance_status === 'submitted' ? 'submitted' : 'pending';
-  }
-  if (submission.waiver_signed && !booking.waiver_signed) {
-    bookingUpdates.waiver_signed = true;
-    bookingUpdates.waiver_signed_at = submission.waiver_signed_at || new Date().toISOString();
-    bookingUpdates.terms_accepted = true;
-    bookingUpdates.damage_fee_acknowledged = true;
-  }
-
-  if (Object.keys(bookingUpdates).length > 1) {
-    const { error: uErr } = await supabase.from('bookings').update(bookingUpdates).eq('id', bookingId);
-    if (uErr) {
-      const err = new Error(uErr.message || 'Could not update booking');
-      err.statusCode = 500;
-      throw err;
-    }
-  }
-
-  if (submission.license_url) {
-    await supabase
-      .from('customers')
-      .update({ id_document_url: submission.license_url })
-      .eq('id', booking.customer_id);
-  }
-  if (submission.insurance_url) {
-    await supabase
-      .from('customers')
-      .update({ insurance_proof_url: submission.insurance_url })
-      .eq('id', booking.customer_id);
-  }
-
-  if (submission.waiver_signed && submission.waiver_signature) {
-    const { data: existingWaiver } = await supabase
-      .from('waivers')
-      .select('id')
-      .eq('booking_id', bookingId)
-      .limit(1)
-      .maybeSingle();
-    if (!existingWaiver) {
-      await supabase.from('waivers').insert({
-        booking_id: bookingId,
-        customer_id: booking.customer_id,
-        electronic_signature: submission.waiver_signature,
-        signature_date: submission.waiver_signed_at || new Date().toISOString(),
-        ip_address: requestIp,
-        waiver_content: 'Florida Boating Liability Waiver - from pre-trip submission',
-        accepted: true,
-      });
-    }
-  }
-
-  if (submission.insurance_url) {
-    await supabase.from('user_verifications').upsert(
-      {
-        booking_id: bookingId,
-        buoy_status: 'pending',
-        buoy_proof_url: submission.insurance_url,
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: 'booking_id' }
-    );
-  }
-}
-
 /**
  * Admin: match / approve / reject pre-trip submissions.
  * PATCH /api/admin/pre-trip-submissions/:id
@@ -6580,12 +6490,13 @@ app.patch('/api/admin/pre-trip-submissions/:id', async (req, res) => {
 
     const action = preTripAdminActions.normalizePreTripAction(req.body?.action);
     const matchedBookingId = String(req.body?.matched_booking_id || req.body?.matchedBookingId || '').trim();
-    const adminNotes =
+    const adminNotesRaw =
       req.body?.admin_notes != null
         ? String(req.body.admin_notes)
         : req.body?.adminNotes != null
           ? String(req.body.adminNotes)
           : null;
+    const adminNotes = adminNotesRaw !== null ? cleanText(adminNotesRaw, 2000) : null;
     const rejectionRaw =
       req.body?.rejection_reason != null
         ? req.body.rejection_reason
@@ -6602,7 +6513,11 @@ app.patch('/api/admin/pre-trip-submissions/:id', async (req, res) => {
       .select('*')
       .eq('id', submissionId)
       .maybeSingle();
-    if (sErr || !submission) {
+    if (sErr) {
+      console.error('[pre-trip-approval] table=pre_trip_submissions operation=select message=', sErr.message);
+      return res.status(500).json({ error: 'Could not load submission' });
+    }
+    if (!submission) {
       return res.status(404).json({ error: 'Submission not found' });
     }
 
@@ -6612,8 +6527,7 @@ app.patch('/api/admin/pre-trip-submissions/:id', async (req, res) => {
     }
 
     const stamp = new Date().toISOString();
-    const updates = { updated_at: stamp };
-    if (adminNotes !== null) updates.admin_notes = cleanText(adminNotes, 2000);
+    const adminUserId = adminUser.id || null;
 
     if (action === 'reject') {
       const rejection = preTripAdminActions.normalizeRejectionReason(rejectionRaw);
@@ -6621,16 +6535,14 @@ app.patch('/api/admin/pre-trip-submissions/:id', async (req, res) => {
         return res.status(400).json({ error: rejection.reason });
       }
 
-      updates.admin_status = 'rejected';
-      updates.rejection_reason = rejection.reason;
-      updates.reviewed_by = adminUser.id || null;
-      updates.reviewed_at = stamp;
-
-      const { error: uErr } = await supabase
-        .from('pre_trip_submissions')
-        .update(updates)
-        .eq('id', submissionId);
-      if (uErr) return res.status(500).json({ error: uErr.message });
+      const result = await preTripApprovalService.rejectPreTripSubmission(supabase, {
+        submissionId,
+        submission,
+        adminUserId,
+        adminNotes,
+        rejectionReason: rejection.reason,
+        stamp,
+      });
 
       const bookingForLog = submission.matched_booking_id
         ? String(submission.matched_booking_id)
@@ -6640,7 +6552,7 @@ app.patch('/api/admin/pre-trip-submissions/:id', async (req, res) => {
           booking_id: bookingForLog,
           event_type: 'pre_trip_rejected',
           actor_type: 'admin',
-          actor_id: adminUser.id || null,
+          actor_id: adminUserId,
           message: `Pre-trip submission rejected: ${rejection.reason}`,
           payload: {
             pre_trip_submission_id: submissionId,
@@ -6649,12 +6561,7 @@ app.patch('/api/admin/pre-trip-submissions/:id', async (req, res) => {
         });
       }
 
-      return res.json({
-        ok: true,
-        admin_status: 'rejected',
-        reviewed_at: stamp,
-        rejection_reason: rejection.reason,
-      });
+      return res.json(result);
     }
 
     const bookingIdToMatch =
@@ -6663,52 +6570,32 @@ app.patch('/api/admin/pre-trip-submissions/:id', async (req, res) => {
       return res.status(400).json({ error: 'matched_booking_id is required to match or approve' });
     }
 
-    if (action === 'match' || action === 'approve') {
-      await copyPreTripSubmissionToBooking(
-        submission,
-        bookingIdToMatch,
-        requestIpBestEffort(req),
-        { verifyLicense: action === 'approve' }
-      );
-      updates.matched_booking_id = bookingIdToMatch;
-      updates.admin_status = action === 'approve' ? 'approved' : 'matched';
-      if (action === 'approve') {
-        updates.reviewed_by = adminUser.id || null;
-        updates.reviewed_at = stamp;
-        if (submission.license_url) {
-          updates.license_status = 'verified';
-        }
-      }
-    }
-
-    const { error: uErr } = await supabase
-      .from('pre_trip_submissions')
-      .update(updates)
-      .eq('id', submissionId);
-    if (uErr) return res.status(500).json({ error: uErr.message });
-
-    if (action === 'approve' || action === 'match') {
-      await bookingReliability.insertActivity(supabase, {
-        booking_id: bookingIdToMatch,
-        event_type: action === 'approve' ? 'pre_trip_approved' : 'pre_trip_matched',
-        actor_type: 'admin',
-        actor_id: adminUser.id || null,
-        message:
-          action === 'approve'
-            ? 'Pre-trip waiver and documents approved and linked to booking.'
-            : 'Pre-trip submission matched to booking.',
-        payload: { pre_trip_submission_id: submissionId },
-      });
-    }
-
-    return res.json({
-      ok: true,
-      admin_status: updates.admin_status,
-      matched_booking_id: bookingIdToMatch,
-      reviewed_at: updates.reviewed_at || null,
+    const result = await preTripApprovalService.approveOrMatchPreTripSubmission(supabase, {
+      submissionId,
+      submission,
+      action,
+      bookingId: bookingIdToMatch,
+      adminUserId,
+      adminNotes,
+      requestIp: requestIpBestEffort(req),
+      stamp,
     });
+
+    await bookingReliability.insertActivity(supabase, {
+      booking_id: bookingIdToMatch,
+      event_type: action === 'approve' ? 'pre_trip_approved' : 'pre_trip_matched',
+      actor_type: 'admin',
+      actor_id: adminUserId,
+      message:
+        action === 'approve'
+          ? 'Pre-trip waiver and documents approved and linked to booking.'
+          : 'Pre-trip submission matched to booking.',
+      payload: { pre_trip_submission_id: submissionId },
+    });
+
+    return res.json(result);
   } catch (err) {
-    console.error('[admin/pre-trip-submissions]', err);
+    console.error('[admin/pre-trip-submissions]', err.message || err);
     return res.status(err.statusCode || 500).json({ error: err.message || 'Failed' });
   }
 });

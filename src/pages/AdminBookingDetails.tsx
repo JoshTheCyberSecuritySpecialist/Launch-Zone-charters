@@ -9,6 +9,8 @@ import AdminAccessDenied from '../components/admin/AdminAccessDenied';
 import { humanizeLabel, shortId } from '../components/admin/adminDisplay';
 import LoadingSection from '../components/admin/LoadingSection';
 import AdminId from '../components/admin/AdminId';
+import AdminDocumentViewer from '../components/admin/AdminDocumentViewer';
+import AdminSignatureVerification from '../components/admin/AdminSignatureVerification';
 import { env } from '../config/env.js';
 import {
   CHARTER_MAX_PASSENGERS,
@@ -743,6 +745,9 @@ export default function AdminBookingDetails() {
   const insuranceDone = ['submitted', 'verified'].includes(String(booking.insurance_status || ''));
   const licenseDone = ['verified'].includes(String(booking.license_status || '')) || Boolean(booking.license_url);
   const checklistDone = ['ready_for_departure', 'completed'].includes(String(booking.status || ''));
+  const bookingCustomer = Array.isArray(booking.customers) ? booking.customers[0] : booking.customers;
+  const hasLicenseDoc = Boolean(booking.license_url || bookingCustomer?.id_document_url);
+  const hasInsuranceDoc = Boolean(booking.insurance_url || bookingCustomer?.insurance_proof_url);
   const bookingLink = `${window.location.origin}/waivers-insurance?bookingId=${booking.id}`;
 
   const inputClass =
@@ -1124,18 +1129,54 @@ export default function AdminBookingDetails() {
 
           <div className="rounded-2xl bg-white p-5 shadow">
             <h2 className="text-xl font-black">Documents</h2>
-            <div className="mt-4 space-y-2">
-              {[
-                ['Waiver', waiverDone, null],
-                ['Insurance', insuranceDone, booking.insurance_url],
-                ['License', licenseDone, booking.license_url],
-                ['Trip Checklist', checklistDone, null],
-              ].map(([label, done, href]) => (
-                <div key={String(label)} className={`rounded-lg border px-3 py-2 font-bold ${docBadge(Boolean(done))}`}>
-                  {String(label)}: {done ? 'Complete' : 'Missing'}
-                  {href ? <a href={String(href)} target="_blank" rel="noreferrer" className="ml-2 underline">Open</a> : null}
+            <div className="mt-4 space-y-3">
+              <div className={`rounded-lg border px-3 py-2 font-bold ${docBadge(waiverDone)}`}>
+                Waiver: {waiverDone ? 'Complete' : 'Missing'}
+              </div>
+              {waiverDone && id ? (
+                <AdminSignatureVerification
+                  mode="booking"
+                  bookingId={id}
+                  data={{
+                    waiver_signed: booking.waiver_signed,
+                    waiver_signed_at: booking.waiver_signed_at,
+                    waivers: booking.waivers,
+                  }}
+                />
+              ) : null}
+              <div className={`rounded-lg border px-3 py-2 font-bold ${docBadge(insuranceDone)}`}>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span>Insurance: {insuranceDone ? 'Complete' : 'Missing'}</span>
+                  {id && hasInsuranceDoc ? (
+                    <AdminDocumentViewer
+                      context="booking"
+                      recordId={id}
+                      document="insurance"
+                      label="View"
+                      available={hasInsuranceDoc}
+                      linkClassName="text-sm font-bold underline"
+                    />
+                  ) : null}
                 </div>
-              ))}
+              </div>
+              <div className={`rounded-lg border px-3 py-2 font-bold ${docBadge(licenseDone)}`}>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span>License: {licenseDone ? 'Complete' : 'Missing'}</span>
+                  {id && hasLicenseDoc ? (
+                    <AdminDocumentViewer
+                      context="booking"
+                      recordId={id}
+                      document="license"
+                      label="View"
+                      available={hasLicenseDoc}
+                      linkClassName="text-sm font-bold underline"
+                    />
+                  ) : null}
+                </div>
+              </div>
+              <div className={`rounded-lg border px-3 py-2 font-bold ${docBadge(checklistDone)}`}>
+                Trip Checklist: {checklistDone ? 'Complete' : 'Missing'}
+              </div>
             </div>
           </div>
 

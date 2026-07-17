@@ -26,6 +26,7 @@ const shopService = require('./services/shopService');
 const disputeService = require('./services/disputeService');
 const disputeEvidenceService = require('./services/disputeEvidenceService');
 const disputeExportService = require('./services/disputeExportService');
+const adminDocumentAccessService = require('./services/adminDocumentAccessService');
 const { getBioConditions } = require('./services/bioluminescenceService');
 const { getRocketConditions } = require('./services/rocketService');
 const { getLaunchSchedulePreview } = require('./services/rocketScheduleService');
@@ -2576,7 +2577,7 @@ async function loadAdminBookingDetail(id) {
   const { data: booking, error } = await supabase
     .from('bookings')
     .select(
-      '*, customers(id, full_name, email, phone), boats(id, name, type, hourly_rate, half_day_rate, full_day_rate), waivers(id), user_verifications(*)'
+      '*, customers(id, full_name, email, phone, id_document_url, insurance_proof_url), boats(id, name, type, hourly_rate, half_day_rate, full_day_rate), waivers(id, electronic_signature, signature_date, ip_address, waiver_content, accepted), user_verifications(*)'
     )
     .eq('id', id)
     .maybeSingle();
@@ -3647,6 +3648,42 @@ app.get('/api/admin/bookings/:id/evidence-zip', async (req, res) => {
   } catch (err) {
     console.error('[admin-booking-evidence-zip]', err);
     return res.status(err.statusCode || 500).json({ error: err.message || 'Could not generate evidence ZIP.' });
+  }
+});
+
+app.get('/api/admin/documents/access', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const resolved = await adminDocumentAccessService.resolveAdminDocument(supabase, {
+      context: req.query.context,
+      recordId: req.query.recordId,
+      document: req.query.document,
+    });
+    const access = await adminDocumentAccessService.createSignedAccess(supabase, resolved);
+    return res.json(access);
+  } catch (err) {
+    console.error('[admin-documents:access]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not access document.' });
+  }
+});
+
+app.get('/api/admin/documents/download', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const resolved = await adminDocumentAccessService.resolveAdminDocument(supabase, {
+      context: req.query.context,
+      recordId: req.query.recordId,
+      document: req.query.document,
+    });
+    const file = await adminDocumentAccessService.downloadDocumentBuffer(supabase, resolved);
+    res.setHeader('Content-Type', file.mimeType);
+    res.setHeader('Content-Disposition', `attachment; filename="${file.fileName}"`);
+    return res.send(file.buffer);
+  } catch (err) {
+    console.error('[admin-documents:download]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not download document.' });
   }
 });
 

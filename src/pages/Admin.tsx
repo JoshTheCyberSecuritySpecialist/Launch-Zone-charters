@@ -21,6 +21,7 @@ import MobileAdminCard from '../components/admin/MobileAdminCard';
 import AdminActions from '../components/admin/AdminActions';
 import StatusBadge from '../components/admin/StatusBadge';
 import LoadingSection from '../components/admin/LoadingSection';
+import AdminDocumentViewer from '../components/admin/AdminDocumentViewer';
 import { ADMIN_MOBILE_TOAST_CLASS, humanizeLabel, shortId } from '../components/admin/adminDisplay';
 import { env } from '../config/env.js';
 import {
@@ -1627,16 +1628,15 @@ export default function Admin({ onNavigate }: AdminProps) {
                         <p className="max-w-[14rem] text-[10px] leading-snug text-slate-600">
                           {insuranceStatusCaption(booking.insurance_status, Boolean(insuranceProofHref))}
                         </p>
-                        {insuranceProofHref ? (
-                          <a
-                            href={insuranceProofHref}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex w-fit items-center gap-1 text-xs font-semibold text-amber-700 hover:text-amber-800"
-                          >
-                            <ExternalLink className="h-3 w-3 shrink-0" />
-                            View insurance file
-                          </a>
+                        {insuranceDocHref ? (
+                          <AdminDocumentViewer
+                            context="booking"
+                            recordId={booking.id}
+                            document="insurance"
+                            label="View insurance file"
+                            available={Boolean(insuranceDocHref)}
+                            linkClassName="inline-flex w-fit items-center gap-1 text-xs font-semibold text-amber-700 hover:text-amber-800 hover:underline"
+                          />
                         ) : null}
                       </div>
                     </td>
@@ -1649,19 +1649,21 @@ export default function Admin({ onNavigate }: AdminProps) {
                         >
                           {buoy?.buoy_proof_url ? buoy.buoy_status || 'pending' : 'N/A'}
                         </span>
-                        <a
-                          href={buoy?.buoy_proof_url || '#'}
-                          target="_blank"
-                          rel="noreferrer"
-                          className={`inline-flex items-center gap-1 text-xs font-semibold ${
-                            buoy?.buoy_proof_url
-                              ? 'text-amber-700 hover:text-amber-800'
-                              : 'pointer-events-none text-slate-400'
-                          }`}
-                        >
-                          <ExternalLink className="h-3 w-3 shrink-0" />
-                          View Buoy proof
-                        </a>
+                        {buoy?.buoy_proof_url ? (
+                          <AdminDocumentViewer
+                            context="booking"
+                            recordId={booking.id}
+                            document="buoy_proof"
+                            label="View Buoy proof"
+                            available={Boolean(buoy?.buoy_proof_url)}
+                            linkClassName="inline-flex items-center gap-1 text-xs font-semibold text-amber-700 hover:text-amber-800 hover:underline"
+                          />
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-xs font-semibold text-slate-400">
+                            <ExternalLink className="h-3 w-3 shrink-0" />
+                            View Buoy proof
+                          </span>
+                        )}
                         <div className="flex flex-wrap gap-1">
                           <button
                             type="button"
@@ -1692,15 +1694,14 @@ export default function Admin({ onNavigate }: AdminProps) {
                             License
                           </span>
                           {licenseDocHref ? (
-                            <a
-                              href={licenseDocHref}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              title="Click to view uploaded document"
-                              className="inline-flex w-fit items-center rounded px-2 py-1 text-sm font-semibold bg-green-100 text-green-700 hover:underline"
-                            >
-                              ✅ View
-                            </a>
+                            <AdminDocumentViewer
+                              context="booking"
+                              recordId={booking.id}
+                              document="license"
+                              label="✅ View"
+                              available={Boolean(licenseDocHref)}
+                              linkClassName="inline-flex w-fit items-center rounded px-2 py-1 text-sm font-semibold bg-green-100 text-green-700 hover:underline"
+                            />
                           ) : (
                             <span
                               className="inline-flex w-fit items-center rounded px-2 py-1 text-sm font-semibold bg-red-100 text-red-700"
@@ -1717,16 +1718,15 @@ export default function Admin({ onNavigate }: AdminProps) {
                           <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
                             Insurance
                           </span>
-                          {insuranceProofHref ? (
-                            <a
-                              href={insuranceProofHref}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              title="Click to view uploaded document"
-                              className="inline-flex w-fit items-center rounded px-2 py-1 text-sm font-semibold bg-green-100 text-green-700 hover:underline"
-                            >
-                              ✅ View
-                            </a>
+                          {insuranceDocHref ? (
+                            <AdminDocumentViewer
+                              context="booking"
+                              recordId={booking.id}
+                              document="insurance"
+                              label="✅ View"
+                              available={Boolean(insuranceDocHref)}
+                              linkClassName="inline-flex w-fit items-center rounded px-2 py-1 text-sm font-semibold bg-green-100 text-green-700 hover:underline"
+                            />
                           ) : (
                             <span
                               className="inline-flex w-fit items-center rounded px-2 py-1 text-sm font-semibold bg-red-100 text-red-700"

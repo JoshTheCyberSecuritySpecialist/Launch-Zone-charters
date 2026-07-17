@@ -14,6 +14,8 @@ import AdminActions from '../components/admin/AdminActions';
 import StatusBadge from '../components/admin/StatusBadge';
 import LoadingSection from '../components/admin/LoadingSection';
 import PreTripMatchPicker from '../components/admin/PreTripMatchPicker';
+import AdminDocumentViewer from '../components/admin/AdminDocumentViewer';
+import AdminSignatureVerification from '../components/admin/AdminSignatureVerification';
 import { ADMIN_MOBILE_STICKY_NOTICE_CLASS, humanizeLabel, shortId } from '../components/admin/adminDisplay';
 import { describeError, withTimeout } from '../lib/adminDiagnostics';
 
@@ -28,6 +30,8 @@ type PreTripSubmissionRow = {
   groupon_code: string | null;
   requested_trip_date: string | null;
   waiver_signed: boolean;
+  waiver_signed_at: string | null;
+  waiver_signature: string | null;
   license_url: string | null;
   insurance_url: string | null;
   license_status: string;
@@ -338,30 +342,34 @@ export default function AdminPreTrip() {
                           ) : null}
                         </td>
                         <td className="px-4 py-3">
-                          <div className="flex flex-col gap-1 text-xs">
-                            <span>Waiver: {row.waiver_signed ? '✅' : '❌'}</span>
+                          <div className="flex flex-col gap-2 text-xs">
+                            <AdminSignatureVerification
+                              mode="pre_trip"
+                              data={{
+                                id: row.id,
+                                waiver_signed: row.waiver_signed,
+                                waiver_signature: row.waiver_signature,
+                                waiver_signed_at: row.waiver_signed_at,
+                              }}
+                            />
                             <span>License: {row.license_status}</span>
                             <span>Insurance: {row.insurance_status}</span>
-                            {row.license_url ? (
-                              <a
-                                href={row.license_url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="font-semibold text-blue-700 hover:underline"
-                              >
-                                View license
-                              </a>
-                            ) : null}
-                            {row.insurance_url ? (
-                              <a
-                                href={row.insurance_url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="font-semibold text-blue-700 hover:underline"
-                              >
-                                View insurance
-                              </a>
-                            ) : null}
+                            <div className="flex flex-col gap-1">
+                              <AdminDocumentViewer
+                                context="pre_trip"
+                                recordId={row.id}
+                                document="license"
+                                label="View license"
+                                available={Boolean(row.license_url)}
+                              />
+                              <AdminDocumentViewer
+                                context="pre_trip"
+                                recordId={row.id}
+                                document="insurance"
+                                label="View insurance"
+                                available={Boolean(row.insurance_url)}
+                              />
+                            </div>
                           </div>
                         </td>
                         <td className="px-4 py-3">
@@ -520,16 +528,22 @@ export default function AdminPreTrip() {
                         }
                         className="min-h-11 w-full rounded-lg border border-slate-300 px-3 py-2 text-base text-slate-900"
                       />
-                      {row.license_url ? (
-                        <a href={row.license_url} target="_blank" rel="noopener noreferrer" className="text-center text-sm font-semibold text-blue-700 underline">
-                          View license
-                        </a>
-                      ) : null}
-                      {row.insurance_url ? (
-                        <a href={row.insurance_url} target="_blank" rel="noopener noreferrer" className="text-center text-sm font-semibold text-blue-700 underline">
-                          View insurance
-                        </a>
-                      ) : null}
+                      <AdminDocumentViewer
+                        context="pre_trip"
+                        recordId={row.id}
+                        document="license"
+                        label="View license"
+                        available={Boolean(row.license_url)}
+                        linkClassName="justify-center text-sm font-semibold text-blue-700 hover:text-blue-800 hover:underline"
+                      />
+                      <AdminDocumentViewer
+                        context="pre_trip"
+                        recordId={row.id}
+                        document="insurance"
+                        label="View insurance"
+                        available={Boolean(row.insurance_url)}
+                        linkClassName="justify-center text-sm font-semibold text-blue-700 hover:text-blue-800 hover:underline"
+                      />
                     </AdminActions>
                   }
                 />

@@ -14,7 +14,7 @@ import AdminActions from '../components/admin/AdminActions';
 import StatusBadge from '../components/admin/StatusBadge';
 import LoadingSection from '../components/admin/LoadingSection';
 import PreTripMatchPicker from '../components/admin/PreTripMatchPicker';
-import { humanizeLabel, shortId } from '../components/admin/adminDisplay';
+import { ADMIN_MOBILE_STICKY_NOTICE_CLASS, humanizeLabel, shortId } from '../components/admin/adminDisplay';
 import { describeError, withTimeout } from '../lib/adminDiagnostics';
 
 type PreTripSubmissionRow = {
@@ -268,7 +268,12 @@ export default function AdminPreTrip() {
       }
     >
       {notice ? (
-        <div className={`mb-5 rounded-xl px-4 py-3 font-semibold ${notice.variant === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+        <div
+          className={`${ADMIN_MOBILE_STICKY_NOTICE_CLASS} ${
+            notice.variant === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+          }`}
+          role="status"
+        >
           {notice.text}
         </div>
       ) : null}
@@ -279,7 +284,7 @@ export default function AdminPreTrip() {
             <div className="text-sm font-semibold text-slate-600">Loading submissions…</div>
           </div>
         )}
-        <div className="border-b border-slate-200 p-6">
+        <div className="border-b border-slate-200 p-4 sm:p-6">
           <h2 className="text-2xl font-bold text-slate-900">Pre-Trip Submissions</h2>
           <p className="mt-1 text-sm text-slate-500">
             Off-platform waiver and insurance uploads. Pick a suggested booking, then approve or reject.
@@ -474,6 +479,24 @@ export default function AdminPreTrip() {
                   ]}
                   actions={
                     <AdminActions columns={1}>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          disabled={isPreTripRowBusy(row.id)}
+                          onClick={() => void runPreTripAdminAction(row, 'approve')}
+                          className="min-h-12 rounded-lg bg-green-600 px-2 py-3 text-base font-bold text-white disabled:opacity-40"
+                        >
+                          {preTripButtonLabel(row.id, 'approve', 'Approve')}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isPreTripRowBusy(row.id)}
+                          onClick={() => void runPreTripAdminAction(row, 'reject')}
+                          className="min-h-12 rounded-lg bg-red-600 px-2 py-3 text-base font-bold text-white disabled:opacity-40"
+                        >
+                          {preTripButtonLabel(row.id, 'reject', 'Reject')}
+                        </button>
+                      </div>
                       <PreTripMatchPicker
                         submissionId={row.id}
                         matchedBookingId={row.matched_booking_id}
@@ -495,26 +518,8 @@ export default function AdminPreTrip() {
                         onChange={(e) =>
                           setPreTripNotes((prev) => ({ ...prev, [row.id]: e.target.value }))
                         }
-                        className="min-h-11 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                        className="min-h-11 w-full rounded-lg border border-slate-300 px-3 py-2 text-base text-slate-900"
                       />
-                      <div className="grid grid-cols-2 gap-2">
-                        <button
-                          type="button"
-                          disabled={isPreTripRowBusy(row.id)}
-                          onClick={() => void runPreTripAdminAction(row, 'approve')}
-                          className="rounded-lg bg-green-600 px-2 py-2 text-sm font-semibold text-white disabled:opacity-40"
-                        >
-                          {preTripButtonLabel(row.id, 'approve', 'Approve')}
-                        </button>
-                        <button
-                          type="button"
-                          disabled={isPreTripRowBusy(row.id)}
-                          onClick={() => void runPreTripAdminAction(row, 'reject')}
-                          className="rounded-lg bg-red-600 px-2 py-2 text-sm font-semibold text-white disabled:opacity-40"
-                        >
-                          {preTripButtonLabel(row.id, 'reject', 'Reject')}
-                        </button>
-                      </div>
                       {row.license_url ? (
                         <a href={row.license_url} target="_blank" rel="noopener noreferrer" className="text-center text-sm font-semibold text-blue-700 underline">
                           View license

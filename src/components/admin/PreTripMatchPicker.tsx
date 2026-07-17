@@ -97,7 +97,7 @@ export default function PreTripMatchPicker({
         </div>
       ) : (
         <p className="text-sm font-semibold text-slate-700">
-          Step 1: Tap the customer&apos;s booking below. Step 2: Tap Approve.
+          Select the customer&apos;s booking below, then tap Approve.
         </p>
       )}
 

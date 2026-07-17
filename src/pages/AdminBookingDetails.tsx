@@ -1040,7 +1040,7 @@ export default function AdminBookingDetails() {
                 </div>
                 <div>
                   <h3 className="text-sm font-black uppercase tracking-wide text-slate-500">Dispute Notes</h3>
-                  <div className="mt-2 max-h-40 space-y-2 overflow-y-auto">
+                  <div className="mt-2 space-y-2 md:max-h-40 md:overflow-y-auto">
                     {disputeNotes.length === 0 ? (
                       <p className="mt-2 text-sm text-slate-500">No dispute notes yet.</p>
                     ) : (

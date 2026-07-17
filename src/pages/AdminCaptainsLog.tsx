@@ -11,6 +11,7 @@ import AdminResponsiveList from '../components/admin/AdminResponsiveList';
 import MobileAdminCard from '../components/admin/MobileAdminCard';
 import AdminActions from '../components/admin/AdminActions';
 import StatusBadge from '../components/admin/StatusBadge';
+import { ADMIN_MOBILE_TOAST_CLASS } from '../components/admin/adminDisplay';
 import { env } from '../config/env.js';
 import { uploadCaptainsLogHeroImage } from '../lib/storageUpload';
 import {
@@ -572,7 +573,7 @@ export default function AdminCaptainsLog() {
     >
       {notice && (
         <div
-          className={`fixed bottom-6 left-1/2 z-[100] max-w-md -translate-x-1/2 rounded-lg px-4 py-3 text-center text-sm font-semibold shadow-lg ${
+          className={`${ADMIN_MOBILE_TOAST_CLASS} ${
             notice.variant === 'success'
               ? 'bg-green-700 text-white'
               : notice.variant === 'info'

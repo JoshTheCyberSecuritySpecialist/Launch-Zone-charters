@@ -86,7 +86,7 @@ export default function AdminShell({
   const displayMobileTitle = mobileTitle || title;
 
   return (
-    <div className={`min-h-screen bg-slate-50 text-slate-900 ${className}`.trim()}>
+    <div className={`min-h-screen overflow-x-hidden bg-slate-50 text-slate-900 ${className}`.trim()}>
       <header className="sticky top-0 z-40 border-b border-slate-800 bg-slate-900 text-white">
         <div className={`mx-auto ${widthClass} px-3 sm:px-6 lg:px-8`}>
           <div className="flex min-h-14 items-center gap-2 py-2 sm:min-h-16 sm:gap-3">
@@ -184,8 +184,8 @@ export default function AdminShell({
       {belowHeader}
 
       <div
-        className={`mx-auto ${widthClass} px-3 py-5 sm:px-6 sm:py-6 lg:px-8 ${
-          showMobileBottomNav ? 'pb-24 md:pb-6' : ''
+        className={`mx-auto ${widthClass} max-w-full px-3 py-5 sm:px-6 sm:py-6 lg:px-8 ${
+          showMobileBottomNav ? 'pb-28 md:pb-6' : ''
         }`}
       >
         {children}

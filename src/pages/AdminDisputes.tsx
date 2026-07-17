@@ -628,7 +628,7 @@ export default function AdminDisputes() {
 
                 <div>
                   <h3 className="text-sm font-black uppercase tracking-wide text-slate-500">Admin Notes</h3>
-                  <div className="mt-3 max-h-48 space-y-2 overflow-y-auto">
+                  <div className="mt-3 space-y-2 md:max-h-48 md:overflow-y-auto">
                     {detail.notes.length === 0 ? (
                       <p className="text-sm text-slate-500">No notes yet.</p>
                     ) : (

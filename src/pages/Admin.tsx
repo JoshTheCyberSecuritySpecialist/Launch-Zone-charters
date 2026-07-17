@@ -21,7 +21,7 @@ import MobileAdminCard from '../components/admin/MobileAdminCard';
 import AdminActions from '../components/admin/AdminActions';
 import StatusBadge from '../components/admin/StatusBadge';
 import LoadingSection from '../components/admin/LoadingSection';
-import { humanizeLabel, shortId } from '../components/admin/adminDisplay';
+import { ADMIN_MOBILE_TOAST_CLASS, humanizeLabel, shortId } from '../components/admin/adminDisplay';
 import { env } from '../config/env.js';
 import {
   clearIncidentsByBookingIdCache,
@@ -998,7 +998,7 @@ export default function Admin({ onNavigate }: AdminProps) {
     <AdminShell title="All Bookings" subtitle="Search and manage reservations">
         {notice && (
           <div
-            className={`fixed bottom-24 left-1/2 z-[100] max-w-md -translate-x-1/2 rounded-lg px-4 py-3 text-center text-sm font-semibold shadow-lg md:bottom-6 ${
+            className={`${ADMIN_MOBILE_TOAST_CLASS} ${
               notice.variant === 'success'
                 ? 'bg-green-700 text-white'
                 : notice.variant === 'info'

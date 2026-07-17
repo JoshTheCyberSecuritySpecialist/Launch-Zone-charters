@@ -6551,6 +6551,20 @@ app.patch('/api/admin/pre-trip-submissions/:id', async (req, res) => {
       .eq('id', submissionId);
     if (uErr) return res.status(500).json({ error: uErr.message });
 
+    if (action === 'approve' || action === 'match') {
+      await bookingReliability.insertActivity(supabase, {
+        booking_id: bookingIdToMatch,
+        event_type: action === 'approve' ? 'pre_trip_approved' : 'pre_trip_matched',
+        actor_type: 'admin',
+        actor_id: adminUser.id || null,
+        message:
+          action === 'approve'
+            ? 'Pre-trip waiver and documents approved and linked to booking.'
+            : 'Pre-trip submission matched to booking.',
+        payload: { pre_trip_submission_id: submissionId },
+      });
+    }
+
     return res.json({ ok: true, admin_status: updates.admin_status, matched_booking_id: bookingIdToMatch });
   } catch (err) {
     console.error('[admin/pre-trip-submissions]', err);

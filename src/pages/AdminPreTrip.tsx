@@ -61,7 +61,10 @@ export default function AdminPreTrip() {
   const [preTripLoading, setPreTripLoading] = useState(false);
   const [selectedMatchId, setSelectedMatchId] = useState<Record<string, string>>({});
   const [preTripNotes, setPreTripNotes] = useState<Record<string, string>>({});
-  const [preTripActionBusy, setPreTripActionBusy] = useState<string | null>(null);
+  const [preTripActionBusy, setPreTripActionBusy] = useState<{
+    id: string;
+    action: 'match' | 'approve' | 'reject';
+  } | null>(null);
 
   const getAdminToken = useCallback(async (): Promise<string | null> => {
     const {
@@ -102,6 +105,20 @@ export default function AdminPreTrip() {
     if (authLoading || !isAdmin) return;
     void loadPreTripSubmissions();
   }, [authLoading, isAdmin, loadPreTripSubmissions]);
+
+  useEffect(() => {
+    setSelectedMatchId((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const row of preTripSubmissions) {
+        if (row.matched_booking_id && !next[row.id]) {
+          next[row.id] = row.matched_booking_id;
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [preTripSubmissions]);
 
   const loadPreTripSuggestions = useCallback(async (submissionId: string, query?: string) => {
     setPreTripSuggestionsLoading(submissionId);
@@ -176,11 +193,11 @@ export default function AdminPreTrip() {
       });
       return;
     }
-    setPreTripActionBusy(submissionId);
+    setPreTripActionBusy({ id: submissionId, action });
     try {
       const token = await getAdminToken();
       if (!token) {
-        window.alert('Sign in again to continue.');
+        setNotice({ variant: 'error', text: 'Sign in again to continue.' });
         return;
       }
       const out = await withTimeout(
@@ -193,7 +210,7 @@ export default function AdminPreTrip() {
         15000
       );
       if (!out.ok) {
-        window.alert(out.error || 'Action failed.');
+        setNotice({ variant: 'error', text: out.error || 'Action failed.' });
         return;
       }
       setNotice({ variant: 'success', text: `Submission ${action}ed successfully.` });
@@ -204,6 +221,19 @@ export default function AdminPreTrip() {
       setPreTripActionBusy(null);
     }
   };
+
+  const preTripButtonLabel = (
+    rowId: string,
+    action: 'match' | 'approve' | 'reject',
+    idle: string
+  ) => {
+    if (preTripActionBusy?.id !== rowId || preTripActionBusy.action !== action) return idle;
+    if (action === 'approve') return 'Approving…';
+    if (action === 'reject') return 'Rejecting…';
+    return 'Matching…';
+  };
+
+  const isPreTripRowBusy = (rowId: string) => preTripActionBusy?.id === rowId;
 
   if (authLoading) return <FullPageLoader message="Checking admin access…" />;
   if (!isAdmin) {
@@ -244,7 +274,7 @@ export default function AdminPreTrip() {
       ) : null}
 
       <div className="relative rounded-xl bg-white shadow">
-        {preTripLoading && (
+        {preTripLoading && !hasLoaded && (
           <div className="absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-white/60">
             <div className="text-sm font-semibold text-slate-600">Loading submissions…</div>
           </div>
@@ -368,27 +398,19 @@ export default function AdminPreTrip() {
                           <div className="flex flex-col gap-1">
                             <button
                               type="button"
-                              disabled={preTripActionBusy === row.id}
-                              onClick={() => void runPreTripAdminAction(row, 'match')}
-                              className="rounded bg-cyan-700 px-2 py-1 text-xs font-semibold text-white hover:bg-cyan-800 disabled:opacity-40"
-                            >
-                              Match
-                            </button>
-                            <button
-                              type="button"
-                              disabled={preTripActionBusy === row.id}
+                              disabled={isPreTripRowBusy(row.id)}
                               onClick={() => void runPreTripAdminAction(row, 'approve')}
                               className="rounded bg-green-600 px-2 py-1 text-xs font-semibold text-white hover:bg-green-700 disabled:opacity-40"
                             >
-                              Approve
+                              {preTripButtonLabel(row.id, 'approve', 'Approve')}
                             </button>
                             <button
                               type="button"
-                              disabled={preTripActionBusy === row.id}
+                              disabled={isPreTripRowBusy(row.id)}
                               onClick={() => void runPreTripAdminAction(row, 'reject')}
                               className="rounded bg-red-600 px-2 py-1 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-40"
                             >
-                              Reject
+                              {preTripButtonLabel(row.id, 'reject', 'Reject')}
                             </button>
                           </div>
                         </td>
@@ -475,30 +497,22 @@ export default function AdminPreTrip() {
                         }
                         className="min-h-11 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
                       />
-                      <div className="grid grid-cols-3 gap-2">
+                      <div className="grid grid-cols-2 gap-2">
                         <button
                           type="button"
-                          disabled={preTripActionBusy === row.id}
-                          onClick={() => void runPreTripAdminAction(row, 'match')}
-                          className="rounded-lg bg-cyan-700 px-2 py-2 text-sm font-semibold text-white disabled:opacity-40"
-                        >
-                          Match
-                        </button>
-                        <button
-                          type="button"
-                          disabled={preTripActionBusy === row.id}
+                          disabled={isPreTripRowBusy(row.id)}
                           onClick={() => void runPreTripAdminAction(row, 'approve')}
                           className="rounded-lg bg-green-600 px-2 py-2 text-sm font-semibold text-white disabled:opacity-40"
                         >
-                          Approve
+                          {preTripButtonLabel(row.id, 'approve', 'Approve')}
                         </button>
                         <button
                           type="button"
-                          disabled={preTripActionBusy === row.id}
+                          disabled={isPreTripRowBusy(row.id)}
                           onClick={() => void runPreTripAdminAction(row, 'reject')}
                           className="rounded-lg bg-red-600 px-2 py-2 text-sm font-semibold text-white disabled:opacity-40"
                         >
-                          Reject
+                          {preTripButtonLabel(row.id, 'reject', 'Reject')}
                         </button>
                       </div>
                       {row.license_url ? (

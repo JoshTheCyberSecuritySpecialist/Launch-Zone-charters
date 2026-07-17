@@ -243,7 +243,7 @@ export default function AdminMessages() {
         ) : (
         <AdminResponsiveList
           desktop={
-            <div className="max-h-[28rem] overflow-x-auto overflow-y-auto">
+            <div className="overflow-x-auto">
           {contactInboxLoading ? (
             <p className="px-4 py-6 text-sm text-slate-500">Loading messages…</p>
           ) : contactInbox.length === 0 ? (
@@ -337,7 +337,7 @@ export default function AdminMessages() {
             </div>
           }
           mobile={
-            <div className="max-h-[28rem] space-y-3 overflow-y-auto p-3">
+            <div className="space-y-3 p-3">
               {contactInboxLoading ? (
                 <p className="py-6 text-center text-sm text-slate-500">Loading messages…</p>
               ) : contactInbox.length === 0 ? (

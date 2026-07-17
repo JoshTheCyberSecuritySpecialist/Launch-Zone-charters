@@ -26,7 +26,7 @@ type PendingPreTrip = {
   admin_status: string;
   created_at: string;
   customer_name?: string | null;
-  customer_email?: string | null;
+  email?: string | null;
   matched_booking_id?: string | null;
 };
 
@@ -52,7 +52,7 @@ export default function AdminApprovals() {
             .limit(50),
           supabase
             .from('pre_trip_submissions')
-            .select('id, admin_status, created_at, customer_name, customer_email, matched_booking_id')
+            .select('id, admin_status, created_at, customer_name, email, matched_booking_id')
             .eq('admin_status', 'pending')
             .order('created_at', { ascending: false })
             .limit(50),
@@ -201,7 +201,7 @@ export default function AdminApprovals() {
               <MobileAdminCard
                 key={row.id}
                 title={row.customer_name || 'Customer'}
-                subtitle={row.customer_email || undefined}
+                subtitle={row.email || undefined}
                 badge={<StatusBadge tone="warning">{humanizeLabel(row.admin_status)}</StatusBadge>}
                 fields={[
                   {

@@ -998,7 +998,7 @@ export default function Admin({ onNavigate }: AdminProps) {
     <AdminShell title="All Bookings" subtitle="Search and manage reservations">
         {notice && (
           <div
-            className={`fixed bottom-6 left-1/2 z-[100] max-w-md -translate-x-1/2 rounded-lg px-4 py-3 text-center text-sm font-semibold shadow-lg ${
+            className={`fixed bottom-24 left-1/2 z-[100] max-w-md -translate-x-1/2 rounded-lg px-4 py-3 text-center text-sm font-semibold shadow-lg md:bottom-6 ${
               notice.variant === 'success'
                 ? 'bg-green-700 text-white'
                 : notice.variant === 'info'

@@ -816,13 +816,13 @@ export default function AdminCaptainsLog() {
           <h2 className="text-lg font-bold text-slate-900">Recent Captain&apos;s Log articles</h2>
           <p className="text-xs text-slate-500">
             Newest first (up to 500 articles). Refreshes when you publish or delete here, or after a successful
-            generation run. Scroll the list to see older posts.
+            generation run.
           </p>
         </div>
 
         <AdminResponsiveList
           desktop={
-            <div className="max-h-[min(70vh,36rem)] overflow-x-auto overflow-y-auto">
+            <div className="overflow-x-auto">
               {captainsLogArticles.length === 0 ? (
                 <p className="px-4 py-6 text-sm text-slate-500">No articles yet.</p>
               ) : (
@@ -887,7 +887,7 @@ export default function AdminCaptainsLog() {
             </div>
           }
           mobile={
-            <div className="max-h-[min(70vh,36rem)] space-y-3 overflow-y-auto p-3">
+            <div className="space-y-3 p-3">
               {captainsLogArticles.length === 0 ? (
                 <p className="py-6 text-center text-sm text-slate-500">No articles yet.</p>
               ) : (
@@ -946,7 +946,7 @@ export default function AdminCaptainsLog() {
 
         <AdminResponsiveList
           desktop={
-            <div className="max-h-72 overflow-x-auto overflow-y-auto">
+            <div className="overflow-x-auto">
               {subscribersLoading ? (
                 <p className="px-4 py-6 text-sm text-slate-500">Loading subscribers…</p>
               ) : subscribersError ? (
@@ -985,7 +985,7 @@ export default function AdminCaptainsLog() {
             </div>
           }
           mobile={
-            <div className="max-h-72 space-y-3 overflow-y-auto p-3">
+            <div className="space-y-3 p-3">
               {subscribersLoading ? (
                 <p className="py-6 text-center text-sm text-slate-500">Loading subscribers…</p>
               ) : subscribersError ? (
@@ -1032,7 +1032,7 @@ export default function AdminCaptainsLog() {
             </button>
           </div>
         </div>
-        <div className="max-h-72 overflow-x-auto overflow-y-auto">
+        <div className="overflow-x-auto">
           {alertsLoading ? (
             <p className="px-4 py-6 text-sm text-slate-500">Loading alerts…</p>
           ) : alertsError ? (

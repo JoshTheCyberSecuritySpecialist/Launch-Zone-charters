@@ -3,7 +3,6 @@ import { Link } from 'react-router-dom';
 import { ArrowLeft, RefreshCw } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { logSupabaseError } from '../lib/supabaseErrors';
-import { adminUpdatePreTripSubmission, fetchPreTripMatchSuggestions, type PreTripMatchSuggestion } from '../lib/publicBooking';
 import { useAuth } from '../contexts/useAuth';
 import FullPageLoader from '../components/FullPageLoader';
 import AdminShell from '../components/admin/AdminShell';
@@ -13,85 +12,25 @@ import MobileAdminCard from '../components/admin/MobileAdminCard';
 import AdminActions from '../components/admin/AdminActions';
 import StatusBadge from '../components/admin/StatusBadge';
 import LoadingSection from '../components/admin/LoadingSection';
-import PreTripMatchPicker from '../components/admin/PreTripMatchPicker';
-import AdminDocumentViewer from '../components/admin/AdminDocumentViewer';
 import AdminSignatureVerification from '../components/admin/AdminSignatureVerification';
-import PreTripRejectModal from '../components/admin/PreTripRejectModal';
 import { ADMIN_MOBILE_STICKY_NOTICE_CLASS, humanizeLabel, shortId } from '../components/admin/adminDisplay';
+import {
+  filterPreTripSubmissions,
+  formatReviewedAt,
+  preTripStatusTone,
+  tripTypeLabel,
+  type PreTripListFilter,
+  type PreTripSubmissionRow,
+} from '../lib/preTripAdminShared';
 import { describeError, withTimeout } from '../lib/adminDiagnostics';
-
-type PreTripSubmissionRow = {
-  id: string;
-  matched_booking_id: string | null;
-  customer_name: string | null;
-  email: string;
-  phone: string | null;
-  trip_type: string;
-  selected_boat_reg_no: string | null;
-  groupon_code: string | null;
-  requested_trip_date: string | null;
-  waiver_signed: boolean;
-  waiver_signed_at: string | null;
-  waiver_signature: string | null;
-  license_url: string | null;
-  insurance_url: string | null;
-  license_status: string;
-  insurance_status: string;
-  admin_status: string;
-  admin_notes: string | null;
-  reviewed_at: string | null;
-  reviewed_by: string | null;
-  rejection_reason: string | null;
-  created_at: string;
-};
-
-function isPreTripTerminal(status: string): boolean {
-  return status === 'approved' || status === 'rejected';
-}
-
-function formatReviewedAt(value: string | null | undefined): string {
-  if (!value) return '';
-  const d = new Date(value);
-  if (!Number.isFinite(d.getTime())) return '';
-  return d.toLocaleString();
-}
-
-function tripTypeLabel(tripType: string): string {
-  switch (tripType) {
-    case 'pontoon_rental':
-      return 'Pontoon Rental';
-    case 'center_console_rental':
-      return 'Center Console Rental';
-    case 'captain_charter':
-      return 'Captain-Led Charter';
-    default:
-      return tripType;
-  }
-}
 
 export default function AdminPreTrip() {
   const { user, isAdmin, loading: authLoading } = useAuth();
   const [notice, setNotice] = useState<{ variant: 'success' | 'error'; text: string } | null>(null);
   const [hasLoaded, setHasLoaded] = useState(false);
-
   const [preTripSubmissions, setPreTripSubmissions] = useState<PreTripSubmissionRow[]>([]);
-  const [preTripSuggestions, setPreTripSuggestions] = useState<Record<string, PreTripMatchSuggestion[]>>({});
-  const [preTripSuggestionsLoading, setPreTripSuggestionsLoading] = useState<string | null>(null);
   const [preTripLoading, setPreTripLoading] = useState(false);
-  const [selectedMatchId, setSelectedMatchId] = useState<Record<string, string>>({});
-  const [preTripNotes, setPreTripNotes] = useState<Record<string, string>>({});
-  const [preTripActionBusy, setPreTripActionBusy] = useState<{
-    id: string;
-    action: 'match' | 'approve' | 'reject';
-  } | null>(null);
-  const [rejectModalRow, setRejectModalRow] = useState<PreTripSubmissionRow | null>(null);
-
-  const getAdminToken = useCallback(async (): Promise<string | null> => {
-    const {
-      data: { session },
-    } = await withTimeout('Admin session lookup', supabase.auth.getSession(), 12000);
-    return session?.access_token || null;
-  }, []);
+  const [listFilter, setListFilter] = useState<PreTripListFilter>('review');
 
   const loadPreTripSubmissions = useCallback(async () => {
     if (!isAdmin) {
@@ -126,163 +65,14 @@ export default function AdminPreTrip() {
     void loadPreTripSubmissions();
   }, [authLoading, isAdmin, loadPreTripSubmissions]);
 
-  useEffect(() => {
-    setSelectedMatchId((prev) => {
-      let changed = false;
-      const next = { ...prev };
-      for (const row of preTripSubmissions) {
-        if (row.matched_booking_id && !next[row.id]) {
-          next[row.id] = row.matched_booking_id;
-          changed = true;
-        }
-      }
-      return changed ? next : prev;
-    });
-  }, [preTripSubmissions]);
-
-  const loadPreTripSuggestions = useCallback(async (submissionId: string, query?: string) => {
-    setPreTripSuggestionsLoading(submissionId);
-    try {
-      const token = await getAdminToken();
-      if (!token) {
-        setNotice({ variant: 'error', text: 'Sign in again to load booking matches.' });
-        return;
-      }
-      const out = await withTimeout(
-        'Admin pre-trip match suggestions',
-        fetchPreTripMatchSuggestions(token, submissionId, query),
-        15000
-      );
-      if (out.ok) {
-        setPreTripSuggestions((prev) => ({ ...prev, [submissionId]: out.suggestions }));
-        if (out.suggestions.length === 1) {
-          setSelectedMatchId((prev) => ({ ...prev, [submissionId]: out.suggestions[0].id }));
-        }
-      } else {
-        setPreTripSuggestions((prev) => ({ ...prev, [submissionId]: [] }));
-        setNotice({ variant: 'error', text: out.error || 'Could not search for bookings.' });
-      }
-    } catch (err) {
-      setNotice({ variant: 'error', text: describeError(err, 'Could not load match suggestions.') });
-    } finally {
-      setPreTripSuggestionsLoading(null);
-    }
-  }, [getAdminToken]);
-
-  useEffect(() => {
-    if (authLoading || !isAdmin || !hasLoaded) return;
-    const needsSuggestions = preTripSubmissions.filter(
-      (row) =>
-        ['pending', 'matched'].includes(row.admin_status) &&
-        !row.matched_booking_id &&
-        preTripSuggestions[row.id] === undefined &&
-        preTripSuggestionsLoading !== row.id
-    );
-    for (const row of needsSuggestions.slice(0, 8)) {
-      void loadPreTripSuggestions(row.id);
-    }
-  }, [
-    authLoading,
-    hasLoaded,
-    isAdmin,
-    loadPreTripSuggestions,
-    preTripSubmissions,
-    preTripSuggestions,
-    preTripSuggestionsLoading,
-  ]);
-
-  const resolveBookingId = (row: PreTripSubmissionRow): string | null => {
-    const picked = selectedMatchId[row.id]?.trim();
-    if (picked) return picked;
-    if (row.matched_booking_id) return row.matched_booking_id;
-    const suggestions = preTripSuggestions[row.id] || [];
-    if (suggestions.length === 1) return suggestions[0].id;
-    return null;
-  };
-
-  const runPreTripAdminAction = async (
-    row: PreTripSubmissionRow,
-    action: 'match' | 'approve' | 'reject',
-    rejectionReason?: string
-  ) => {
-    const submissionId = row.id;
-    if (isPreTripTerminal(row.admin_status)) {
-      setNotice({
-        variant: 'error',
-        text: `This submission is already ${row.admin_status}.`,
-      });
-      return;
-    }
-    const matched_booking_id = resolveBookingId(row);
-    if ((action === 'match' || action === 'approve') && !matched_booking_id) {
-      setNotice({
-        variant: 'error',
-        text: 'Tap a booking card first, then tap Approve.',
-      });
-      return;
-    }
-    if (action === 'reject' && !rejectionReason?.trim()) {
-      setRejectModalRow(row);
-      return;
-    }
-    setPreTripActionBusy({ id: submissionId, action });
-    try {
-      const token = await getAdminToken();
-      if (!token) {
-        setNotice({ variant: 'error', text: 'Sign in again to continue.' });
-        return;
-      }
-      const out = await withTimeout(
-        'Admin pre-trip action',
-        adminUpdatePreTripSubmission(token, submissionId, {
-          action,
-          matched_booking_id: matched_booking_id || undefined,
-          admin_notes: preTripNotes[submissionId]?.trim() || undefined,
-          rejection_reason: rejectionReason?.trim() || undefined,
-        }),
-        15000
-      );
-      if (!out.ok) {
-        setNotice({ variant: 'error', text: out.error || 'Action failed.' });
-        return;
-      }
-      setRejectModalRow(null);
-      setNotice({
-        variant: 'success',
-        text:
-          action === 'reject'
-            ? 'Submission rejected.'
-            : action === 'approve'
-              ? 'Submission approved and linked to booking.'
-              : 'Submission matched to booking.',
-      });
-      void loadPreTripSubmissions();
-    } catch (err) {
-      setNotice({ variant: 'error', text: describeError(err, 'Pre-trip action failed.') });
-    } finally {
-      setPreTripActionBusy(null);
-    }
-  };
-
-  const preTripButtonLabel = (
-    rowId: string,
-    action: 'match' | 'approve' | 'reject',
-    idle: string
-  ) => {
-    if (preTripActionBusy?.id !== rowId || preTripActionBusy.action !== action) return idle;
-    if (action === 'approve') return 'Approving…';
-    if (action === 'reject') return 'Rejecting…';
-    return 'Matching…';
-  };
-
-  const isPreTripRowBusy = (rowId: string) => preTripActionBusy?.id === rowId;
-
   if (authLoading) return <FullPageLoader message="Checking admin access…" />;
   if (!isAdmin) {
     return <AdminAccessDenied signedIn={Boolean(user)} />;
   }
 
   const initialLoading = preTripLoading && !hasLoaded;
+  const visibleSubmissions = filterPreTripSubmissions(preTripSubmissions, listFilter);
+  const reviewCount = filterPreTripSubmissions(preTripSubmissions, 'review').length;
 
   return (
     <AdminShell
@@ -327,321 +117,232 @@ export default function AdminPreTrip() {
           </div>
         )}
         <div className="border-b border-slate-200 p-4 sm:p-6">
-          <h2 className="text-2xl font-bold text-slate-900">Pre-Trip Submissions</h2>
-          <p className="mt-1 text-sm text-slate-500">
-            Off-platform waiver and insurance uploads. Pick a suggested booking, then approve or reject.
-          </p>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <h2 className="text-2xl font-bold text-slate-900">Pre-Trip Submissions</h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Off-platform waiver and insurance uploads. Open a submission to review documents and approve.
+              </p>
+            </div>
+            <div className="flex rounded-lg border border-slate-200 bg-slate-50 p-1">
+              <button
+                type="button"
+                onClick={() => setListFilter('review')}
+                className={`min-h-10 rounded-md px-3 py-2 text-sm font-bold ${
+                  listFilter === 'review' ? 'bg-white text-amber-800 shadow-sm' : 'text-slate-600'
+                }`}
+              >
+                Needs review ({reviewCount})
+              </button>
+              <button
+                type="button"
+                onClick={() => setListFilter('all')}
+                className={`min-h-10 rounded-md px-3 py-2 text-sm font-bold ${
+                  listFilter === 'all' ? 'bg-white text-amber-800 shadow-sm' : 'text-slate-600'
+                }`}
+              >
+                All ({preTripSubmissions.length})
+              </button>
+            </div>
+          </div>
         </div>
         {initialLoading ? (
           <LoadingSection message="Loading pre-trip submissions…" className="m-4" />
         ) : (
-        <AdminResponsiveList
-          desktop={
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-slate-50">
-                  <tr>
-                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-600">Customer</th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-600">Trip</th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-600">Docs</th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-600">Status</th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-600">Match booking</th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-600">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-200">
-                  {preTripSubmissions.length === 0 ? (
+          <AdminResponsiveList
+            desktop={
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50">
                     <tr>
-                      <td colSpan={6} className="px-4 py-8 text-center text-slate-500">
-                        No pre-trip submissions yet.
-                      </td>
+                      <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-600">Customer</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-600">Trip</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-600">Docs</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-600">Status</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-600">Review</th>
                     </tr>
-                  ) : (
-                    preTripSubmissions.map((row) => (
-                      <tr key={row.id} className="align-top hover:bg-slate-50">
-                        <td className="px-4 py-3">
-                          <div className="font-semibold text-slate-900">{row.customer_name || '—'}</div>
-                          <div className="text-slate-600">{row.email}</div>
-                          <div className="text-xs text-slate-500">{row.phone || '—'}</div>
-                          {row.groupon_code ? (
-                            <div className="mt-1 text-xs font-medium text-emerald-700">Groupon: {row.groupon_code}</div>
-                          ) : null}
-                          <div className="mt-1 font-mono text-[10px] text-slate-400" title={row.id}>{shortId(row.id)}</div>
-                        </td>
-                        <td className="px-4 py-3 text-slate-800">
-                          <div>{tripTypeLabel(row.trip_type)}</div>
-                          {row.requested_trip_date ? (
-                            <div className="text-xs text-slate-500">
-                              {new Date(row.requested_trip_date).toLocaleString()}
-                            </div>
-                          ) : null}
-                          {row.selected_boat_reg_no ? (
-                            <div className="text-xs text-slate-500">Buoy {row.selected_boat_reg_no}</div>
-                          ) : null}
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="flex flex-col gap-2 text-xs">
-                            <AdminSignatureVerification
-                              variant="panel"
-                              mode="pre_trip"
-                              data={{
-                                id: row.id,
-                                waiver_signed: row.waiver_signed,
-                                waiver_signature: row.waiver_signature,
-                                waiver_signed_at: row.waiver_signed_at,
-                                created_at: row.created_at,
-                              }}
-                            />
-                            <span>License: {row.license_status}</span>
-                            <span>Insurance: {row.insurance_status}</span>
-                            <div className="flex flex-col gap-1">
-                              <AdminDocumentViewer
-                                context="pre_trip"
-                                recordId={row.id}
-                                document="license"
-                                label="View license"
-                                available={Boolean(row.license_url)}
-                              />
-                              <AdminDocumentViewer
-                                context="pre_trip"
-                                recordId={row.id}
-                                document="insurance"
-                                label="View insurance"
-                                available={Boolean(row.insurance_url)}
-                              />
-                            </div>
-                          </div>
-                        </td>
-                        <td className="px-4 py-3">
-                          <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold capitalize text-slate-800">
-                            {row.admin_status.replace(/_/g, ' ')}
-                          </span>
-                          {row.matched_booking_id ? (
-                            <div className="mt-1 font-mono text-[10px] text-slate-500" title={row.matched_booking_id}>
-                              → {shortId(row.matched_booking_id)}
-                            </div>
-                          ) : null}
-                          {row.reviewed_at ? (
-                            <div className="mt-1 text-[10px] text-slate-500">
-                              Reviewed {formatReviewedAt(row.reviewed_at)}
-                            </div>
-                          ) : null}
-                          {row.rejection_reason ? (
-                            <div className="mt-1 rounded border border-red-200 bg-red-50 px-2 py-1 text-[10px] text-red-800">
-                              {row.rejection_reason}
-                            </div>
-                          ) : null}
-                        </td>
-                        <td className="px-4 py-3">
-                          <PreTripMatchPicker
-                            submissionId={row.id}
-                            matchedBookingId={row.matched_booking_id}
-                            customerEmail={row.email}
-                            customerName={row.customer_name}
-                            suggestions={preTripSuggestions[row.id]}
-                            suggestionsLoading={preTripSuggestionsLoading === row.id}
-                            selectedId={selectedMatchId[row.id] || null}
-                            onSelect={(bookingId) =>
-                              setSelectedMatchId((prev) => ({ ...prev, [row.id]: bookingId }))
-                            }
-                            onLoadSuggestions={() => void loadPreTripSuggestions(row.id)}
-                            onSearch={(query) => void loadPreTripSuggestions(row.id, query)}
-                          />
-                          <textarea
-                            placeholder="Admin notes"
-                            rows={2}
-                            value={preTripNotes[row.id] ?? row.admin_notes ?? ''}
-                            onChange={(e) =>
-                              setPreTripNotes((prev) => ({ ...prev, [row.id]: e.target.value }))
-                            }
-                            className="mt-2 w-full min-w-[180px] rounded border border-slate-300 px-2 py-1 text-xs"
-                          />
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="flex flex-col gap-1">
-                            <button
-                              type="button"
-                              disabled={isPreTripRowBusy(row.id) || isPreTripTerminal(row.admin_status)}
-                              onClick={() => void runPreTripAdminAction(row, 'approve')}
-                              className="rounded bg-green-600 px-2 py-1 text-xs font-semibold text-white hover:bg-green-700 disabled:opacity-40"
-                            >
-                              {preTripButtonLabel(row.id, 'approve', 'Approve')}
-                            </button>
-                            <button
-                              type="button"
-                              disabled={isPreTripRowBusy(row.id) || isPreTripTerminal(row.admin_status)}
-                              onClick={() => setRejectModalRow(row)}
-                              className="rounded bg-red-600 px-2 py-1 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-40"
-                            >
-                              {preTripButtonLabel(row.id, 'reject', 'Reject')}
-                            </button>
-                          </div>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200">
+                    {visibleSubmissions.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="px-4 py-8 text-center text-slate-500">
+                          {listFilter === 'review'
+                            ? 'No submissions need review right now.'
+                            : 'No pre-trip submissions yet.'}
                         </td>
                       </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          }
-          mobile={
-            <div className="space-y-3 p-3">
-              {preTripSubmissions.length === 0 ? (
-                <p className="py-6 text-center text-sm text-slate-500">No pre-trip submissions yet.</p>
-              ) : null}
-              {preTripSubmissions.map((row) => (
-                <MobileAdminCard
-                  key={`pre-m-${row.id}`}
-                  title={row.customer_name || 'Customer'}
-                  subtitle={row.email}
-                  badge={
-                    <StatusBadge tone={row.admin_status === 'approved' ? 'success' : row.admin_status === 'rejected' ? 'danger' : 'warning'}>
-                      {humanizeLabel(row.admin_status)}
-                    </StatusBadge>
-                  }
-                  fields={[
-                    { label: 'Phone', value: row.phone || '—', hideIfEmpty: true },
-                    { label: 'Trip', value: tripTypeLabel(row.trip_type) },
-                    {
-                      label: 'Requested',
-                      value: row.requested_trip_date
-                        ? new Date(row.requested_trip_date).toLocaleString()
-                        : '—',
-                      hideIfEmpty: true,
-                    },
-                    {
-                      label: 'Waiver',
-                      value: row.waiver_signed ? (
-                        <AdminSignatureVerification
-                          variant="compact"
-                          mode="pre_trip"
-                          data={{
-                            waiver_signed: row.waiver_signed,
-                            waiver_signature: row.waiver_signature,
-                            waiver_signed_at: row.waiver_signed_at,
-                            created_at: row.created_at,
-                          }}
-                        />
-                      ) : (
-                        'Not signed'
-                      ),
-                    },
-                    {
-                      label: 'Docs',
-                      value: `License ${humanizeLabel(row.license_status)} · Insurance ${humanizeLabel(row.insurance_status)}`,
-                    },
-                    {
-                      label: 'Status',
-                      value: row.rejection_reason
-                        ? `Rejected — ${row.rejection_reason}`
-                        : row.reviewed_at
-                          ? `${humanizeLabel(row.admin_status)} · ${formatReviewedAt(row.reviewed_at)}`
-                          : humanizeLabel(row.admin_status),
-                    },
-                    {
-                      label: 'Matched',
-                      value: row.matched_booking_id ? (
+                    ) : (
+                      visibleSubmissions.map((row) => (
+                        <tr key={row.id} className="align-top hover:bg-slate-50">
+                          <td className="px-4 py-3">
+                            <div className="font-semibold text-slate-900">{row.customer_name || '—'}</div>
+                            <div className="text-slate-600">{row.email}</div>
+                            <div className="text-xs text-slate-500">{row.phone || '—'}</div>
+                            {row.groupon_code ? (
+                              <div className="mt-1 text-xs font-medium text-emerald-700">Groupon: {row.groupon_code}</div>
+                            ) : null}
+                            <Link
+                              to={`/admin/pre-trip/${row.id}`}
+                              className="mt-2 inline-flex text-xs font-bold text-amber-800 underline"
+                            >
+                              Open submission
+                            </Link>
+                          </td>
+                          <td className="px-4 py-3 text-slate-800">
+                            <div>{tripTypeLabel(row.trip_type)}</div>
+                            {row.requested_trip_date ? (
+                              <div className="text-xs text-slate-500">
+                                {new Date(row.requested_trip_date).toLocaleString()}
+                              </div>
+                            ) : null}
+                            {row.selected_boat_reg_no ? (
+                              <div className="text-xs text-slate-500">Buoy {row.selected_boat_reg_no}</div>
+                            ) : null}
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex flex-col gap-2 text-xs">
+                              {row.waiver_signed ? (
+                                <AdminSignatureVerification
+                                  variant="compact"
+                                  mode="pre_trip"
+                                  data={{
+                                    waiver_signed: row.waiver_signed,
+                                    waiver_signature: row.waiver_signature,
+                                    waiver_signed_at: row.waiver_signed_at,
+                                    created_at: row.created_at,
+                                  }}
+                                />
+                              ) : (
+                                <span className="text-slate-500">Waiver not signed</span>
+                              )}
+                              <span>License: {humanizeLabel(row.license_status)}</span>
+                              <span>Insurance: {humanizeLabel(row.insurance_status)}</span>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3">
+                            <StatusBadge tone={preTripStatusTone(row.admin_status)}>
+                              {humanizeLabel(row.admin_status)}
+                            </StatusBadge>
+                            {row.matched_booking_id ? (
+                              <div className="mt-1 font-mono text-[10px] text-slate-500" title={row.matched_booking_id}>
+                                → {shortId(row.matched_booking_id)}
+                              </div>
+                            ) : null}
+                            {row.reviewed_at ? (
+                              <div className="mt-1 text-[10px] text-slate-500">
+                                Reviewed {formatReviewedAt(row.reviewed_at)}
+                              </div>
+                            ) : null}
+                            {row.rejection_reason ? (
+                              <div className="mt-1 rounded border border-red-200 bg-red-50 px-2 py-1 text-[10px] text-red-800">
+                                {row.rejection_reason}
+                              </div>
+                            ) : null}
+                          </td>
+                          <td className="px-4 py-3">
+                            <Link
+                              to={`/admin/pre-trip/${row.id}`}
+                              className="inline-flex rounded-lg bg-amber-600 px-3 py-2 text-xs font-bold text-white hover:bg-amber-700"
+                            >
+                              Review
+                            </Link>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            }
+            mobile={
+              <div className="space-y-3 p-3">
+                {visibleSubmissions.length === 0 ? (
+                  <p className="py-6 text-center text-sm text-slate-500">
+                    {listFilter === 'review'
+                      ? 'No submissions need review right now.'
+                      : 'No pre-trip submissions yet.'}
+                  </p>
+                ) : null}
+                {visibleSubmissions.map((row) => (
+                  <MobileAdminCard
+                    key={`pre-m-${row.id}`}
+                    title={row.customer_name || 'Customer'}
+                    subtitle={row.email}
+                    badge={
+                      <StatusBadge tone={preTripStatusTone(row.admin_status)}>
+                        {humanizeLabel(row.admin_status)}
+                      </StatusBadge>
+                    }
+                    fields={[
+                      { label: 'Phone', value: row.phone || '—', hideIfEmpty: true },
+                      { label: 'Trip', value: tripTypeLabel(row.trip_type) },
+                      {
+                        label: 'Requested',
+                        value: row.requested_trip_date
+                          ? new Date(row.requested_trip_date).toLocaleString()
+                          : '—',
+                        hideIfEmpty: true,
+                      },
+                      {
+                        label: 'Waiver',
+                        value: row.waiver_signed ? (
+                          <AdminSignatureVerification
+                            variant="compact"
+                            mode="pre_trip"
+                            data={{
+                              waiver_signed: row.waiver_signed,
+                              waiver_signature: row.waiver_signature,
+                              waiver_signed_at: row.waiver_signed_at,
+                              created_at: row.created_at,
+                            }}
+                          />
+                        ) : (
+                          'Not signed'
+                        ),
+                      },
+                      {
+                        label: 'Docs',
+                        value: `License ${humanizeLabel(row.license_status)} · Insurance ${humanizeLabel(row.insurance_status)}`,
+                      },
+                      {
+                        label: 'Status',
+                        value: row.rejection_reason
+                          ? `Rejected — ${row.rejection_reason}`
+                          : row.reviewed_at
+                            ? `${humanizeLabel(row.admin_status)} · ${formatReviewedAt(row.reviewed_at)}`
+                            : humanizeLabel(row.admin_status),
+                      },
+                      {
+                        label: 'Matched',
+                        value: row.matched_booking_id ? (
+                          <Link
+                            to={`/admin/bookings/${row.matched_booking_id}`}
+                            className="font-semibold text-amber-800 underline"
+                          >
+                            Open booking {shortId(row.matched_booking_id, 10)}
+                          </Link>
+                        ) : (
+                          '—'
+                        ),
+                      },
+                    ]}
+                    actions={
+                      <AdminActions columns={1}>
                         <Link
-                          to={`/admin/bookings/${row.matched_booking_id}`}
-                          className="font-semibold text-amber-800 underline"
+                          to={`/admin/pre-trip/${row.id}`}
+                          className="min-h-12 rounded-lg bg-amber-600 px-3 py-3 text-center text-base font-bold text-white"
                         >
-                          Open booking {shortId(row.matched_booking_id, 10)}
+                          Review submission
                         </Link>
-                      ) : (
-                        '—'
-                      ),
-                    },
-                    {
-                      label: 'Ref',
-                      value: (
-                        <span className="font-mono text-xs" title={row.id}>
-                          {shortId(row.id)}
-                        </span>
-                      ),
-                    },
-                  ]}
-                  actions={
-                    <AdminActions columns={1}>
-                      <div className="grid grid-cols-2 gap-2">
-                        <button
-                          type="button"
-                          disabled={isPreTripRowBusy(row.id) || isPreTripTerminal(row.admin_status)}
-                          onClick={() => void runPreTripAdminAction(row, 'approve')}
-                          className="min-h-12 rounded-lg bg-green-600 px-2 py-3 text-base font-bold text-white disabled:opacity-40"
-                        >
-                          {preTripButtonLabel(row.id, 'approve', 'Approve')}
-                        </button>
-                        <button
-                          type="button"
-                          disabled={isPreTripRowBusy(row.id) || isPreTripTerminal(row.admin_status)}
-                          onClick={() => setRejectModalRow(row)}
-                          className="min-h-12 rounded-lg bg-red-600 px-2 py-3 text-base font-bold text-white disabled:opacity-40"
-                        >
-                          {preTripButtonLabel(row.id, 'reject', 'Reject')}
-                        </button>
-                      </div>
-                      <PreTripMatchPicker
-                        submissionId={row.id}
-                        matchedBookingId={row.matched_booking_id}
-                        customerEmail={row.email}
-                        customerName={row.customer_name}
-                        suggestions={preTripSuggestions[row.id]}
-                        suggestionsLoading={preTripSuggestionsLoading === row.id}
-                        selectedId={selectedMatchId[row.id] || null}
-                        onSelect={(bookingId) =>
-                          setSelectedMatchId((prev) => ({ ...prev, [row.id]: bookingId }))
-                        }
-                        onLoadSuggestions={() => void loadPreTripSuggestions(row.id)}
-                        onSearch={(query) => void loadPreTripSuggestions(row.id, query)}
-                      />
-                      <textarea
-                        placeholder="Admin notes"
-                        rows={2}
-                        value={preTripNotes[row.id] ?? row.admin_notes ?? ''}
-                        onChange={(e) =>
-                          setPreTripNotes((prev) => ({ ...prev, [row.id]: e.target.value }))
-                        }
-                        className="min-h-11 w-full rounded-lg border border-slate-300 px-3 py-2 text-base text-slate-900"
-                      />
-                      <AdminDocumentViewer
-                        context="pre_trip"
-                        recordId={row.id}
-                        document="license"
-                        label="View license"
-                        available={Boolean(row.license_url)}
-                        linkClassName="justify-center text-sm font-semibold text-blue-700 hover:text-blue-800 hover:underline"
-                      />
-                      <AdminDocumentViewer
-                        context="pre_trip"
-                        recordId={row.id}
-                        document="insurance"
-                        label="View insurance"
-                        available={Boolean(row.insurance_url)}
-                        linkClassName="justify-center text-sm font-semibold text-blue-700 hover:text-blue-800 hover:underline"
-                      />
-                    </AdminActions>
-                  }
-                />
-              ))}
-            </div>
-          }
-        />
+                      </AdminActions>
+                    }
+                  />
+                ))}
+              </div>
+            }
+          />
         )}
       </div>
-
-      <PreTripRejectModal
-        open={Boolean(rejectModalRow)}
-        customerLabel={rejectModalRow?.customer_name || rejectModalRow?.email || undefined}
-        busy={rejectModalRow != null && preTripActionBusy?.id === rejectModalRow.id && preTripActionBusy.action === 'reject'}
-        onClose={() => {
-          if (preTripActionBusy?.action === 'reject') return;
-          setRejectModalRow(null);
-        }}
-        onConfirm={(reason) => {
-          if (!rejectModalRow) return;
-          void runPreTripAdminAction(rejectModalRow, 'reject', reason);
-        }}
-      />
     </AdminShell>
   );
 }

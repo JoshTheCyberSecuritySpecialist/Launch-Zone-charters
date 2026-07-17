@@ -242,10 +242,10 @@ export default function AdminApprovals() {
                 actions={
                   <AdminActions>
                     <Link
-                      to="/admin/pre-trip"
+                      to={`/admin/pre-trip/${row.id}`}
                       className="rounded-lg bg-amber-600 px-3 py-2 text-center text-sm font-semibold text-white"
                     >
-                      Review in pre-trip
+                      Review submission
                     </Link>
                   </AdminActions>
                 }

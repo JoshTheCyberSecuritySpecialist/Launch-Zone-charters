@@ -3680,8 +3680,9 @@ app.get('/api/admin/documents/download', async (req, res) => {
       document: req.query.document,
     });
     const file = await adminDocumentAccessService.downloadDocumentBuffer(supabase, resolved);
+    const safeName = adminDocumentAccessService.safeContentDispositionFilename(file.fileName, 'document');
     res.setHeader('Content-Type', file.mimeType);
-    res.setHeader('Content-Disposition', `attachment; filename="${file.fileName}"`);
+    res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
     return res.send(file.buffer);
   } catch (err) {
     console.error('[admin-documents:download]', err);
@@ -3697,8 +3698,9 @@ app.get('/api/admin/bookings/:id/waiver-pdf', async (req, res) => {
     if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid booking id.' });
     const pkg = await waiverPdfService.loadBookingWaiverPackage(supabase, id);
     const pdfBuffer = await waiverPdfService.buildSignedWaiverPdf(pkg);
+    const safeName = waiverPdfService.safeContentDispositionFilename(waiverPdfService.waiverPdfFileName(pkg));
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${waiverPdfService.waiverPdfFileName(pkg)}"`);
+    res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
     return res.send(pdfBuffer);
   } catch (err) {
     console.error('[admin-booking-waiver-pdf]', err);
@@ -3716,8 +3718,9 @@ app.get('/api/admin/pre-trip-submissions/:id/waiver-pdf', async (req, res) => {
     }
     const pkg = await waiverPdfService.loadPreTripWaiverPackage(supabase, submissionId);
     const pdfBuffer = await waiverPdfService.buildSignedWaiverPdf(pkg);
+    const safeName = waiverPdfService.safeContentDispositionFilename(waiverPdfService.waiverPdfFileName(pkg));
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${waiverPdfService.waiverPdfFileName(pkg)}"`);
+    res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
     return res.send(pdfBuffer);
   } catch (err) {
     console.error('[admin-pre-trip-waiver-pdf]', err);

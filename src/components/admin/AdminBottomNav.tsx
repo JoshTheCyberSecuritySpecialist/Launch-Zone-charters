@@ -18,6 +18,7 @@ function isActive(pathname: string, item: (typeof NAV)[number]): boolean {
     return (
       path === '/admin/bookings/list' ||
       path.startsWith('/admin/bookings/') ||
+      path.startsWith('/admin/pre-trip') ||
       path === '/admin/staff-booking'
     );
   }

@@ -261,5 +261,6 @@ module.exports = {
   buildSignedWaiverPdf,
   waiverPdfFileName,
   safeFileName,
+  safeContentDispositionFilename: safeFileName,
   formatWhen,
 };

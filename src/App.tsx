@@ -27,6 +27,7 @@ import AdminBookingsHub from './pages/AdminBookingsHub';
 import AdminApprovals from './pages/AdminApprovals';
 import AdminMessages from './pages/AdminMessages';
 import AdminPreTrip from './pages/AdminPreTrip';
+import AdminPreTripDetail from './pages/AdminPreTripDetail';
 import AdminPromoCodes from './pages/AdminPromoCodes';
 import AdminCaptainsLog from './pages/AdminCaptainsLog';
 import AdminMoreTools from './pages/AdminMoreTools';
@@ -130,6 +131,7 @@ function AppLayout() {
           <Route path="/admin/approvals" element={<AdminApprovals />} />
           <Route path="/admin/messages" element={<AdminMessages />} />
           <Route path="/admin/pre-trip" element={<AdminPreTrip />} />
+          <Route path="/admin/pre-trip/:id" element={<AdminPreTripDetail />} />
           <Route path="/admin/promo-codes" element={<AdminPromoCodes />} />
           <Route path="/admin/captains-log" element={<AdminCaptainsLog />} />
           <Route path="/admin/outbox" element={<AdminOutbox />} />

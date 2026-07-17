@@ -23,3 +23,26 @@ test('file name from object path', () => {
     '123-photo.jpg'
   );
 });
+
+test('resolveAdminDocument rejects invalid record id without querying', async () => {
+  await assert.rejects(
+    () =>
+      adminDocumentAccessService.resolveAdminDocument(null, {
+        context: 'booking',
+        recordId: 'not-a-uuid',
+        document: 'license',
+      }),
+    (err) => {
+      assert.equal(err.statusCode, 400);
+      assert.match(err.message, /Invalid record id/i);
+      return true;
+    }
+  );
+});
+
+test('safeContentDispositionFilename strips quotes and newlines', () => {
+  assert.equal(
+    adminDocumentAccessService.safeContentDispositionFilename('evil"\nname.pdf', 'fallback.pdf'),
+    'evilname.pdf'
+  );
+});

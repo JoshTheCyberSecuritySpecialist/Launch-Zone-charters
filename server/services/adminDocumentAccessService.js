@@ -15,6 +15,20 @@ function cleanDocumentKind(raw) {
   return ALLOWED_DOCUMENTS.has(kind) ? kind : null;
 }
 
+function safeFileName(value, fallback = 'file') {
+  const cleaned = String(value || fallback)
+    .replace(/[\r\n"]/g, '')
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 80);
+  return cleaned || fallback;
+}
+
+function isRecordUuid(id) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(id || '').trim());
+}
+
 function cleanContext(raw) {
   const ctx = String(raw || '')
     .trim()
@@ -182,6 +196,11 @@ async function resolveAdminDocument(supabase, { context, recordId, document }) {
     err.statusCode = 400;
     throw err;
   }
+  if (!isRecordUuid(id)) {
+    const err = new Error('Invalid record id.');
+    err.statusCode = 400;
+    throw err;
+  }
   if (documentKind === 'buoy_proof' && ctx !== 'booking') {
     const err = new Error('buoy_proof is only available for booking context.');
     err.statusCode = 400;
@@ -247,6 +266,8 @@ module.exports = {
   ALLOWED_CONTEXTS,
   cleanContext,
   cleanDocumentKind,
+  isRecordUuid,
+  safeContentDispositionFilename: safeFileName,
   extensionFromObjectPath,
   mimeFromExtension,
   viewModeFromMime,

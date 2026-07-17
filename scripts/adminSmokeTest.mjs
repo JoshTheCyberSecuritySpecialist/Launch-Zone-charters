@@ -22,6 +22,7 @@ const REGISTERED_ADMIN_ROUTES = [
   '/admin/approvals',
   '/admin/messages',
   '/admin/pre-trip',
+  '/admin/pre-trip/:id',
   '/admin/promo-codes',
   '/admin/captains-log',
   '/admin/outbox',
@@ -62,6 +63,7 @@ const FRONTEND_API_WIRING = [
   { file: 'src/lib/publicBooking.ts', needle: '/api/admin/pre-trip-submissions/', label: 'pre-trip admin PATCH' },
   { file: 'src/lib/adminDocuments.ts', needle: '/api/admin/documents/access', label: 'admin document access' },
   { file: 'src/lib/adminWaivers.ts', needle: '/waiver-pdf', label: 'admin waiver PDF download' },
+  { file: 'src/pages/AdminPreTripDetail.tsx', needle: 'PreTripReviewActions', label: 'pre-trip detail review actions' },
   { file: 'src/components/admin/AdminDocumentViewer.tsx', needle: 'AdminDocumentViewer', label: 'admin document viewer component' },
   { file: 'src/lib/publicBooking.ts', needle: '/suggestions', label: 'pre-trip suggestions GET' },
   { file: 'src/pages/AdminOperationsDashboard.tsx', needle: '/api/admin/operations-dashboard', label: 'ops dashboard' },
@@ -197,8 +199,8 @@ function main() {
     }
   }
 
-  if (!read('src/pages/AdminPreTrip.tsx').includes('runPreTripAdminAction')) {
-    fail('Pre-trip approve handler missing from AdminPreTrip.tsx');
+  if (!read('src/pages/AdminPreTripDetail.tsx').includes('adminUpdatePreTripSubmission')) {
+    fail('Pre-trip approve handler missing from AdminPreTripDetail.tsx');
   }
   if (!read('src/pages/AdminApprovals.tsx').includes("from('pre_trip_submissions')")) {
     fail('Approvals pre-trip queue query missing');

@@ -8,6 +8,7 @@ import AdminShell from '../components/admin/AdminShell';
 import AdminAccessDenied from '../components/admin/AdminAccessDenied';
 import MobileAdminCard from '../components/admin/MobileAdminCard';
 import AdminActions from '../components/admin/AdminActions';
+import AdminSignatureVerification from '../components/admin/AdminSignatureVerification';
 import StatusBadge from '../components/admin/StatusBadge';
 import { humanizeLabel, shortId } from '../components/admin/adminDisplay';
 import { withTimeout, describeError } from '../lib/adminDiagnostics';
@@ -28,6 +29,9 @@ type PendingPreTrip = {
   customer_name?: string | null;
   email?: string | null;
   matched_booking_id?: string | null;
+  waiver_signed?: boolean;
+  waiver_signature?: string | null;
+  waiver_signed_at?: string | null;
 };
 
 export default function AdminApprovals() {
@@ -52,7 +56,9 @@ export default function AdminApprovals() {
             .limit(50),
           supabase
             .from('pre_trip_submissions')
-            .select('id, admin_status, created_at, customer_name, email, matched_booking_id')
+            .select(
+              'id, admin_status, created_at, customer_name, email, matched_booking_id, waiver_signed, waiver_signature, waiver_signed_at'
+            )
             .eq('admin_status', 'pending')
             .order('created_at', { ascending: false })
             .limit(50),
@@ -210,6 +216,23 @@ export default function AdminApprovals() {
                       dateStyle: 'medium',
                       timeStyle: 'short',
                     }),
+                  },
+                  {
+                    label: 'Waiver',
+                    value: row.waiver_signed ? (
+                      <AdminSignatureVerification
+                        variant="compact"
+                        mode="pre_trip"
+                        data={{
+                          waiver_signed: row.waiver_signed,
+                          waiver_signature: row.waiver_signature,
+                          waiver_signed_at: row.waiver_signed_at,
+                          created_at: row.created_at,
+                        }}
+                      />
+                    ) : (
+                      'Not signed'
+                    ),
                   },
                   {
                     label: 'Matched booking',

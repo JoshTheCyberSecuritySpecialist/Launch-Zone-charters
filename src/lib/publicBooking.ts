@@ -424,6 +424,7 @@ export async function adminUpdatePreTripSubmission(
     action: 'match' | 'approve' | 'reject';
     matched_booking_id?: string;
     admin_notes?: string;
+    rejection_reason?: string;
   }
 ): Promise<{ ok: boolean; error?: string }> {
   if (!env.apiUrlConfigured || !env.apiUrl) {

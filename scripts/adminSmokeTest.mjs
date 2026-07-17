@@ -41,6 +41,8 @@ const REQUIRED_ADMIN_APIS = [
   "app.patch('/api/admin/bookings/:id'",
   "app.get('/api/admin/documents/access'",
   "app.get('/api/admin/documents/download'",
+  "app.get('/api/admin/bookings/:id/waiver-pdf'",
+  "app.get('/api/admin/pre-trip-submissions/:id/waiver-pdf'",
   "app.post('/api/admin/bookings/:id/actions'",
   "app.post('/api/admin/bookings/:id/communications/send'",
   "app.patch('/api/admin/pre-trip-submissions/:id'",
@@ -59,6 +61,7 @@ const REQUIRED_ADMIN_APIS = [
 const FRONTEND_API_WIRING = [
   { file: 'src/lib/publicBooking.ts', needle: '/api/admin/pre-trip-submissions/', label: 'pre-trip admin PATCH' },
   { file: 'src/lib/adminDocuments.ts', needle: '/api/admin/documents/access', label: 'admin document access' },
+  { file: 'src/lib/adminWaivers.ts', needle: '/waiver-pdf', label: 'admin waiver PDF download' },
   { file: 'src/components/admin/AdminDocumentViewer.tsx', needle: 'AdminDocumentViewer', label: 'admin document viewer component' },
   { file: 'src/lib/publicBooking.ts', needle: '/suggestions', label: 'pre-trip suggestions GET' },
   { file: 'src/pages/AdminOperationsDashboard.tsx', needle: '/api/admin/operations-dashboard', label: 'ops dashboard' },

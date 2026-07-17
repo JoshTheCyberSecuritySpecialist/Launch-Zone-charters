@@ -22,6 +22,7 @@ import AdminActions from '../components/admin/AdminActions';
 import StatusBadge from '../components/admin/StatusBadge';
 import LoadingSection from '../components/admin/LoadingSection';
 import AdminDocumentViewer from '../components/admin/AdminDocumentViewer';
+import AdminSignatureVerification from '../components/admin/AdminSignatureVerification';
 import { ADMIN_MOBILE_TOAST_CLASS, humanizeLabel, shortId } from '../components/admin/adminDisplay';
 import { env } from '../config/env.js';
 import {
@@ -121,10 +122,21 @@ type AdminBookingRow = {
   license_url?: string | null;
   insurance_url?: string | null;
   waiver_signed?: boolean | null;
+  waiver_signed_at?: string | null;
+  terms_accepted?: boolean | null;
+  damage_fee_acknowledged?: boolean | null;
   stripe_payment_id?: string | null;
   payment_status?: string | null;
   /** Present when `select` embeds waivers; used if `waiver_signed` column is missing on `bookings`. */
-  waivers?: { id: string }[] | null;
+  waivers?:
+    | {
+        id: string;
+        electronic_signature?: string | null;
+        signature_date?: string | null;
+        waiver_content?: string | null;
+        accepted?: boolean | null;
+      }[]
+    | null;
   license_status?: DocStatus | string | null;
   insurance_status?: DocStatus | string | null;
   promo_code?: string | null;
@@ -634,7 +646,7 @@ export default function Admin({ onNavigate }: AdminProps) {
       const buildEmbedQuery = () => {
         let q = supabase
           .from('bookings')
-          .select('*, customers(*), boats(*), user_verifications(*), waivers(id)')
+          .select('*, customers(*), boats(*), user_verifications(*), waivers(id, electronic_signature, signature_date, waiver_content, accepted)')
           .order('created_at', { ascending: false });
         if (statusFilter !== 'all') {
           q = q.eq('status', statusFilter);
@@ -1561,9 +1573,19 @@ export default function Admin({ onNavigate }: AdminProps) {
                     <td className="px-6 py-4 text-sm text-slate-800">
                       {booking.waiver_signed === true ||
                       (Array.isArray(booking.waivers) && booking.waivers.length > 0) ? (
-                        <span className="font-semibold text-green-700">Yes</span>
+                        <AdminSignatureVerification
+                          variant="compact"
+                          mode="booking"
+                          data={{
+                            waiver_signed: Boolean(booking.waiver_signed),
+                            waiver_signed_at: booking.waiver_signed_at,
+                            terms_accepted: booking.terms_accepted,
+                            damage_fee_acknowledged: booking.damage_fee_acknowledged,
+                            waivers: booking.waivers,
+                          }}
+                        />
                       ) : (
-                        <span className="text-slate-500">No</span>
+                        <span className="text-slate-500">Not signed</span>
                       )}
                     </td>
                     <td className="px-6 py-4">
@@ -1884,9 +1906,19 @@ export default function Admin({ onNavigate }: AdminProps) {
                         {
                           label: 'Waiver',
                           value: waiverDone ? (
-                            <span className="font-semibold text-green-700">Yes</span>
+                            <AdminSignatureVerification
+                              variant="compact"
+                              mode="booking"
+                              data={{
+                                waiver_signed: Boolean(booking.waiver_signed),
+                                waiver_signed_at: booking.waiver_signed_at,
+                                terms_accepted: booking.terms_accepted,
+                                damage_fee_acknowledged: booking.damage_fee_acknowledged,
+                                waivers: booking.waivers,
+                              }}
+                            />
                           ) : (
-                            <span className="text-slate-500">No</span>
+                            <span className="text-slate-500">Not signed</span>
                           ),
                         },
                         {

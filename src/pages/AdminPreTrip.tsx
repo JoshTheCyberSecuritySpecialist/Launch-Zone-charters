@@ -16,6 +16,7 @@ import LoadingSection from '../components/admin/LoadingSection';
 import PreTripMatchPicker from '../components/admin/PreTripMatchPicker';
 import AdminDocumentViewer from '../components/admin/AdminDocumentViewer';
 import AdminSignatureVerification from '../components/admin/AdminSignatureVerification';
+import PreTripRejectModal from '../components/admin/PreTripRejectModal';
 import { ADMIN_MOBILE_STICKY_NOTICE_CLASS, humanizeLabel, shortId } from '../components/admin/adminDisplay';
 import { describeError, withTimeout } from '../lib/adminDiagnostics';
 
@@ -38,8 +39,22 @@ type PreTripSubmissionRow = {
   insurance_status: string;
   admin_status: string;
   admin_notes: string | null;
+  reviewed_at: string | null;
+  reviewed_by: string | null;
+  rejection_reason: string | null;
   created_at: string;
 };
+
+function isPreTripTerminal(status: string): boolean {
+  return status === 'approved' || status === 'rejected';
+}
+
+function formatReviewedAt(value: string | null | undefined): string {
+  if (!value) return '';
+  const d = new Date(value);
+  if (!Number.isFinite(d.getTime())) return '';
+  return d.toLocaleString();
+}
 
 function tripTypeLabel(tripType: string): string {
   switch (tripType) {
@@ -69,6 +84,7 @@ export default function AdminPreTrip() {
     id: string;
     action: 'match' | 'approve' | 'reject';
   } | null>(null);
+  const [rejectModalRow, setRejectModalRow] = useState<PreTripSubmissionRow | null>(null);
 
   const getAdminToken = useCallback(async (): Promise<string | null> => {
     const {
@@ -186,15 +202,27 @@ export default function AdminPreTrip() {
 
   const runPreTripAdminAction = async (
     row: PreTripSubmissionRow,
-    action: 'match' | 'approve' | 'reject'
+    action: 'match' | 'approve' | 'reject',
+    rejectionReason?: string
   ) => {
     const submissionId = row.id;
+    if (isPreTripTerminal(row.admin_status)) {
+      setNotice({
+        variant: 'error',
+        text: `This submission is already ${row.admin_status}.`,
+      });
+      return;
+    }
     const matched_booking_id = resolveBookingId(row);
     if ((action === 'match' || action === 'approve') && !matched_booking_id) {
       setNotice({
         variant: 'error',
         text: 'Tap a booking card first, then tap Approve.',
       });
+      return;
+    }
+    if (action === 'reject' && !rejectionReason?.trim()) {
+      setRejectModalRow(row);
       return;
     }
     setPreTripActionBusy({ id: submissionId, action });
@@ -210,6 +238,7 @@ export default function AdminPreTrip() {
           action,
           matched_booking_id: matched_booking_id || undefined,
           admin_notes: preTripNotes[submissionId]?.trim() || undefined,
+          rejection_reason: rejectionReason?.trim() || undefined,
         }),
         15000
       );
@@ -217,7 +246,16 @@ export default function AdminPreTrip() {
         setNotice({ variant: 'error', text: out.error || 'Action failed.' });
         return;
       }
-      setNotice({ variant: 'success', text: `Submission ${action}ed successfully.` });
+      setRejectModalRow(null);
+      setNotice({
+        variant: 'success',
+        text:
+          action === 'reject'
+            ? 'Submission rejected.'
+            : action === 'approve'
+              ? 'Submission approved and linked to booking.'
+              : 'Submission matched to booking.',
+      });
       void loadPreTripSubmissions();
     } catch (err) {
       setNotice({ variant: 'error', text: describeError(err, 'Pre-trip action failed.') });
@@ -344,12 +382,14 @@ export default function AdminPreTrip() {
                         <td className="px-4 py-3">
                           <div className="flex flex-col gap-2 text-xs">
                             <AdminSignatureVerification
+                              variant="panel"
                               mode="pre_trip"
                               data={{
                                 id: row.id,
                                 waiver_signed: row.waiver_signed,
                                 waiver_signature: row.waiver_signature,
                                 waiver_signed_at: row.waiver_signed_at,
+                                created_at: row.created_at,
                               }}
                             />
                             <span>License: {row.license_status}</span>
@@ -379,6 +419,16 @@ export default function AdminPreTrip() {
                           {row.matched_booking_id ? (
                             <div className="mt-1 font-mono text-[10px] text-slate-500" title={row.matched_booking_id}>
                               → {shortId(row.matched_booking_id)}
+                            </div>
+                          ) : null}
+                          {row.reviewed_at ? (
+                            <div className="mt-1 text-[10px] text-slate-500">
+                              Reviewed {formatReviewedAt(row.reviewed_at)}
+                            </div>
+                          ) : null}
+                          {row.rejection_reason ? (
+                            <div className="mt-1 rounded border border-red-200 bg-red-50 px-2 py-1 text-[10px] text-red-800">
+                              {row.rejection_reason}
                             </div>
                           ) : null}
                         </td>
@@ -411,7 +461,7 @@ export default function AdminPreTrip() {
                           <div className="flex flex-col gap-1">
                             <button
                               type="button"
-                              disabled={isPreTripRowBusy(row.id)}
+                              disabled={isPreTripRowBusy(row.id) || isPreTripTerminal(row.admin_status)}
                               onClick={() => void runPreTripAdminAction(row, 'approve')}
                               className="rounded bg-green-600 px-2 py-1 text-xs font-semibold text-white hover:bg-green-700 disabled:opacity-40"
                             >
@@ -419,8 +469,8 @@ export default function AdminPreTrip() {
                             </button>
                             <button
                               type="button"
-                              disabled={isPreTripRowBusy(row.id)}
-                              onClick={() => void runPreTripAdminAction(row, 'reject')}
+                              disabled={isPreTripRowBusy(row.id) || isPreTripTerminal(row.admin_status)}
+                              onClick={() => setRejectModalRow(row)}
                               className="rounded bg-red-600 px-2 py-1 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-40"
                             >
                               {preTripButtonLabel(row.id, 'reject', 'Reject')}
@@ -460,8 +510,33 @@ export default function AdminPreTrip() {
                       hideIfEmpty: true,
                     },
                     {
+                      label: 'Waiver',
+                      value: row.waiver_signed ? (
+                        <AdminSignatureVerification
+                          variant="compact"
+                          mode="pre_trip"
+                          data={{
+                            waiver_signed: row.waiver_signed,
+                            waiver_signature: row.waiver_signature,
+                            waiver_signed_at: row.waiver_signed_at,
+                            created_at: row.created_at,
+                          }}
+                        />
+                      ) : (
+                        'Not signed'
+                      ),
+                    },
+                    {
                       label: 'Docs',
-                      value: `Waiver ${row.waiver_signed ? 'Yes' : 'No'} · License ${humanizeLabel(row.license_status)} · Insurance ${humanizeLabel(row.insurance_status)}`,
+                      value: `License ${humanizeLabel(row.license_status)} · Insurance ${humanizeLabel(row.insurance_status)}`,
+                    },
+                    {
+                      label: 'Status',
+                      value: row.rejection_reason
+                        ? `Rejected — ${row.rejection_reason}`
+                        : row.reviewed_at
+                          ? `${humanizeLabel(row.admin_status)} · ${formatReviewedAt(row.reviewed_at)}`
+                          : humanizeLabel(row.admin_status),
                     },
                     {
                       label: 'Matched',
@@ -490,7 +565,7 @@ export default function AdminPreTrip() {
                       <div className="grid grid-cols-2 gap-2">
                         <button
                           type="button"
-                          disabled={isPreTripRowBusy(row.id)}
+                          disabled={isPreTripRowBusy(row.id) || isPreTripTerminal(row.admin_status)}
                           onClick={() => void runPreTripAdminAction(row, 'approve')}
                           className="min-h-12 rounded-lg bg-green-600 px-2 py-3 text-base font-bold text-white disabled:opacity-40"
                         >
@@ -498,8 +573,8 @@ export default function AdminPreTrip() {
                         </button>
                         <button
                           type="button"
-                          disabled={isPreTripRowBusy(row.id)}
-                          onClick={() => void runPreTripAdminAction(row, 'reject')}
+                          disabled={isPreTripRowBusy(row.id) || isPreTripTerminal(row.admin_status)}
+                          onClick={() => setRejectModalRow(row)}
                           className="min-h-12 rounded-lg bg-red-600 px-2 py-3 text-base font-bold text-white disabled:opacity-40"
                         >
                           {preTripButtonLabel(row.id, 'reject', 'Reject')}
@@ -553,6 +628,20 @@ export default function AdminPreTrip() {
         />
         )}
       </div>
+
+      <PreTripRejectModal
+        open={Boolean(rejectModalRow)}
+        customerLabel={rejectModalRow?.customer_name || rejectModalRow?.email || undefined}
+        busy={rejectModalRow != null && preTripActionBusy?.id === rejectModalRow.id && preTripActionBusy.action === 'reject'}
+        onClose={() => {
+          if (preTripActionBusy?.action === 'reject') return;
+          setRejectModalRow(null);
+        }}
+        onConfirm={(reason) => {
+          if (!rejectModalRow) return;
+          void runPreTripAdminAction(rejectModalRow, 'reject', reason);
+        }}
+      />
     </AdminShell>
   );
 }

@@ -20,6 +20,7 @@ const waiversDocsReminders = require('./services/waiversDocsReminders');
 const bookingAccess = require('./services/bookingAccess');
 const documentUrlValidation = require('./services/documentUrlValidation');
 const preTripSubmissionGuard = require('./services/preTripSubmissionGuard');
+const preTripAdminActions = require('./services/preTripAdminActions');
 const bookingReliability = require('./services/bookingReliability');
 const bookingCommunications = require('./services/bookingCommunications');
 const shopService = require('./services/shopService');
@@ -27,6 +28,7 @@ const disputeService = require('./services/disputeService');
 const disputeEvidenceService = require('./services/disputeEvidenceService');
 const disputeExportService = require('./services/disputeExportService');
 const adminDocumentAccessService = require('./services/adminDocumentAccessService');
+const waiverPdfService = require('./services/waiverPdfService');
 const { getBioConditions } = require('./services/bioluminescenceService');
 const { getRocketConditions } = require('./services/rocketService');
 const { getLaunchSchedulePreview } = require('./services/rocketScheduleService');
@@ -3687,6 +3689,42 @@ app.get('/api/admin/documents/download', async (req, res) => {
   }
 });
 
+app.get('/api/admin/bookings/:id/waiver-pdf', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const id = cleanText(req.params.id, 80);
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid booking id.' });
+    const pkg = await waiverPdfService.loadBookingWaiverPackage(supabase, id);
+    const pdfBuffer = await waiverPdfService.buildSignedWaiverPdf(pkg);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${waiverPdfService.waiverPdfFileName(pkg)}"`);
+    return res.send(pdfBuffer);
+  } catch (err) {
+    console.error('[admin-booking-waiver-pdf]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not generate waiver PDF.' });
+  }
+});
+
+app.get('/api/admin/pre-trip-submissions/:id/waiver-pdf', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const submissionId = String(req.params.id || '').trim();
+    if (!isBookingUuidParam(submissionId)) {
+      return res.status(400).json({ error: 'Invalid submission id' });
+    }
+    const pkg = await waiverPdfService.loadPreTripWaiverPackage(supabase, submissionId);
+    const pdfBuffer = await waiverPdfService.buildSignedWaiverPdf(pkg);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${waiverPdfService.waiverPdfFileName(pkg)}"`);
+    return res.send(pdfBuffer);
+  } catch (err) {
+    console.error('[admin-pre-trip-waiver-pdf]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not generate waiver PDF.' });
+  }
+});
+
 function moneyNumber(value) {
   const n = Number(value || 0);
   return Number.isFinite(n) ? n : 0;
@@ -6431,7 +6469,8 @@ app.post('/api/public/pre-trip-submission', async (req, res) => {
   }
 });
 
-async function copyPreTripSubmissionToBooking(submission, bookingId, requestIp) {
+async function copyPreTripSubmissionToBooking(submission, bookingId, requestIp, options = {}) {
+  const verifyLicense = Boolean(options.verifyLicense);
   const { data: booking, error: bErr } = await supabase
     .from('bookings')
     .select('id, customer_id, waiver_signed, license_url, insurance_url, license_status, insurance_status')
@@ -6444,9 +6483,15 @@ async function copyPreTripSubmissionToBooking(submission, bookingId, requestIp) 
   }
 
   const bookingUpdates = { updated_at: new Date().toISOString() };
-  if (submission.license_url && !booking.license_url) {
-    bookingUpdates.license_url = submission.license_url;
-    bookingUpdates.license_status = 'pending';
+  if (submission.license_url) {
+    if (!booking.license_url) {
+      bookingUpdates.license_url = submission.license_url;
+    }
+    if (verifyLicense) {
+      bookingUpdates.license_status = 'verified';
+    } else if (!booking.license_url) {
+      bookingUpdates.license_status = 'pending';
+    }
   }
   if (submission.insurance_url) {
     bookingUpdates.insurance_url = submission.insurance_url;
@@ -6518,7 +6563,7 @@ async function copyPreTripSubmissionToBooking(submission, bookingId, requestIp) 
 /**
  * Admin: match / approve / reject pre-trip submissions.
  * PATCH /api/admin/pre-trip-submissions/:id
- * Body: { action: 'match'|'approve'|'reject', matched_booking_id?, admin_notes? }
+ * Body: { action: 'match'|'approve'|'reject', matched_booking_id?, admin_notes?, rejection_reason? }
  */
 app.patch('/api/admin/pre-trip-submissions/:id', async (req, res) => {
   try {
@@ -6530,7 +6575,7 @@ app.patch('/api/admin/pre-trip-submissions/:id', async (req, res) => {
       return res.status(400).json({ error: 'Invalid submission id' });
     }
 
-    const action = String(req.body?.action || '').trim().toLowerCase();
+    const action = preTripAdminActions.normalizePreTripAction(req.body?.action);
     const matchedBookingId = String(req.body?.matched_booking_id || req.body?.matchedBookingId || '').trim();
     const adminNotes =
       req.body?.admin_notes != null
@@ -6538,8 +6583,14 @@ app.patch('/api/admin/pre-trip-submissions/:id', async (req, res) => {
         : req.body?.adminNotes != null
           ? String(req.body.adminNotes)
           : null;
+    const rejectionRaw =
+      req.body?.rejection_reason != null
+        ? req.body.rejection_reason
+        : req.body?.rejectionReason != null
+          ? req.body.rejectionReason
+          : null;
 
-    if (!['match', 'approve', 'reject'].includes(action)) {
+    if (!action) {
       return res.status(400).json({ error: 'action must be match, approve, or reject' });
     }
 
@@ -6552,18 +6603,55 @@ app.patch('/api/admin/pre-trip-submissions/:id', async (req, res) => {
       return res.status(404).json({ error: 'Submission not found' });
     }
 
+    const terminalConflict = preTripAdminActions.preTripTerminalConflict(submission.admin_status, action);
+    if (terminalConflict) {
+      return res.status(409).json({ error: terminalConflict });
+    }
+
     const stamp = new Date().toISOString();
     const updates = { updated_at: stamp };
-    if (adminNotes !== null) updates.admin_notes = adminNotes;
+    if (adminNotes !== null) updates.admin_notes = cleanText(adminNotes, 2000);
 
     if (action === 'reject') {
+      const rejection = preTripAdminActions.normalizeRejectionReason(rejectionRaw);
+      if (!rejection.ok) {
+        return res.status(400).json({ error: rejection.reason });
+      }
+
       updates.admin_status = 'rejected';
+      updates.rejection_reason = rejection.reason;
+      updates.reviewed_by = adminUser.id || null;
+      updates.reviewed_at = stamp;
+
       const { error: uErr } = await supabase
         .from('pre_trip_submissions')
         .update(updates)
         .eq('id', submissionId);
       if (uErr) return res.status(500).json({ error: uErr.message });
-      return res.json({ ok: true, admin_status: 'rejected' });
+
+      const bookingForLog = submission.matched_booking_id
+        ? String(submission.matched_booking_id)
+        : '';
+      if (isBookingUuidParam(bookingForLog)) {
+        await bookingReliability.insertActivity(supabase, {
+          booking_id: bookingForLog,
+          event_type: 'pre_trip_rejected',
+          actor_type: 'admin',
+          actor_id: adminUser.id || null,
+          message: `Pre-trip submission rejected: ${rejection.reason}`,
+          payload: {
+            pre_trip_submission_id: submissionId,
+            rejection_reason: rejection.reason,
+          },
+        });
+      }
+
+      return res.json({
+        ok: true,
+        admin_status: 'rejected',
+        reviewed_at: stamp,
+        rejection_reason: rejection.reason,
+      });
     }
 
     const bookingIdToMatch =
@@ -6576,10 +6664,18 @@ app.patch('/api/admin/pre-trip-submissions/:id', async (req, res) => {
       await copyPreTripSubmissionToBooking(
         submission,
         bookingIdToMatch,
-        requestIpBestEffort(req)
+        requestIpBestEffort(req),
+        { verifyLicense: action === 'approve' }
       );
       updates.matched_booking_id = bookingIdToMatch;
       updates.admin_status = action === 'approve' ? 'approved' : 'matched';
+      if (action === 'approve') {
+        updates.reviewed_by = adminUser.id || null;
+        updates.reviewed_at = stamp;
+        if (submission.license_url) {
+          updates.license_status = 'verified';
+        }
+      }
     }
 
     const { error: uErr } = await supabase
@@ -6602,7 +6698,12 @@ app.patch('/api/admin/pre-trip-submissions/:id', async (req, res) => {
       });
     }
 
-    return res.json({ ok: true, admin_status: updates.admin_status, matched_booking_id: bookingIdToMatch });
+    return res.json({
+      ok: true,
+      admin_status: updates.admin_status,
+      matched_booking_id: bookingIdToMatch,
+      reviewed_at: updates.reviewed_at || null,
+    });
   } catch (err) {
     console.error('[admin/pre-trip-submissions]', err);
     return res.status(err.statusCode || 500).json({ error: err.message || 'Failed' });

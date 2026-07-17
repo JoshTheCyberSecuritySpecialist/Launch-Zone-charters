@@ -1128,22 +1128,38 @@ export default function AdminBookingDetails() {
           </div>
 
           <div className="rounded-2xl bg-white p-5 shadow">
-            <h2 className="text-xl font-black">Documents</h2>
-            <div className="mt-4 space-y-3">
-              <div className={`rounded-lg border px-3 py-2 font-bold ${docBadge(waiverDone)}`}>
-                Waiver: {waiverDone ? 'Complete' : 'Missing'}
-              </div>
+            <h2 className="text-xl font-black">Signed Waiver</h2>
+            <p className="mt-1 text-sm text-slate-600">
+              Verification record only — typed name and timestamps, not a drawn signature image.
+            </p>
+            <div className="mt-4">
               {waiverDone && id ? (
                 <AdminSignatureVerification
+                  variant="panel"
                   mode="booking"
                   bookingId={id}
                   data={{
                     waiver_signed: booking.waiver_signed,
                     waiver_signed_at: booking.waiver_signed_at,
+                    terms_accepted: booking.terms_accepted,
+                    damage_fee_acknowledged: booking.damage_fee_acknowledged,
                     waivers: booking.waivers,
                   }}
                 />
-              ) : null}
+              ) : (
+                <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-900">
+                  Waiver not signed yet.
+                </p>
+              )}
+            </div>
+          </div>
+
+          <div className="rounded-2xl bg-white p-5 shadow">
+            <h2 className="text-xl font-black">Documents</h2>
+            <div className="mt-4 space-y-3">
+              <div className={`rounded-lg border px-3 py-2 font-bold ${docBadge(waiverDone)}`}>
+                Waiver status: {waiverDone ? 'Complete' : 'Missing'}
+              </div>
               <div className={`rounded-lg border px-3 py-2 font-bold ${docBadge(insuranceDone)}`}>
                 <div className="flex flex-wrap items-center gap-2">
                   <span>Insurance: {insuranceDone ? 'Complete' : 'Missing'}</span>

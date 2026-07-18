@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { CalendarPlus, RotateCcw, Save } from 'lucide-react';
 import { supabase } from '../lib/supabase';
@@ -116,6 +116,7 @@ export default function AdminStaffBooking() {
   const [notice, setNotice] = useState<{ variant: 'success' | 'error'; text: string } | null>(null);
   const [todayRows, setTodayRows] = useState<StaffBookingRow[]>([]);
   const [todayLoading, setTodayLoading] = useState(false);
+  const availabilityCheckSeq = useRef(0);
 
   const selectedBoat = boats.find((boat) => boat.id === form.boatId) || null;
   const durationHours = useMemo(() => {
@@ -228,6 +229,8 @@ export default function AdminStaffBooking() {
   }, [durationHours, form.bookingType, form.discount, selectedBoat]);
 
   useEffect(() => {
+    const seq = ++availabilityCheckSeq.current;
+
     if (!form.boatId) {
       setAvailability({ status: 'idle', message: 'Select a boat first.' });
       return;
@@ -237,8 +240,11 @@ export default function AdminStaffBooking() {
       return;
     }
 
+    setAvailability({ status: 'checking', message: 'Checking availability...' });
+
     const timer = window.setTimeout(async () => {
-      setAvailability({ status: 'checking', message: 'Checking availability...' });
+      if (seq !== availabilityCheckSeq.current) return;
+
       try {
         const res = await authedFetch('/api/admin/staff-bookings/check', {
           method: 'POST',
@@ -255,6 +261,7 @@ export default function AdminStaffBooking() {
           conflict?: AvailabilityConflict;
           error?: string;
         };
+        if (seq !== availabilityCheckSeq.current) return;
         if (!res.ok) throw new Error(payload.error || 'Could not check availability.');
         setAvailability(
           payload.available
@@ -262,6 +269,7 @@ export default function AdminStaffBooking() {
             : { status: 'unavailable', message: 'Already Booked', conflict: payload.conflict || null }
         );
       } catch (err) {
+        if (seq !== availabilityCheckSeq.current) return;
         setAvailability({
           status: 'error',
           message: err instanceof Error ? err.message : 'Could not check availability.',
@@ -272,36 +280,78 @@ export default function AdminStaffBooking() {
     return () => window.clearTimeout(timer);
   }, [authedFetch, durationHours, form.boatId, form.date, form.location, form.startTime]);
 
+  const submitGate = useMemo(() => {
+    const blockers: string[] = [];
+
+    if (saving) {
+      blockers.push(
+        saving === 'hold'
+          ? 'Save Hold is disabled while the previous hold request is still in progress.'
+          : 'Create Booking is disabled while the previous booking request is still in progress.'
+      );
+    }
+    if (!form.customerName.trim()) blockers.push('Customer name is required.');
+    if (!form.phone.trim()) blockers.push('Phone is required.');
+    if (!form.boatId) blockers.push('Select a boat.');
+    if (!form.date) blockers.push('Select a date.');
+    if (!form.startTime) blockers.push('Select a start time.');
+    if (durationHours <= 0) blockers.push('Enter a valid duration.');
+    if (form.bookingType === 'captain_charter') {
+      const validation = validateCharterPassengerCount(form.passengerCount);
+      if (!validation.valid) blockers.push(validation.error);
+    }
+    if (availability.status === 'checking') {
+      blockers.push('Waiting for availability check to finish.');
+    } else if (availability.status === 'idle' && form.boatId && form.date && form.startTime && durationHours > 0) {
+      blockers.push('Availability has not been checked yet for this slot.');
+    } else if (availability.status === 'unavailable') {
+      blockers.push('This boat and time slot is already booked.');
+    } else if (availability.status === 'error') {
+      blockers.push(availability.message || 'Availability check failed. Change the schedule or try again.');
+    } else if (availability.status !== 'available') {
+      blockers.push('Confirm boat, date, time, and duration to check availability.');
+    }
+
+    return {
+      canSubmit: blockers.length === 0,
+      primaryReason: blockers[0] || null,
+      blockers,
+    };
+  }, [
+    availability.message,
+    availability.status,
+    durationHours,
+    form.boatId,
+    form.bookingType,
+    form.customerName,
+    form.date,
+    form.passengerCount,
+    form.phone,
+    form.startTime,
+    saving,
+  ]);
+
+  const resetAvailability = useCallback(() => {
+    availabilityCheckSeq.current += 1;
+    setAvailability({ status: 'idle', message: 'Select a boat first.' });
+  }, []);
+
   const reset = (clearNotice = true) => {
+    availabilityCheckSeq.current += 1;
     setForm(blankForm());
     setAvailability({ status: 'idle', message: 'Select a boat first.' });
+    setSaving(null);
     if (clearNotice) setNotice(null);
   };
 
   const save = async (action: 'hold' | 'booking') => {
     setNotice(null);
-    if (!form.customerName.trim()) {
-      setNotice({ variant: 'error', text: 'Customer name is required.' });
+    if (!submitGate.canSubmit) {
+      setNotice({
+        variant: 'error',
+        text: submitGate.primaryReason || 'Complete the required fields before saving.',
+      });
       return;
-    }
-    if (!form.boatId) {
-      setNotice({ variant: 'error', text: 'Select a boat first.' });
-      return;
-    }
-    if (!form.date || !form.startTime || durationHours <= 0) {
-      setNotice({ variant: 'error', text: 'Date, start time, and duration are required.' });
-      return;
-    }
-    if (availability.status === 'unavailable') {
-      setNotice({ variant: 'error', text: 'This slot is already booked.' });
-      return;
-    }
-    if (form.bookingType === 'captain_charter') {
-      const validation = validateCharterPassengerCount(form.passengerCount);
-      if (!validation.valid) {
-        setNotice({ variant: 'error', text: validation.error });
-        return;
-      }
     }
 
     setSaving(action);
@@ -329,15 +379,32 @@ export default function AdminStaffBooking() {
           staff_notes: form.staffNotes,
         }),
       });
-      const payload = (await res.json().catch(() => ({}))) as { booking?: { id?: string }; error?: string };
-      if (!res.ok) throw new Error(payload.error || 'Could not save booking.');
+      const payload = (await res.json().catch(() => ({}))) as {
+        booking?: { id?: string };
+        error?: string;
+        availability?: { conflict?: AvailabilityConflict };
+      };
+      if (!res.ok) {
+        if (res.status === 409 && payload.availability?.conflict) {
+          setAvailability({
+            status: 'unavailable',
+            message: 'Already Booked',
+            conflict: payload.availability.conflict,
+          });
+        }
+        throw new Error(payload.error || 'Could not save booking.');
+      }
       setNotice({
         variant: 'success',
         text: action === 'hold' ? 'Hold saved and availability blocked.' : 'Staff booking created.',
       });
-      reset(false);
+      resetAvailability();
+      setForm(blankForm());
+      setSaving(null);
       await loadToday();
-      if (payload.booking?.id) navigate(`/admin/bookings/${payload.booking.id}`);
+      if (payload.booking?.id) {
+        navigate(`/admin/bookings/${payload.booking.id}`);
+      }
     } catch (err) {
       setNotice({ variant: 'error', text: err instanceof Error ? err.message : 'Could not save booking.' });
     } finally {
@@ -506,12 +573,32 @@ export default function AdminStaffBooking() {
               </label>
             </div>
 
-            <div className="mt-6 flex flex-col gap-3 sm:flex-row">
-              <button type="button" onClick={() => void save('hold')} disabled={saving != null || availability.status === 'unavailable'} className="inline-flex min-h-[54px] flex-1 items-center justify-center gap-2 rounded-xl bg-amber-600 px-5 py-3 text-lg font-bold text-white hover:bg-amber-700 disabled:opacity-50">
+            {submitGate.primaryReason ? (
+              <p className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900" role="status">
+                {submitGate.primaryReason}
+              </p>
+            ) : (
+              <p className="mt-4 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm font-semibold text-green-900" role="status">
+                Ready to save — this slot is available.
+              </p>
+            )}
+
+            <div className="mt-4 flex flex-col gap-3 sm:flex-row">
+              <button
+                type="button"
+                onClick={() => void save('hold')}
+                disabled={!submitGate.canSubmit}
+                className="inline-flex min-h-[54px] flex-1 items-center justify-center gap-2 rounded-xl bg-amber-600 px-5 py-3 text-lg font-bold text-white hover:bg-amber-700 disabled:opacity-50"
+              >
                 <Save className="h-5 w-5" />
                 {saving === 'hold' ? 'Saving...' : 'Save Hold'}
               </button>
-              <button type="button" onClick={() => void save('booking')} disabled={saving != null || availability.status === 'unavailable'} className="inline-flex min-h-[54px] flex-1 items-center justify-center gap-2 rounded-xl bg-green-700 px-5 py-3 text-lg font-bold text-white hover:bg-green-800 disabled:opacity-50">
+              <button
+                type="button"
+                onClick={() => void save('booking')}
+                disabled={!submitGate.canSubmit}
+                className="inline-flex min-h-[54px] flex-1 items-center justify-center gap-2 rounded-xl bg-green-700 px-5 py-3 text-lg font-bold text-white hover:bg-green-800 disabled:opacity-50"
+              >
                 <CalendarPlus className="h-5 w-5" />
                 {saving === 'booking' ? 'Creating...' : 'Create Booking'}
               </button>

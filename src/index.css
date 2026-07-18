@@ -2305,3 +2305,47 @@ body:has(.contact-page) {
     display: none !important;
   }
 }
+
+/* Admin booking details — print-friendly summary */
+@media print {
+  header.sticky.top-0.z-40,
+  nav[aria-label='Admin mobile navigation'] {
+    display: none !important;
+  }
+
+  .admin-booking-no-print,
+  .admin-booking-actions-panel {
+    display: none !important;
+  }
+
+  .admin-booking-details-page {
+    display: block !important;
+  }
+
+  .admin-booking-details-page .order-2,
+  .admin-booking-details-page section {
+    break-inside: avoid;
+  }
+
+  body {
+    background: #fff !important;
+  }
+
+  .admin-booking-details-page .rounded-2xl {
+    box-shadow: none !important;
+    border: 1px solid #e2e8f0;
+  }
+
+  .admin-booking-details-page aside {
+    display: none !important;
+  }
+
+  .admin-booking-details-page input,
+  .admin-booking-details-page select,
+  .admin-booking-details-page textarea {
+    border: none !important;
+    box-shadow: none !important;
+    padding-left: 0 !important;
+    background: transparent !important;
+  }
+}

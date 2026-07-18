@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Copy, Download, FileArchive, FileText, Printer, Save } from 'lucide-react';
 import { supabase } from '../lib/supabase';
@@ -16,7 +16,9 @@ import {
   adminCharterCapacityLines,
   validateCharterPassengerCount,
 } from '../lib/charterCapacity';
-import { withTimeout } from '../lib/adminDiagnostics';
+import { adminDebugLog, describeError, withTimeout } from '../lib/adminDiagnostics';
+import { copyText } from '../lib/copyText';
+import { siteOrigin } from '../lib/siteOrigin';
 
 type BoatRow = { id: string; name: string; type?: string | null };
 type TimelineEvent = {
@@ -218,6 +220,9 @@ export default function AdminBookingDetails() {
   const [evidenceModalOpen, setEvidenceModalOpen] = useState(false);
   const [evidenceLoading, setEvidenceLoading] = useState(false);
   const [exportLoading, setExportLoading] = useState<'pdf' | 'zip' | 'stripe' | null>(null);
+  const [activeAction, setActiveAction] = useState<string | null>(null);
+  const [linkFallback, setLinkFallback] = useState<string | null>(null);
+  const availabilityCheckSeq = useRef(0);
 
   const booking = detail?.booking;
 
@@ -432,15 +437,24 @@ export default function AdminBookingDetails() {
     return () => window.removeEventListener('beforeunload', beforeUnload);
   }, [dirty]);
 
+  const durationHours = useMemo(() => {
+    const n = Number(form.duration);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  }, [form.duration]);
+
   const scheduleChanged = useMemo(() => {
     if (!booking) return false;
-    const start = new Date(`${form.date}T${form.startTime}`);
-    const end = new Date(`${form.date}T${form.endTime}`);
-    return (
-      form.boatId !== booking.boat_id ||
-      (Number.isFinite(start.getTime()) && start.toISOString() !== booking.start_time) ||
-      (Number.isFinite(end.getTime()) && end.toISOString() !== booking.end_time)
-    );
+    if (form.boatId !== booking.boat_id) return true;
+    const start = form.date && form.startTime ? new Date(`${form.date}T${form.startTime}`) : null;
+    const end = form.date && form.endTime ? new Date(`${form.date}T${form.endTime}`) : null;
+    const startMs = start && Number.isFinite(start.getTime()) ? start.getTime() : null;
+    const endMs = end && Number.isFinite(end.getTime()) ? end.getTime() : null;
+    const storedStartMs = booking.start_time ? new Date(String(booking.start_time)).getTime() : null;
+    const storedEndMs = booking.end_time ? new Date(String(booking.end_time)).getTime() : null;
+    const minuteMs = 60 * 1000;
+    if (startMs != null && storedStartMs != null && Math.abs(startMs - storedStartMs) > minuteMs) return true;
+    if (endMs != null && storedEndMs != null && Math.abs(endMs - storedEndMs) > minuteMs) return true;
+    return false;
   }, [booking, form.boatId, form.date, form.endTime, form.startTime]);
 
   const auditTimeline = useMemo(() => {
@@ -465,31 +479,44 @@ export default function AdminBookingDetails() {
   }, [detail?.communications, detail?.timeline]);
 
   useEffect(() => {
-    if (!scheduleChanged || !form.boatId || !form.date || !form.startTime || !form.endTime) {
+    const seq = ++availabilityCheckSeq.current;
+
+    if (!scheduleChanged || !form.boatId || !form.date || !form.startTime || durationHours <= 0) {
       setAvailability('idle');
       return;
     }
+
+    setAvailability('checking');
     const timer = window.setTimeout(async () => {
-      setAvailability('checking');
+      if (seq !== availabilityCheckSeq.current) return;
+
       try {
         const res = await authedFetch('/api/admin/staff-bookings/check', {
           method: 'POST',
           body: JSON.stringify({
             boat_id: form.boatId,
-            start_time: new Date(`${form.date}T${form.startTime}`).toISOString(),
-            end_time: new Date(`${form.date}T${form.endTime}`).toISOString(),
+            date: form.date,
+            startTime: form.startTime,
+            durationHours,
             rental_location: form.location,
             excludeBookingId: id,
           }),
         });
-        const payload = (await res.json().catch(() => ({}))) as { available?: boolean };
-        setAvailability(res.ok && payload.available ? 'available' : 'conflict');
+        const payload = (await res.json().catch(() => ({}))) as { available?: boolean; error?: string };
+        if (seq !== availabilityCheckSeq.current) return;
+        if (!res.ok) {
+          setAvailability('error');
+          return;
+        }
+        setAvailability(payload.available ? 'available' : 'conflict');
       } catch {
+        if (seq !== availabilityCheckSeq.current) return;
         setAvailability('error');
       }
     }, 300);
+
     return () => window.clearTimeout(timer);
-  }, [authedFetch, form.boatId, form.date, form.endTime, form.location, form.startTime, scheduleChanged]);
+  }, [authedFetch, durationHours, form.boatId, form.date, form.location, form.startTime, id, scheduleChanged]);
 
   const setField = (key: string, value: string) => {
     setForm((prev) => {
@@ -509,8 +536,12 @@ export default function AdminBookingDetails() {
       setNotice({ variant: 'error', text: 'Select a boat first.' });
       return;
     }
-    if (availability === 'conflict') {
+    if (scheduleChanged && availability === 'conflict') {
       setNotice({ variant: 'error', text: 'Conflict detected. Choose another boat or time before saving.' });
+      return;
+    }
+    if (scheduleChanged && availability === 'checking') {
+      setNotice({ variant: 'error', text: 'Availability check in progress. Wait a moment, then try again.' });
       return;
     }
     if (form.bookingType === 'captain_charter') {
@@ -521,60 +552,169 @@ export default function AdminBookingDetails() {
       }
     }
     setSaving(true);
+    adminDebugLog('booking-details:save:start', { bookingId: id });
     try {
+      const body = {
+        customer: { full_name: form.customerName, phone: form.phone, email: form.email },
+        booking: {
+          boat_id: form.boatId,
+          location: form.location,
+          bookingType: form.bookingType,
+          start_time: new Date(`${form.date}T${form.startTime}`).toISOString(),
+          end_time: new Date(`${form.date}T${form.endTime}`).toISOString(),
+          passengerCount: form.passengers,
+          booking_source: form.source,
+          originalPrice: form.originalPrice,
+          discount: form.discount,
+          manual_discount_reason: form.discountReason,
+          finalPrice: form.finalPrice,
+          depositPaid: form.depositPaid,
+          amountCollected: form.amountCollected,
+          remainingBalance: form.remainingBalance,
+          payment_method: form.paymentMethod,
+          payment_status: form.paymentStatus,
+          staff_notes: form.internalNotes,
+          internal_notes: form.customerNotes,
+          status: form.status,
+        },
+      };
       const res = await authedFetch(`/api/admin/bookings/${id}`, {
         method: 'PATCH',
-        body: JSON.stringify({
-          customer: { full_name: form.customerName, phone: form.phone, email: form.email },
-          booking: {
-            boat_id: form.boatId,
-            location: form.location,
-            bookingType: form.bookingType,
-            start_time: new Date(`${form.date}T${form.startTime}`).toISOString(),
-            end_time: new Date(`${form.date}T${form.endTime}`).toISOString(),
-            passengerCount: form.passengers,
-            booking_source: form.source,
-            originalPrice: form.originalPrice,
-            discount: form.discount,
-            manual_discount_reason: form.discountReason,
-            finalPrice: form.finalPrice,
-            depositPaid: form.depositPaid,
-            amountCollected: form.amountCollected,
-            remainingBalance: form.remainingBalance,
-            payment_method: form.paymentMethod,
-            payment_status: form.paymentStatus,
-            staff_notes: form.internalNotes,
-            internal_notes: form.customerNotes,
-            status: form.status,
-          },
-        }),
+        body: JSON.stringify(body),
       });
       const payload = (await res.json().catch(() => ({}))) as DetailPayload & { error?: string };
+      adminDebugLog('booking-details:save:response', { bookingId: id, status: res.status, ok: res.ok });
       if (!res.ok) throw new Error(payload.error || 'Could not save booking.');
+      availabilityCheckSeq.current += 1;
       setDetail(payload);
       setDirty(false);
+      setAvailability('idle');
       setNotice({ variant: 'success', text: 'Booking saved.' });
       await load();
     } catch (err) {
-      setNotice({ variant: 'error', text: err instanceof Error ? err.message : 'Could not save booking.' });
+      console.error('Save booking failed:', err);
+      setNotice({ variant: 'error', text: describeError(err, 'Could not save booking.') });
     } finally {
       setSaving(false);
     }
   };
 
+  const actionSuccessMessage: Record<string, string> = {
+    confirm_hold: 'Hold converted to confirmed booking.',
+    cancel: 'Booking cancelled.',
+    ready: 'Booking marked ready for departure.',
+    complete: 'Booking marked completed.',
+    send_confirmation: 'Confirmation email sent.',
+  };
+
   const runAction = async (action: string) => {
+    if (activeAction) return;
+
+    if (action === 'cancel') {
+      if (
+        !window.confirm(
+          'Cancel this booking? The reservation will be marked cancelled but the record will remain for audit history.'
+        )
+      ) {
+        return;
+      }
+    }
+
+    if (action === 'complete') {
+      if (!window.confirm('Mark this booking as completed? This updates the booking status.')) {
+        return;
+      }
+    }
+
+    if (action === 'ready') {
+      const blockers: string[] = [];
+      if (!Boolean(booking?.waiver_signed || (Array.isArray(booking?.waivers) && booking.waivers.length > 0))) {
+        blockers.push('waiver not signed');
+      }
+      if (!['submitted', 'verified'].includes(String(booking?.insurance_status || ''))) {
+        blockers.push('insurance not submitted');
+      }
+      if (blockers.length > 0) {
+        const proceed = window.confirm(
+          `Requirements incomplete (${blockers.join(', ')}). Mark ready for departure anyway?`
+        );
+        if (!proceed) return;
+      }
+    }
+
+    setActiveAction(action);
+    adminDebugLog('booking-details:action:start', {
+      bookingId: id,
+      action,
+      endpoint: `/api/admin/bookings/${id}/actions`,
+      method: 'POST',
+    });
     try {
       const res = await authedFetch(`/api/admin/bookings/${id}/actions`, {
         method: 'POST',
         body: JSON.stringify({ action }),
       });
-      const payload = (await res.json().catch(() => ({}))) as { error?: string };
+      const payload = (await res.json().catch(() => ({}))) as { error?: string; status?: string; alreadySent?: boolean };
+      adminDebugLog('booking-details:action:response', {
+        bookingId: id,
+        action,
+        status: res.status,
+        ok: res.ok,
+        body: payload,
+      });
       if (!res.ok) throw new Error(payload.error || 'Action failed.');
-      setNotice({ variant: 'success', text: 'Action completed.' });
+      const successText =
+        action === 'send_confirmation' && payload.alreadySent
+          ? 'Confirmation was already sent to this customer.'
+          : actionSuccessMessage[action] || 'Action completed.';
+      setNotice({ variant: 'success', text: successText });
       await load();
     } catch (err) {
-      setNotice({ variant: 'error', text: err instanceof Error ? err.message : 'Action failed.' });
+      console.error(`Booking action "${action}" failed:`, err);
+      setNotice({ variant: 'error', text: describeError(err, 'Action failed.') });
+    } finally {
+      setActiveAction(null);
     }
+  };
+
+  const copyBookingLink = async () => {
+    const url = `${siteOrigin()}/waivers-insurance?bookingId=${encodeURIComponent(booking?.id || id)}`;
+    adminDebugLog('booking-details:copy-link:start', { bookingId: id, url });
+    try {
+      const result = await copyText(url);
+      if (result === 'clipboard') {
+        setLinkFallback(null);
+        setNotice({ variant: 'success', text: 'Booking link copied.' });
+      } else {
+        setLinkFallback(url);
+        setNotice({ variant: 'error', text: 'Could not copy automatically. Select the link below and copy it manually.' });
+      }
+    } catch (err) {
+      console.error('Copy booking link failed:', err);
+      setLinkFallback(url);
+      setNotice({ variant: 'error', text: 'Could not copy to clipboard. Select the link below.' });
+    }
+  };
+
+  const duplicateBooking = () => {
+    const params = new URLSearchParams();
+    if (booking?.boat_id || form.boatId) params.set('boatId', String(booking?.boat_id || form.boatId));
+    if (form.date) params.set('date', form.date);
+    if (form.startTime) params.set('startTime', form.startTime);
+    if (form.duration) params.set('durationHours', String(form.duration));
+    if (form.location) params.set('location', form.location);
+    if (form.customerName) params.set('customerName', form.customerName);
+    if (form.phone) params.set('phone', form.phone);
+    if (form.email) params.set('email', form.email);
+    if (form.bookingType) params.set('bookingType', form.bookingType);
+    if (form.passengers) params.set('passengerCount', String(form.passengers));
+    if (form.source) params.set('bookingSource', form.source);
+    navigate(`/admin/staff-booking?${params.toString()}`);
+  };
+
+  const printBooking = () => {
+    adminDebugLog('booking-details:print', { bookingId: id });
+    window.print();
   };
 
   const openCommunicationPreview = async (messageType: string) => {
@@ -789,7 +929,6 @@ export default function AdminBookingDetails() {
     ? booking.user_verifications[0]
     : booking.user_verifications;
   const hasBuoyDoc = Boolean(verification?.buoy_proof_url);
-  const bookingLink = `${window.location.origin}/waivers-insurance?bookingId=${booking.id}`;
   const evidenceFileBase = evidencePackageFileName(bookingCustomer?.full_name, booking.created_at, 'zip').replace(
     /\.zip$/,
     ''
@@ -798,6 +937,32 @@ export default function AdminBookingDetails() {
   const inputClass =
     'mt-1 min-h-11 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-base text-slate-900 shadow-sm focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-200';
   const labelClass = 'block text-sm font-bold text-slate-700';
+  const actionBtnClass =
+    'inline-flex min-h-11 w-full touch-manipulation items-center justify-center gap-2 rounded-lg px-4 py-3 font-bold disabled:cursor-not-allowed disabled:opacity-50';
+
+  const noticeBanner = notice ? (
+    <div
+      className={`rounded-lg px-4 py-3 font-semibold ${
+        notice.variant === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+      }`}
+      role="status"
+      aria-live="polite"
+    >
+      {notice.text}
+    </div>
+  ) : null;
+
+  const saveDisabled =
+    saving || !env.apiUrlConfigured || (scheduleChanged && (availability === 'conflict' || availability === 'checking'));
+  const saveDisabledReason = saving
+    ? 'Saving…'
+    : !env.apiUrlConfigured
+      ? 'API URL is not configured.'
+      : scheduleChanged && availability === 'checking'
+        ? 'Checking availability…'
+        : scheduleChanged && availability === 'conflict'
+          ? 'Schedule conflict — choose another boat or time.'
+          : '';
 
   return (
     <AdminShell
@@ -826,13 +991,42 @@ export default function AdminBookingDetails() {
         </>
       }
     >
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
+      <div className="admin-booking-details-page grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
         <section className="order-2 space-y-6 lg:order-1">
-          {notice ? (
-            <div className={`rounded-lg px-4 py-3 font-semibold ${notice.variant === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-              {notice.text}
+          <div className="hidden print:block">
+            <h2 className="text-2xl font-black">Launch Zone Charters — Booking Summary</h2>
+            <p className="mt-1 text-sm text-slate-600">
+              Ref {shortId(booking.id, 8)} · Printed {new Date().toLocaleString()}
+            </p>
+            <div className="mt-4 grid gap-2 text-sm sm:grid-cols-2">
+              <div>
+                <span className="font-bold">Customer:</span> {form.customerName || '-'}
+              </div>
+              <div>
+                <span className="font-bold">Status:</span> {humanizeLabel(String(form.status || ''))}
+              </div>
+              <div>
+                <span className="font-bold">Trip:</span> {form.date} {form.startTime}–{form.endTime} · {form.location}
+              </div>
+              <div>
+                <span className="font-bold">Payment:</span> ${money(form.finalPrice)} ({humanizeLabel(String(form.paymentStatus || ''))})
+              </div>
+              <div>
+                <span className="font-bold">Waiver:</span> {waiverDone ? 'Signed' : 'Missing'}
+              </div>
+              <div>
+                <span className="font-bold">Insurance:</span> {insuranceDone ? 'Submitted' : 'Missing'}
+              </div>
+            </div>
+          </div>
+
+          {!env.apiUrlConfigured ? (
+            <div className="admin-booking-no-print rounded-lg bg-red-100 px-4 py-3 font-semibold text-red-800">
+              API URL is not configured (set VITE_API_URL). Save and booking actions will not work until this is fixed.
             </div>
           ) : null}
+
+          <div className="lg:hidden">{noticeBanner}</div>
 
           <div className="grid gap-6 xl:grid-cols-2">
             <div className="rounded-2xl bg-white p-5 shadow">
@@ -904,6 +1098,9 @@ export default function AdminBookingDetails() {
                 {availability === 'available' ? <span className="text-green-700">Available</span> : null}
                 {availability === 'conflict' ? <span className="text-red-700">Conflict Detected</span> : null}
                 {availability === 'checking' ? <span className="text-slate-600">Checking availability...</span> : null}
+                {availability === 'error' ? (
+                  <span className="text-amber-800">Could not verify availability. You can still save — the server will validate.</span>
+                ) : null}
               </div>
             </div>
 
@@ -996,17 +1193,102 @@ export default function AdminBookingDetails() {
         <aside className="order-1 space-y-5 lg:order-2">
           <div className="rounded-2xl bg-white p-5 shadow lg:sticky lg:top-20">
             <h2 className="text-xl font-black">Actions</h2>
-            <div className="mt-4 grid gap-2">
-              <button type="button" onClick={() => void save()} disabled={saving || availability === 'conflict'} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-3 font-bold text-white disabled:opacity-50"><Save className="h-4 w-4" />Save Changes</button>
-              {booking.status === 'hold' ? <button type="button" onClick={() => void runAction('confirm_hold')} className="min-h-11 rounded-lg bg-green-700 px-4 py-3 font-bold text-white">Convert Hold to Confirmed</button> : null}
-              <button type="button" onClick={() => void runAction('cancel')} className="min-h-11 rounded-lg bg-red-700 px-4 py-3 font-bold text-white">Cancel Booking</button>
-              <button type="button" onClick={() => void runAction('ready')} className="min-h-11 rounded-lg bg-cyan-700 px-4 py-3 font-bold text-white">Mark Ready for Departure</button>
-              <button type="button" onClick={() => void runAction('complete')} className="min-h-11 rounded-lg bg-slate-700 px-4 py-3 font-bold text-white">Mark Completed</button>
-              <button type="button" onClick={() => navigate(`/admin/staff-booking?boatId=${booking.boat_id || ''}&date=${form.date || ''}&startTime=${form.startTime || ''}&durationHours=${form.duration || '4'}&location=${encodeURIComponent(form.location || '')}`)} className="min-h-11 rounded-lg bg-purple-700 px-4 py-3 font-bold text-white">Duplicate Booking</button>
-              <button type="button" onClick={() => void runAction('send_confirmation')} className="min-h-11 rounded-lg bg-amber-600 px-4 py-3 font-bold text-white">Send Confirmation</button>
-              <button type="button" onClick={() => void navigator.clipboard.writeText(bookingLink)} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border px-4 py-3 font-bold"><Copy className="h-4 w-4" />Copy Booking Link</button>
-              <button type="button" onClick={() => window.print()} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border px-4 py-3 font-bold"><Printer className="h-4 w-4" />Print Booking</button>
+            <div className="mt-3 space-y-3">
+              {noticeBanner}
+              {saveDisabledReason ? (
+                <p className="text-sm font-semibold text-slate-600">{saveDisabledReason}</p>
+              ) : null}
             </div>
+            <div className="admin-booking-actions-panel mt-4 grid gap-2">
+              <button
+                type="button"
+                onClick={() => void save()}
+                disabled={saveDisabled}
+                className={`${actionBtnClass} bg-slate-900 text-white`}
+              >
+                <Save className="h-4 w-4" />
+                {saving ? 'Saving…' : 'Save Changes'}
+              </button>
+              {booking.status === 'hold' ? (
+                <button
+                  type="button"
+                  onClick={() => void runAction('confirm_hold')}
+                  disabled={Boolean(activeAction) || !env.apiUrlConfigured}
+                  className={`${actionBtnClass} bg-green-700 text-white`}
+                >
+                  {activeAction === 'confirm_hold' ? 'Working…' : 'Convert Hold to Confirmed'}
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => void runAction('cancel')}
+                disabled={Boolean(activeAction) || !env.apiUrlConfigured}
+                className={`${actionBtnClass} bg-red-700 text-white`}
+              >
+                {activeAction === 'cancel' ? 'Cancelling…' : 'Cancel Booking'}
+              </button>
+              <button
+                type="button"
+                onClick={() => void runAction('ready')}
+                disabled={Boolean(activeAction) || !env.apiUrlConfigured}
+                className={`${actionBtnClass} bg-cyan-700 text-white`}
+              >
+                {activeAction === 'ready' ? 'Updating…' : 'Mark Ready for Departure'}
+              </button>
+              <button
+                type="button"
+                onClick={() => void runAction('complete')}
+                disabled={Boolean(activeAction) || !env.apiUrlConfigured}
+                className={`${actionBtnClass} bg-slate-700 text-white`}
+              >
+                {activeAction === 'complete' ? 'Updating…' : 'Mark Completed'}
+              </button>
+              <button
+                type="button"
+                onClick={duplicateBooking}
+                disabled={Boolean(activeAction)}
+                className={`${actionBtnClass} bg-purple-700 text-white`}
+              >
+                Duplicate Booking
+              </button>
+              <button
+                type="button"
+                onClick={() => void runAction('send_confirmation')}
+                disabled={Boolean(activeAction) || !env.apiUrlConfigured}
+                className={`${actionBtnClass} bg-amber-600 text-white`}
+              >
+                {activeAction === 'send_confirmation' ? 'Sending…' : 'Send Confirmation'}
+              </button>
+              <button
+                type="button"
+                onClick={() => void copyBookingLink()}
+                disabled={Boolean(activeAction)}
+                className={`${actionBtnClass} border border-slate-300 bg-white text-slate-900`}
+              >
+                <Copy className="h-4 w-4" />
+                Copy Booking Link
+              </button>
+              <button
+                type="button"
+                onClick={printBooking}
+                disabled={Boolean(activeAction)}
+                className={`${actionBtnClass} border border-slate-300 bg-white text-slate-900`}
+              >
+                <Printer className="h-4 w-4" />
+                Print Booking
+              </button>
+            </div>
+            {linkFallback ? (
+              <div className="admin-booking-no-print mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                <div className="text-sm font-bold text-amber-950">Booking link</div>
+                <input
+                  className="mt-2 min-h-11 w-full rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm text-slate-900"
+                  value={linkFallback}
+                  readOnly
+                  onFocus={(e) => e.currentTarget.select()}
+                />
+              </div>
+            ) : null}
           </div>
           <div className="rounded-2xl bg-white p-5 shadow">
             <h2 className="text-xl font-black">Payment</h2>
@@ -1028,7 +1310,7 @@ export default function AdminBookingDetails() {
             </div>
           </div>
 
-          <div className="rounded-2xl bg-white p-5 shadow">
+          <div className="admin-booking-no-print rounded-2xl bg-white p-5 shadow">
             <div className="flex items-center justify-between gap-3">
               <h2 className="text-xl font-black">Dispute</h2>
               <Link to="/admin/disputes" className="text-sm font-bold text-amber-700 hover:underline">
@@ -1185,6 +1467,7 @@ export default function AdminBookingDetails() {
             )}
           </div>
 
+          <div className="admin-booking-no-print">
           <AdminLegalEvidencePanel
             bookingId={id || booking.id}
             booking={booking}
@@ -1385,12 +1668,13 @@ export default function AdminBookingDetails() {
               </div>
             </div>
           </div>
+          </div>
 
         </aside>
       </div>
 
       {customEmailPreview ? (
-        <div className="fixed inset-0 z-[125] flex items-center justify-center bg-slate-950/70 p-4">
+        <div className="admin-booking-no-print fixed inset-0 z-[125] flex items-center justify-center bg-slate-950/70 p-4">
           <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl">
             <div className="flex items-start justify-between gap-4">
               <div>
@@ -1450,7 +1734,7 @@ export default function AdminBookingDetails() {
       ) : null}
 
       {viewCommunication ? (
-        <div className="fixed inset-0 z-[125] flex items-center justify-center bg-slate-950/70 p-4">
+        <div className="admin-booking-no-print fixed inset-0 z-[125] flex items-center justify-center bg-slate-950/70 p-4">
           <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl">
             <div className="flex items-start justify-between gap-4">
               <div>
@@ -1484,7 +1768,7 @@ export default function AdminBookingDetails() {
       ) : null}
 
       {communicationModal ? (
-        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/70 p-4">
+        <div className="admin-booking-no-print fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/70 p-4">
           <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl">
             <div className="flex items-start justify-between gap-4">
               <div>
@@ -1570,7 +1854,7 @@ export default function AdminBookingDetails() {
       ) : null}
 
       {evidenceModalOpen ? (
-        <div className="fixed inset-0 z-[130] flex items-center justify-center bg-slate-950/70 p-4">
+        <div className="admin-booking-no-print fixed inset-0 z-[130] flex items-center justify-center bg-slate-950/70 p-4">
           <div className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl">
             <div className="flex items-start justify-between gap-4">
               <div>

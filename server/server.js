@@ -2804,8 +2804,8 @@ app.post('/api/admin/bookings/:id/actions', async (req, res) => {
       const detail = await loadAdminBookingDetail(id);
       const email = detail?.booking?.customers?.email || detail?.booking?.email || '';
       if (!email) return res.status(400).json({ error: 'Booking has no customer email.' });
-      await sendBookingConfirmationInternal({ bookingId: id, email, source: 'admin' });
-      return res.json({ ok: true });
+      const sendResult = await sendBookingConfirmationInternal({ bookingId: id, email, source: 'admin' });
+      return res.json({ ok: true, alreadySent: Boolean(sendResult?.alreadySent) });
     }
 
     if (action === 'delete_hold') {

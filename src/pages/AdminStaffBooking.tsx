@@ -138,7 +138,27 @@ export default function AdminStaffBooking() {
     const startTime = searchParams.get('startTime') || searchParams.get('time') || '';
     const location = searchParams.get('location') || '';
     const duration = searchParams.get('durationHours') || '';
-    if (!boatId && !date && !startTime && !location && !duration) return;
+    const customerName = searchParams.get('customerName') || '';
+    const phone = searchParams.get('phone') || '';
+    const email = searchParams.get('email') || '';
+    const bookingType = searchParams.get('bookingType') || '';
+    const passengerCount = searchParams.get('passengerCount') || '';
+    const bookingSource = searchParams.get('bookingSource') || '';
+    if (
+      !boatId &&
+      !date &&
+      !startTime &&
+      !location &&
+      !duration &&
+      !customerName &&
+      !phone &&
+      !email &&
+      !bookingType &&
+      !passengerCount &&
+      !bookingSource
+    ) {
+      return;
+    }
     setForm((prev) => ({
       ...prev,
       boatId: boatId || prev.boatId,
@@ -147,6 +167,12 @@ export default function AdminStaffBooking() {
       location: location === 'Titusville' || location === 'Port Orange' ? (location as LocationValue) : prev.location,
       durationPreset: ['2', '4', '6', '8'].includes(duration) ? (duration as DurationPreset) : prev.durationPreset,
       customDuration: duration && !['2', '4', '6', '8'].includes(duration) ? duration : prev.customDuration,
+      customerName: customerName || prev.customerName,
+      phone: phone || prev.phone,
+      email: email || prev.email,
+      bookingType: bookingType === 'captain_charter' ? 'captain_charter' : bookingType === 'rental' ? 'rental' : prev.bookingType,
+      passengerCount: passengerCount || prev.passengerCount,
+      bookingSource: bookingSource || prev.bookingSource,
     }));
   }, [searchParams]);
 

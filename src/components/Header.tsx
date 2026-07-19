@@ -56,6 +56,10 @@ const MENU_SECTIONS: MenuSection[] = [
       { kind: 'link', name: 'Contact', path: 'contact' },
     ],
   },
+  {
+    title: 'Staff',
+    items: [{ kind: 'link', name: 'Staff Login', path: 'admin' }],
+  },
 ];
 
 export default function Header({ onNavigate, currentPage }: HeaderProps) {

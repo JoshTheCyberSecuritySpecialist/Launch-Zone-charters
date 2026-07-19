@@ -1,0 +1,18 @@
+import { Helmet } from 'react-helmet-async';
+import { SITE_FAVICON_PATH } from '../../constants/branding';
+
+/** Admin-area document title and mobile home-screen hints (does not replace public SEO). */
+export default function AdminDocumentHead() {
+  return (
+    <Helmet>
+      <title>Launch Zone Admin</title>
+      <meta name="application-name" content="Launch Zone Admin" />
+      <meta name="apple-mobile-web-app-title" content="Launch Zone Admin" />
+      <meta name="apple-mobile-web-app-capable" content="yes" />
+      <meta name="mobile-web-app-capable" content="yes" />
+      <meta name="theme-color" content="#0f172a" />
+      <link rel="icon" type="image/png" href={SITE_FAVICON_PATH} />
+      <link rel="apple-touch-icon" href={SITE_FAVICON_PATH} />
+    </Helmet>
+  );
+}

@@ -1,9 +1,14 @@
-import { useState } from 'react';
-import { Lock, Mail } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Eye, EyeOff, Lock, Mail } from 'lucide-react';
+import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import Logo from '../components/ui/Logo';
-import { beginAsyncInteraction, wrapNavigateClick } from '../lib/clickPerf';
+import { beginAsyncInteraction } from '../lib/clickPerf';
 import type { AuthError } from '@supabase/supabase-js';
+import { useAuth } from '../contexts/useAuth';
+import FullPageLoader from '../components/FullPageLoader';
+import AdminDocumentHead from '../components/admin/AdminDocumentHead';
+import { safeAdminRedirectPath } from '../lib/adminLoginRedirect';
 
 function supabaseHostForLog(): string {
   const u = import.meta.env.VITE_SUPABASE_URL;
@@ -32,15 +37,39 @@ function formatAdminAuthError(err: AuthError | Error, cause?: unknown): string {
   return out;
 }
 
-interface AdminLoginProps {
-  onNavigate: (page: string) => void;
-}
+export default function AdminLogin() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { user, isAdmin, loading: authLoading } = useAuth();
+  const redirectTo = useMemo(
+    () => safeAdminRedirectPath((location.state as { from?: string } | null)?.from),
+    [location.state]
+  );
 
-export default function AdminLogin({ onNavigate }: AdminLoginProps) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!authLoading && user && isAdmin) {
+      navigate(redirectTo, { replace: true });
+    }
+  }, [authLoading, isAdmin, navigate, redirectTo, user]);
+
+  if (authLoading) {
+    return (
+      <>
+        <AdminDocumentHead />
+        <FullPageLoader message="Checking admin access…" />
+      </>
+    );
+  }
+
+  if (user && isAdmin) {
+    return <Navigate to={redirectTo} replace />;
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -70,15 +99,15 @@ export default function AdminLogin({ onNavigate }: AdminLoginProps) {
       }
 
       outcome = 'success';
-      window.location.assign('/admin');
+      navigate(redirectTo, { replace: true });
     } catch (err: unknown) {
-      const e = err instanceof Error ? err : new Error(String(err));
-      const cause = e && 'cause' in e && e.cause != null ? e.cause : undefined;
-      console.error('[AdminLogin] signInWithPassword threw', e, {
+      const caught = err instanceof Error ? err : new Error(String(err));
+      const cause = caught && 'cause' in caught && caught.cause != null ? caught.cause : undefined;
+      console.error('[AdminLogin] signInWithPassword threw', caught, {
         supabaseHost: supabaseHostForLog(),
         cause,
       });
-      setError(formatAdminAuthError(e, cause));
+      setError(formatAdminAuthError(caught, cause));
       outcome = 'error';
     } finally {
       setLoading(false);
@@ -86,94 +115,119 @@ export default function AdminLogin({ onNavigate }: AdminLoginProps) {
     }
   };
 
+  const inputClass =
+    'relative z-10 block min-h-[3.25rem] w-full rounded-xl border-2 border-slate-300 bg-white py-3 text-lg text-slate-900 caret-slate-900 placeholder:text-slate-400 shadow-sm focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-200';
+
   return (
-    <div className="relative isolate z-10 flex min-h-screen items-center justify-center bg-slate-50 px-4 py-12 text-slate-900 sm:px-6 lg:px-8">
-      <div className="relative z-10 w-full max-w-md">
-        <div className="mb-8 text-center">
-          <Logo variant="admin" className="mx-auto mb-6 justify-center" />
-          <Lock className="mx-auto mb-4 h-12 w-12 text-amber-600" aria-hidden />
-          <h1 className="text-3xl font-bold text-slate-900">Admin Login</h1>
-          <p className="mt-2 text-slate-600">Sign in to access the dashboard</p>
-        </div>
+    <>
+      <AdminDocumentHead />
+      <div className="relative isolate z-10 flex min-h-[100dvh] items-center justify-center bg-slate-50 px-4 py-10 text-slate-900 sm:px-6">
+        <div className="relative z-10 w-full max-w-md pb-6">
+          <div className="mb-6 text-center">
+            <Logo variant="admin" className="mx-auto mb-5 justify-center" />
+            <Lock className="mx-auto mb-3 h-11 w-11 text-amber-600" aria-hidden />
+            <h1 className="text-3xl font-bold text-slate-900">Launch Zone Admin</h1>
+            <p className="mt-2 text-lg text-slate-600">Sign in with your staff email and password.</p>
+          </div>
 
-        <div className="relative z-10 rounded-xl bg-white p-8 text-slate-900 shadow-lg">
-          {error && (
-            <div className="mb-6 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800">
-              {error}
-            </div>
-          )}
-
-          <form onSubmit={handleSubmit} className="relative z-10 space-y-6">
-            <div>
-              <label htmlFor="email" className="mb-2 block text-sm font-semibold text-slate-900">
-                Email Address
-              </label>
-              <div className="relative z-10">
-                <div
-                  className="pointer-events-none absolute inset-y-0 left-0 z-0 flex items-center pl-3"
-                  aria-hidden
-                >
-                  <Mail className="h-5 w-5 text-slate-400" />
-                </div>
-                <input
-                  id="email"
-                  type="email"
-                  name="email"
-                  autoComplete="email"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="relative z-10 block w-full rounded-lg border border-slate-300 bg-white py-3 pl-10 pr-3 text-slate-900 caret-slate-900 placeholder:text-slate-400 shadow-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-amber-600"
-                  placeholder="admin@example.com"
-                />
+          <div className="relative z-10 rounded-2xl bg-white p-6 text-slate-900 shadow-lg sm:p-8">
+            {user && !isAdmin ? (
+              <div className="mb-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-base font-semibold text-amber-950">
+                This account is signed in but is not authorized for admin. Use an admin account or sign out from
+                another session.
               </div>
-            </div>
+            ) : null}
 
-            <div>
-              <label htmlFor="password" className="mb-2 block text-sm font-semibold text-slate-900">
-                Password
-              </label>
-              <div className="relative z-10">
-                <div
-                  className="pointer-events-none absolute inset-y-0 left-0 z-0 flex items-center pl-3"
-                  aria-hidden
-                >
-                  <Lock className="h-5 w-5 text-slate-400" />
-                </div>
-                <input
-                  id="password"
-                  type="password"
-                  name="password"
-                  autoComplete="current-password"
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="relative z-10 block w-full rounded-lg border border-slate-300 bg-white py-3 pl-10 pr-3 text-slate-900 caret-slate-900 placeholder:text-slate-400 shadow-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-amber-600"
-                  placeholder="••••••••"
-                />
+            {error ? (
+              <div className="mb-5 rounded-xl border border-red-200 bg-red-50 p-4 text-base text-red-800" role="alert">
+                {error}
               </div>
+            ) : null}
+
+            <form onSubmit={handleSubmit} className="relative z-10 space-y-5">
+              <div>
+                <label htmlFor="email" className="mb-2 block text-base font-bold text-slate-900">
+                  Email
+                </label>
+                <div className="relative z-10">
+                  <div
+                    className="pointer-events-none absolute inset-y-0 left-0 z-0 flex items-center pl-4"
+                    aria-hidden
+                  >
+                    <Mail className="h-5 w-5 text-slate-400" />
+                  </div>
+                  <input
+                    id="email"
+                    type="email"
+                    name="email"
+                    autoComplete="email"
+                    inputMode="email"
+                    required
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className={`${inputClass} pl-12 pr-4`}
+                    placeholder="you@example.com"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label htmlFor="password" className="mb-2 block text-base font-bold text-slate-900">
+                  Password
+                </label>
+                <div className="relative z-10">
+                  <div
+                    className="pointer-events-none absolute inset-y-0 left-0 z-0 flex items-center pl-4"
+                    aria-hidden
+                  >
+                    <Lock className="h-5 w-5 text-slate-400" />
+                  </div>
+                  <input
+                    id="password"
+                    type={showPassword ? 'text' : 'password'}
+                    name="password"
+                    autoComplete="current-password"
+                    required
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className={`${inputClass} pl-12 pr-14`}
+                    placeholder="Your password"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((v) => !v)}
+                    className="absolute inset-y-0 right-0 z-20 flex min-w-[3rem] items-center justify-center rounded-r-xl text-slate-600 hover:text-slate-900"
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  >
+                    {showPassword ? <EyeOff className="h-5 w-5" aria-hidden /> : <Eye className="h-5 w-5" aria-hidden />}
+                  </button>
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={loading}
+                className="min-h-[3.25rem] w-full rounded-xl bg-amber-600 text-lg font-bold text-white transition-colors hover:bg-amber-700 disabled:bg-slate-300"
+              >
+                {loading ? 'Signing in…' : 'Sign In'}
+              </button>
+            </form>
+
+            <p className="mt-6 rounded-xl bg-cyan-50 px-4 py-3 text-base leading-relaxed text-cyan-950">
+              <strong>Tip:</strong> Add this page to your phone&apos;s Home Screen for one-tap access.
+            </p>
+
+            <div className="mt-6 flex flex-col gap-3">
+              <Link
+                to="/"
+                className="inline-flex min-h-[3rem] w-full items-center justify-center rounded-xl border-2 border-slate-300 bg-white px-4 text-base font-bold text-slate-800 hover:bg-slate-50"
+              >
+                Back to Main Website
+              </Link>
             </div>
-
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full rounded-lg bg-amber-600 py-3 font-bold text-white transition-colors hover:bg-amber-700 disabled:bg-slate-300"
-            >
-              {loading ? 'Signing in...' : 'Sign In'}
-            </button>
-          </form>
-
-          <div className="mt-6 text-center">
-            <button
-              type="button"
-              onClick={wrapNavigateClick('admin_login', 'home', onNavigate)}
-              className="text-sm text-slate-600 hover:text-slate-900"
-            >
-              Back to Home
-            </button>
           </div>
         </div>
       </div>
-    </div>
+    </>
   );
 }

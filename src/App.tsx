@@ -22,7 +22,6 @@ import WaiversInsurance from './pages/WaiversInsurance';
 import BookingDepositCancel from './pages/BookingDepositCancel';
 import VerifyBooking from './pages/VerifyBooking';
 import Admin from './pages/Admin';
-import AdminOperationsDashboard from './pages/AdminOperationsDashboard';
 import AdminBookingsHub from './pages/AdminBookingsHub';
 import AdminApprovals from './pages/AdminApprovals';
 import AdminMessages from './pages/AdminMessages';
@@ -39,6 +38,8 @@ import AdminBookingEdit from './pages/AdminBookingEdit';
 import AdminOutbox from './pages/AdminOutbox';
 import AdminDisputes from './pages/AdminDisputes';
 import AdminLogin from './pages/AdminLogin';
+import AdminEntryGate from './components/admin/AdminEntryGate';
+import AdminDocumentHead from './components/admin/AdminDocumentHead';
 import CaptainsLog from './pages/CaptainsLog';
 import LogArticle from './pages/LogArticle';
 import BioluminescentTours from './pages/BioluminescentTours';
@@ -74,6 +75,7 @@ function AppLayout() {
         <link rel="apple-touch-icon" href={SITE_FAVICON_PATH} />
         <link rel="shortcut icon" href={SITE_FAVICON_PATH} />
       </Helmet>
+      {!showHeaderFooter ? <AdminDocumentHead /> : null}
       <ScrollToTop />
       {showHeaderFooter && <Header onNavigate={onNavigate} currentPage={currentPage} />}
       <main
@@ -121,8 +123,8 @@ function AppLayout() {
           <Route path="/log/:slug" element={<LogArticle onNavigate={onNavigate} />} />
           <Route path="/terms" element={<Terms />} />
           <Route path="/refund-policy" element={<RefundPolicy />} />
-          <Route path="/admin-login" element={<AdminLogin onNavigate={onNavigate} />} />
-          <Route path="/admin" element={<AdminOperationsDashboard />} />
+          <Route path="/admin-login" element={<AdminLogin />} />
+          <Route path="/admin" element={<AdminEntryGate />} />
           <Route path="/admin/more" element={<AdminMoreTools />} />
           <Route path="/admin/bookings" element={<AdminBookingsHub />} />
           <Route path="/admin/bookings/list" element={<Admin onNavigate={onNavigate} />} />

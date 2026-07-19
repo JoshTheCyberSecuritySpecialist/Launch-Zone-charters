@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom';
 import { Phone, MapPin } from 'lucide-react';
 import Logo from './ui/Logo';
 import { wrapNavigateClick } from '../lib/clickPerf';
@@ -166,6 +167,14 @@ export default function Footer({ onNavigate }: FooterProps) {
         <div className="mt-8 border-t border-slate-700 pt-8 text-center text-sm">
           <p>&copy; {new Date().getFullYear()} Launch Zone Charters. All rights reserved.</p>
           <p className="mt-2">Licensed & Insured | Open 7 Days a Week</p>
+          <p className="mt-4">
+            <Link
+              to="/admin"
+              className="text-xs font-semibold text-slate-500 underline-offset-2 transition-colors hover:text-amber-400 hover:underline"
+            >
+              Staff Login
+            </Link>
+          </p>
         </div>
       </div>
     </footer>

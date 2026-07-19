@@ -9,6 +9,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ExternalLink,
+  Pencil,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { UserVerificationsRow } from '../lib/supabase';
@@ -1788,6 +1789,13 @@ export default function Admin({ onNavigate }: AdminProps) {
                         >
                           Details
                         </Link>
+                        <Link
+                          to={`/admin/bookings/${booking.id}/edit`}
+                          className="inline-flex items-center gap-1 rounded bg-amber-600 px-3 py-1 text-sm font-semibold text-white transition-colors hover:bg-amber-500"
+                        >
+                          <Pencil className="h-3.5 w-3.5" aria-hidden />
+                          Edit Booking
+                        </Link>
                         <button
                           type="button"
                           disabled={!canApproveReject || tableLoading}
@@ -1949,6 +1957,13 @@ export default function Admin({ onNavigate }: AdminProps) {
                             className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white"
                           >
                             Details
+                          </Link>
+                          <Link
+                            to={`/admin/bookings/${booking.id}/edit`}
+                            className="inline-flex items-center justify-center gap-1 rounded-lg bg-amber-600 px-3 py-2 text-sm font-semibold text-white"
+                          >
+                            <Pencil className="h-4 w-4" aria-hidden />
+                            Edit Booking
                           </Link>
                           <button
                             type="button"

@@ -3,6 +3,7 @@ const { publicAppBase } = require('./verificationReminder');
 
 const MESSAGE_TYPES = new Set([
   'booking_confirmation',
+  'booking_updated',
   'hold_confirmation',
   'missing_waiver',
   'missing_insurance',
@@ -97,6 +98,11 @@ function templateFor(type, detail) {
       subject: 'Your Launch Zone Charters booking confirmation',
       intro: `Hi ${ctx.name}, your Launch Zone Charters booking is confirmed.`,
       sms: `Launch Zone: Your booking is confirmed for ${ctx.date} ${ctx.start}-${ctx.end} on ${ctx.boatName}. Docs/checklist: ${ctx.docsUrl}`,
+    },
+    booking_updated: {
+      subject: 'Updated details for your Launch Zone Charters booking',
+      intro: `Hi ${ctx.name}, we updated your Launch Zone Charters booking. Here are the current trip details:`,
+      sms: `Launch Zone: Your booking was updated. ${ctx.date} ${ctx.start}-${ctx.end} on ${ctx.boatName} at ${ctx.location}. Questions? Call 803-542-1761.`,
     },
     hold_confirmation: {
       subject: 'Your Launch Zone Charters hold',

@@ -25,6 +25,7 @@ const preTripApprovalService = require('./services/preTripApprovalService');
 const waiverContent = require('./content/waiverContent');
 const bookingReliability = require('./services/bookingReliability');
 const bookingCommunications = require('./services/bookingCommunications');
+const adminBookingUpdate = require('./services/adminBookingUpdate');
 const shopService = require('./services/shopService');
 const disputeService = require('./services/disputeService');
 const disputeEvidenceService = require('./services/disputeEvidenceService');
@@ -36,7 +37,7 @@ const { getRocketConditions } = require('./services/rocketService');
 const { getLaunchSchedulePreview } = require('./services/rocketScheduleService');
 const { getWeeklyForecast } = require('./services/weeklyForecastService');
 const { getMarineConditions } = require('./services/marineConditionsService');
-const availabilityService = require('./services/availabilityService');
+const adminBookingUpdate = require('./services/adminBookingUpdate');
 const captainCharterAvailability = require('./services/captainCharterAvailability');
 const charterCapacity = require('./charterCapacity');
 const {
@@ -2684,6 +2685,18 @@ function bookingDetailUpdateFromBody(body) {
   }
   const guestCount = Number(body.guest_count ?? body.passengerCount ?? body.passengers);
   if (Number.isFinite(guestCount) && guestCount > 0) out.guest_count = Math.floor(guestCount);
+  setText('promo_code', ['promo_code', 'promoCode'], 80);
+  const licenseStatus = cleanText(body.license_status || body.licenseStatus, 40);
+  if (licenseStatus && ['pending', 'verified', 'rejected'].includes(licenseStatus)) {
+    out.license_status = licenseStatus;
+  }
+  const insuranceStatus = cleanText(body.insurance_status || body.insuranceStatus, 40);
+  if (insuranceStatus && ['pending', 'submitted', 'verified', 'rejected'].includes(insuranceStatus)) {
+    out.insurance_status = insuranceStatus;
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'waiver_signed') || Object.prototype.hasOwnProperty.call(body, 'waiverSigned')) {
+    out.waiver_signed = Boolean(body.waiver_signed ?? body.waiverSigned);
+  }
   return out;
 }
 
@@ -2710,16 +2723,22 @@ app.patch('/api/admin/bookings/:id', async (req, res) => {
     if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid booking id.' });
     const { data: existing, error: existingError } = await supabase
       .from('bookings')
-      .select('id, customer_id, boat_id, start_time, end_time, status, booking_type, guest_count')
+      .select(
+        '*, customers(id, full_name, email, phone)'
+      )
       .eq('id', id)
       .maybeSingle();
     if (existingError) throw existingError;
     if (!existing?.id) return res.status(404).json({ error: 'Booking not found.' });
 
+    const beforeCustomer = Array.isArray(existing.customers) ? existing.customers[0] : existing.customers;
+    const beforeBooking = { ...existing };
+    delete beforeBooking.customers;
+
     const body = req.body || {};
     const customer = body.customer || {};
+    const customerUpdate = {};
     if (existing.customer_id && Object.keys(customer).length > 0) {
-      const customerUpdate = {};
       if (Object.prototype.hasOwnProperty.call(customer, 'full_name')) customerUpdate.full_name = cleanText(customer.full_name, 160);
       if (Object.prototype.hasOwnProperty.call(customer, 'email')) customerUpdate.email = cleanText(customer.email, 160) || null;
       if (Object.prototype.hasOwnProperty.call(customer, 'phone')) customerUpdate.phone = cleanText(customer.phone, 40);
@@ -2749,37 +2768,78 @@ app.patch('/api/admin/bookings/:id', async (req, res) => {
     if (nextStart !== existing.start_time) update.start_time = new Date(nextStart).toISOString();
     if (nextEnd !== existing.end_time) update.end_time = new Date(nextEnd).toISOString();
 
-    const scheduleChanged = Boolean(update.boat_id || update.start_time || update.end_time);
+    const scheduleChanged = Boolean(update.boat_id || update.start_time || update.end_time || update.booking_type);
     if (scheduleChanged && String(update.status || existing.status) !== 'cancelled') {
       if (!nextBoatId) return res.status(400).json({ error: 'Select a boat first.' });
-      await availabilityService.assertBookingSlotAvailable({
-        boatId: nextBoatId,
-        startTime: nextStart,
-        endTime: nextEnd,
-        location: update.rental_location || null,
-        excludeBookingId: id,
-      });
+      try {
+        await availabilityService.assertBookingSlotAvailable({
+          boatId: nextBoatId,
+          startTime: nextStart,
+          endTime: nextEnd,
+          location: update.rental_location || existing.rental_location || null,
+          excludeBookingId: id,
+        });
+      } catch (slotErr) {
+        const msg =
+          slotErr?.statusCode === 409 || isOverlapConstraintError(slotErr)
+            ? adminBookingUpdate.SLOT_OVERLAP_MESSAGE
+            : slotErr?.message || adminBookingUpdate.SLOT_OVERLAP_MESSAGE;
+        return res.status(slotErr?.statusCode || 409).json({ error: msg });
+      }
       update.duration_hours = roundMoney((new Date(nextEnd).getTime() - new Date(nextStart).getTime()) / (1000 * 60 * 60));
     }
+
+    const afterCustomer = beforeCustomer
+      ? {
+          ...beforeCustomer,
+          ...customerUpdate,
+        }
+      : null;
+    const customerChanges = afterCustomer ? adminBookingUpdate.customerFieldChanges(beforeCustomer, afterCustomer) : [];
+    const bookingChanges = adminBookingUpdate.bookingFieldChanges(beforeBooking, update);
+    const allChanges = [...customerChanges, ...bookingChanges];
 
     if (Object.keys(update).length > 0) {
       const { error } = await supabase.from('bookings').update(update).eq('id', id);
       if (error) {
-        if (isOverlapConstraintError(error)) return res.status(409).json({ error: SLOT_TAKEN_USER_MESSAGE });
+        if (isOverlapConstraintError(error)) {
+          return res.status(409).json({ error: adminBookingUpdate.SLOT_OVERLAP_MESSAGE });
+        }
         throw error;
       }
-      await bookingReliability.insertActivity(supabase, {
-        booking_id: id,
-        event_type: 'booking_modified',
-        actor_type: 'admin',
-        actor_id: adminUser.id,
-        message: 'Booking modified by admin.',
-        payload: { fields: Object.keys(update) },
+      if (allChanges.length > 0) {
+        await adminBookingUpdate.logBookingChanges(supabase, bookingReliability, {
+          bookingId: id,
+          adminUserId: adminUser.id,
+          changes: allChanges,
+        });
+      } else {
+        await bookingReliability.insertActivity(supabase, {
+          booking_id: id,
+          event_type: 'booking_modified',
+          actor_type: 'admin',
+          actor_id: adminUser.id,
+          message: 'Booking saved with no field changes.',
+          payload: { fields: [] },
+        });
+      }
+    } else if (customerChanges.length > 0) {
+      await adminBookingUpdate.logBookingChanges(supabase, bookingReliability, {
+        bookingId: id,
+        adminUserId: adminUser.id,
+        changes: customerChanges,
       });
     }
 
     const detail = await loadAdminBookingDetail(id);
-    return res.json(detail);
+    const customerFacingChanges = adminBookingUpdate.hasCustomerFacingChanges(allChanges);
+    return res.json({
+      ...detail,
+      updateMeta: {
+        customerFacingChanges,
+        changeSummaries: allChanges.map((row) => row.message),
+      },
+    });
   } catch (err) {
     console.error('[admin-booking-detail:update]', err);
     return res.status(err.statusCode || 500).json({ error: err.message || 'Could not update booking.' });

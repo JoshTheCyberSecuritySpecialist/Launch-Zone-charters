@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
-import { Copy, Download, FileArchive, FileText, Printer, Save } from 'lucide-react';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { Copy, Download, FileArchive, FileText, Pencil, Printer, Save } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/useAuth';
 import FullPageLoader from '../components/FullPageLoader';
@@ -99,6 +99,7 @@ const paymentMethods = ['', 'stripe', 'cash', 'venmo', 'zelle', 'paypal', 'group
 const paymentStatuses = ['pending', 'deposit_paid', 'paid'];
 const communicationButtons = [
   ['booking_confirmation', 'Send Confirmation'],
+  ['booking_updated', 'Send Updated Confirmation'],
   ['missing_waiver', 'Send Waiver Reminder'],
   ['missing_insurance', 'Send Insurance Reminder'],
   ['missing_documents', 'Send Document Reminder'],
@@ -189,6 +190,7 @@ function disputeDeadlineLabel(dueBy: string | null | undefined) {
 export default function AdminBookingDetails() {
   const { id = '' } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const { user, isAdmin, loading: authLoading } = useAuth();
   const [detail, setDetail] = useState<DetailPayload | null>(null);
   const [boats, setBoats] = useState<BoatRow[]>([]);
@@ -222,6 +224,7 @@ export default function AdminBookingDetails() {
   const [exportLoading, setExportLoading] = useState<'pdf' | 'zip' | 'stripe' | null>(null);
   const [activeAction, setActiveAction] = useState<string | null>(null);
   const [linkFallback, setLinkFallback] = useState<string | null>(null);
+  const [updatedConfirmationPrompt, setUpdatedConfirmationPrompt] = useState(false);
   const availabilityCheckSeq = useRef(0);
 
   const booking = detail?.booking;
@@ -428,6 +431,16 @@ export default function AdminBookingDetails() {
   }, [authLoading, isAdmin, load]);
 
   useEffect(() => {
+    const state = location.state as { bookingUpdated?: boolean; customerFacingChanges?: boolean } | null;
+    if (!state?.bookingUpdated) return;
+    setNotice({ variant: 'success', text: 'Booking updated successfully.' });
+    if (state.customerFacingChanges) {
+      setUpdatedConfirmationPrompt(true);
+    }
+    navigate(location.pathname, { replace: true, state: null });
+  }, [location.pathname, location.state, navigate]);
+
+  useEffect(() => {
     const beforeUnload = (event: BeforeUnloadEvent) => {
       if (!dirty) return;
       event.preventDefault();
@@ -456,6 +469,10 @@ export default function AdminBookingDetails() {
     if (endMs != null && storedEndMs != null && Math.abs(endMs - storedEndMs) > minuteMs) return true;
     return false;
   }, [booking, form.boatId, form.date, form.endTime, form.startTime]);
+
+  const bookingHistory = useMemo(() => {
+    return (detail?.timeline || []).filter((row) => String(row.event_type || '') === 'booking_field_changed');
+  }, [detail?.timeline]);
 
   const auditTimeline = useMemo(() => {
     const activityRows: TimelineEvent[] = (detail?.timeline || []).map((row) => ({
@@ -765,6 +782,7 @@ export default function AdminBookingDetails() {
       }
       if (!res.ok) throw new Error(payload.error || 'Could not send message.');
       setCommunicationModal(null);
+      setUpdatedConfirmationPrompt(false);
       setNotice({ variant: 'success', text: 'Communication sent.' });
       await load();
     } catch (err) {
@@ -971,6 +989,13 @@ export default function AdminBookingDetails() {
       actions={
         <>
           <Link
+            to={`/admin/bookings/${id}/edit`}
+            className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-amber-600 px-4 py-3 text-sm font-semibold text-white hover:bg-amber-500"
+          >
+            <Pencil className="h-4 w-4" aria-hidden />
+            Edit Booking
+          </Link>
+          <Link
             to="/admin/bookings/list"
             className="inline-flex min-h-11 items-center rounded-lg bg-slate-800 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-700"
           >
@@ -1023,6 +1048,30 @@ export default function AdminBookingDetails() {
           {!env.apiUrlConfigured ? (
             <div className="admin-booking-no-print rounded-lg bg-red-100 px-4 py-3 font-semibold text-red-800">
               API URL is not configured (set VITE_API_URL). Save and booking actions will not work until this is fixed.
+            </div>
+          ) : null}
+
+          {updatedConfirmationPrompt ? (
+            <div className="admin-booking-no-print rounded-xl border-2 border-amber-300 bg-amber-50 p-5">
+              <p className="text-lg font-bold text-amber-950">
+                Important trip details changed. Would you like to send the customer an updated confirmation?
+              </p>
+              <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+                <button
+                  type="button"
+                  onClick={() => void openCommunicationPreview('booking_updated')}
+                  className="min-h-12 rounded-xl bg-amber-700 px-5 py-3 text-lg font-black text-white"
+                >
+                  Send Updated Confirmation
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setUpdatedConfirmationPrompt(false)}
+                  className="min-h-12 rounded-xl border-2 border-amber-400 bg-white px-5 py-3 text-lg font-bold text-amber-950"
+                >
+                  Not now
+                </button>
+              </div>
             </div>
           ) : null}
 
@@ -1163,6 +1212,23 @@ export default function AdminBookingDetails() {
           </div>
 
           <div className="rounded-2xl bg-white p-5 shadow">
+            <h2 className="text-xl font-black">Booking History</h2>
+            <p className="mt-1 text-sm text-slate-500">Recent admin edits to this reservation.</p>
+            <div className="mt-4 space-y-3">
+              {bookingHistory.length === 0 ? (
+                <p className="text-base text-slate-600">No edit history yet.</p>
+              ) : (
+                bookingHistory.map((event) => (
+                  <div key={event.id} className="rounded-xl border border-slate-200 p-3">
+                    <div className="font-semibold text-slate-900">{event.message || formatEventName(event.event_type)}</div>
+                    <div className="text-xs text-slate-400">{new Date(event.created_at).toLocaleString()}</div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          <div className="rounded-2xl bg-white p-5 shadow">
             <h2 className="text-xl font-black">Audit Timeline</h2>
             <p className="mt-1 text-sm text-slate-500">Append-only activity, communications, and system events.</p>
             <div className="mt-4 space-y-3">
@@ -1193,6 +1259,13 @@ export default function AdminBookingDetails() {
         <aside className="order-1 space-y-5 lg:order-2">
           <div className="rounded-2xl bg-white p-5 shadow lg:sticky lg:top-20">
             <h2 className="text-xl font-black">Actions</h2>
+            <Link
+              to={`/admin/bookings/${id}/edit`}
+              className="mt-4 inline-flex min-h-14 w-full touch-manipulation items-center justify-center gap-3 rounded-xl bg-amber-600 px-5 py-4 text-xl font-black text-white hover:bg-amber-500"
+            >
+              <Pencil className="h-6 w-6" aria-hidden />
+              Edit Booking
+            </Link>
             <div className="mt-3 space-y-3">
               {noticeBanner}
               {saveDisabledReason ? (

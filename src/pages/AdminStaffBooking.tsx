@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { CalendarPlus, RotateCcw, Save } from 'lucide-react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { CalendarPlus, Pencil, RotateCcw, Save } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/useAuth';
 import FullPageLoader from '../components/FullPageLoader';
@@ -103,7 +103,6 @@ function timeLabel(start: string, end: string): string {
 
 export default function AdminStaffBooking() {
   const [searchParams] = useSearchParams();
-  const navigate = useNavigate();
   const { user, isAdmin, loading: authLoading } = useAuth();
   const [form, setForm] = useState(blankForm);
   const [boats, setBoats] = useState<BoatRow[]>([]);
@@ -116,6 +115,8 @@ export default function AdminStaffBooking() {
   const [notice, setNotice] = useState<{ variant: 'success' | 'error'; text: string } | null>(null);
   const [todayRows, setTodayRows] = useState<StaffBookingRow[]>([]);
   const [todayLoading, setTodayLoading] = useState(false);
+  const [createSuccess, setCreateSuccess] = useState<{ id: string; kind: 'hold' | 'booking' } | null>(null);
+  const [postCreateBusy, setPostCreateBusy] = useState<string | null>(null);
   const availabilityCheckSeq = useRef(0);
 
   const selectedBoat = boats.find((boat) => boat.id === form.boatId) || null;
@@ -429,12 +430,30 @@ export default function AdminStaffBooking() {
       setSaving(null);
       await loadToday();
       if (payload.booking?.id) {
-        navigate(`/admin/bookings/${payload.booking.id}`);
+        setCreateSuccess({ id: payload.booking.id, kind: action });
       }
     } catch (err) {
       setNotice({ variant: 'error', text: err instanceof Error ? err.message : 'Could not save booking.' });
     } finally {
       setSaving(null);
+    }
+  };
+
+  const sendCreatedConfirmation = async () => {
+    if (!createSuccess?.id) return;
+    setPostCreateBusy('confirmation');
+    try {
+      const res = await authedFetch(`/api/admin/bookings/${createSuccess.id}/actions`, {
+        method: 'POST',
+        body: JSON.stringify({ action: 'send_confirmation' }),
+      });
+      const body = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) throw new Error(body.error || 'Could not send confirmation.');
+      setNotice({ variant: 'success', text: 'Confirmation email sent.' });
+    } catch (err) {
+      setNotice({ variant: 'error', text: err instanceof Error ? err.message : 'Could not send confirmation.' });
+    } finally {
+      setPostCreateBusy(null);
     }
   };
 
@@ -459,7 +478,60 @@ export default function AdminStaffBooking() {
 
   return (
     <AdminShell title="Staff Booking" subtitle="Fast internal phone bookings and holds">
-        {notice ? (
+        {createSuccess ? (
+          <div className="mb-6 rounded-2xl border-2 border-green-300 bg-green-50 p-6 shadow-sm">
+            <h2 className="text-2xl font-black text-green-950">
+              {createSuccess.kind === 'hold' ? 'Hold Created Successfully' : 'Booking Created Successfully'}
+            </h2>
+            <p className="mt-2 text-lg text-green-900">What would you like to do next?</p>
+            <div className="mt-5 grid gap-3 sm:grid-cols-2">
+              <Link
+                to={`/admin/bookings/${createSuccess.id}`}
+                className="inline-flex min-h-14 items-center justify-center rounded-xl bg-slate-900 px-5 text-lg font-black text-white"
+              >
+                View Booking
+              </Link>
+              <Link
+                to={`/admin/bookings/${createSuccess.id}/edit`}
+                className="inline-flex min-h-14 items-center justify-center gap-2 rounded-xl bg-amber-600 px-5 text-lg font-black text-white"
+              >
+                <Pencil className="h-5 w-5" aria-hidden />
+                Edit Booking
+              </Link>
+              <button
+                type="button"
+                disabled={postCreateBusy != null}
+                onClick={() => void sendCreatedConfirmation()}
+                className="inline-flex min-h-14 items-center justify-center rounded-xl bg-cyan-700 px-5 text-lg font-black text-white disabled:opacity-50"
+              >
+                {postCreateBusy === 'confirmation' ? 'Sending…' : 'Send Confirmation'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setCreateSuccess(null);
+                  setNotice(null);
+                }}
+                className="inline-flex min-h-14 items-center justify-center rounded-xl border-2 border-green-700 bg-white px-5 text-lg font-black text-green-950"
+              >
+                Create Another Booking
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        {notice && !createSuccess ? (
+          <div
+            className={`mb-6 rounded-xl px-4 py-3 text-sm font-semibold ${
+              notice.variant === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+            }`}
+            role="status"
+          >
+            {notice.text}
+          </div>
+        ) : null}
+
+        {notice && createSuccess ? (
           <div
             className={`mb-6 rounded-xl px-4 py-3 text-sm font-semibold ${
               notice.variant === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'

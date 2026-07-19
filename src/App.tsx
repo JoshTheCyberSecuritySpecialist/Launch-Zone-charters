@@ -35,6 +35,7 @@ import AdminBoats from './pages/AdminBoats';
 import AdminStaffBooking from './pages/AdminStaffBooking';
 import AdminCalendar from './pages/AdminCalendar';
 import AdminBookingDetails from './pages/AdminBookingDetails';
+import AdminBookingEdit from './pages/AdminBookingEdit';
 import AdminOutbox from './pages/AdminOutbox';
 import AdminDisputes from './pages/AdminDisputes';
 import AdminLogin from './pages/AdminLogin';
@@ -125,6 +126,7 @@ function AppLayout() {
           <Route path="/admin/more" element={<AdminMoreTools />} />
           <Route path="/admin/bookings" element={<AdminBookingsHub />} />
           <Route path="/admin/bookings/list" element={<Admin onNavigate={onNavigate} />} />
+          <Route path="/admin/bookings/:id/edit" element={<AdminBookingEdit />} />
           <Route path="/admin/bookings/:id" element={<AdminBookingDetails />} />
           <Route path="/admin/staff-booking" element={<AdminStaffBooking />} />
           <Route path="/admin/calendar" element={<AdminCalendar />} />

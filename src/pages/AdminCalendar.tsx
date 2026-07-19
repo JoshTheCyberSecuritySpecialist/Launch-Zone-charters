@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { CalendarDays, ChevronLeft, ChevronRight, MoreVertical, RefreshCw, Undo2 } from 'lucide-react';
+import { CalendarDays, ChevronLeft, ChevronRight, MoreVertical, Pencil, RefreshCw, Undo2 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/useAuth';
 import FullPageLoader from '../components/FullPageLoader';
@@ -579,6 +579,10 @@ export default function AdminCalendar() {
   const runQuickAction = async (booking: CalendarBooking, action: string) => {
     setQuickMenu(null);
     if (action === 'open') return openBooking(booking);
+    if (action === 'edit') {
+      navigate(`/admin/bookings/${booking.id}/edit`);
+      return;
+    }
     if (action === 'duplicate') {
       const start = new Date(booking.start_time);
       const params = new URLSearchParams({
@@ -1315,7 +1319,17 @@ export default function AdminCalendar() {
                                 {humanizeLabel(entry.booking.status)}
                               </StatusBadge>
                             </div>
-                            <div className="mt-3 text-sm font-bold text-amber-800 underline">Open booking</div>
+                            <div className="mt-3 flex flex-wrap gap-3 text-sm font-bold">
+                              <span className="text-amber-800 underline">Open booking</span>
+                              <Link
+                                to={`/admin/bookings/${entry.booking.id}/edit`}
+                                onClick={(e) => e.stopPropagation()}
+                                className="inline-flex items-center gap-1 text-slate-900 underline"
+                              >
+                                <Pencil className="h-4 w-4" aria-hidden />
+                                Edit booking
+                              </Link>
+                            </div>
                           </button>
                         </li>
                       ) : (
@@ -1745,6 +1759,10 @@ export default function AdminCalendar() {
             </label>
             <div className="mt-3 grid gap-1">
               <button type="button" onClick={() => void runQuickAction(quickMenu.booking, 'open')} className="rounded-lg px-3 py-2 text-left font-semibold hover:bg-slate-100">Open Details</button>
+              <button type="button" onClick={() => void runQuickAction(quickMenu.booking, 'edit')} className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-left font-semibold hover:bg-slate-100">
+                <Pencil className="h-4 w-4" aria-hidden />
+                Edit Booking
+              </button>
               <button type="button" onClick={() => void runQuickAction(quickMenu.booking, 'duplicate')} className="rounded-lg px-3 py-2 text-left font-semibold hover:bg-slate-100">Duplicate Booking</button>
               <button type="button" onClick={() => void runQuickAction(quickMenu.booking, 'cancel')} className="rounded-lg px-3 py-2 text-left font-semibold text-red-700 hover:bg-red-50">Cancel</button>
               <button type="button" onClick={() => void runQuickAction(quickMenu.booking, 'complete')} className="rounded-lg px-3 py-2 text-left font-semibold hover:bg-slate-100">Complete</button>

@@ -1,3 +1,9 @@
+import {
+  bookingFormTimesFromIso,
+  resolveBookingDateTimeRange,
+  resolveBookingRangeFromDuration,
+} from './bookingDateTimeRange';
+
 export type AdminBookingFormState = {
   customerName: string;
   phone: string;
@@ -36,11 +42,17 @@ export const moneyField = (v: unknown) => Number(v || 0).toFixed(2);
 
 export function bookingToFormState(booking: Record<string, unknown>): AdminBookingFormState {
   const customer = Array.isArray(booking.customers) ? booking.customers[0] : booking.customers;
-  const start = new Date(String(booking.start_time || ''));
-  const end = new Date(String(booking.end_time || ''));
+  const times = bookingFormTimesFromIso(String(booking.start_time || ''), String(booking.end_time || ''));
   const duration =
-    Number.isFinite(start.getTime()) && Number.isFinite(end.getTime())
-      ? Math.max(0, Math.round(((end.getTime() - start.getTime()) / 36e5) * 100) / 100)
+    times.date && booking.start_time && booking.end_time
+      ? (() => {
+          const resolved = resolveBookingDateTimeRange({
+            date: times.date,
+            startTime: times.startTime,
+            endTime: times.endTime,
+          });
+          return resolved.ok ? resolved.durationHours : Number(booking.duration_hours || 0);
+        })()
       : Number(booking.duration_hours || 0);
 
   const charter =
@@ -56,9 +68,9 @@ export function bookingToFormState(booking: Record<string, unknown>): AdminBooki
     boatId: String(booking.boat_id || ''),
     location: String(booking.rental_location || ''),
     bookingType: charter ? 'captain_charter' : 'rental',
-    date: Number.isFinite(start.getTime()) ? ymdLocal(start) : '',
-    startTime: Number.isFinite(start.getTime()) ? hhmmLocal(start) : '',
-    endTime: Number.isFinite(end.getTime()) ? hhmmLocal(end) : '',
+    date: times.date,
+    startTime: times.startTime,
+    endTime: times.endTime,
     duration: String(duration || ''),
     passengers: String(booking.guest_count || 1),
     source: String(booking.booking_source || (booking.staff_created ? 'admin' : 'website')),
@@ -81,6 +93,14 @@ export function bookingToFormState(booking: Record<string, unknown>): AdminBooki
 }
 
 export function buildPatchBody(form: AdminBookingFormState) {
+  const resolved = resolveBookingDateTimeRange({
+    date: form.date,
+    startTime: form.startTime,
+    endTime: form.endTime,
+  });
+  if (!resolved.ok) {
+    throw new Error(resolved.error);
+  }
   return {
     customer: {
       full_name: form.customerName,
@@ -88,11 +108,15 @@ export function buildPatchBody(form: AdminBookingFormState) {
       email: form.email,
     },
     booking: {
+      date: form.date,
+      start_time_local: form.startTime,
+      end_time_local: form.endTime,
       boat_id: form.boatId,
       location: form.location,
       bookingType: form.bookingType,
-      start_time: new Date(`${form.date}T${form.startTime}`).toISOString(),
-      end_time: new Date(`${form.date}T${form.endTime}`).toISOString(),
+      start_time: resolved.startIso,
+      end_time: resolved.endIso,
+      duration_hours: resolved.durationHours,
       passengerCount: form.passengers,
       booking_source: form.source,
       originalPrice: form.originalPrice,
@@ -117,15 +141,19 @@ export function buildPatchBody(form: AdminBookingFormState) {
 
 export function scheduleChangedFromBooking(form: AdminBookingFormState, booking: Record<string, unknown>): boolean {
   if (form.boatId !== String(booking.boat_id || '')) return true;
-  const start = form.date && form.startTime ? new Date(`${form.date}T${form.startTime}`) : null;
-  const end = form.date && form.endTime ? new Date(`${form.date}T${form.endTime}`) : null;
-  const startMs = start && Number.isFinite(start.getTime()) ? start.getTime() : null;
-  const endMs = end && Number.isFinite(end.getTime()) ? end.getTime() : null;
+  const resolved = resolveBookingDateTimeRange({
+    date: form.date,
+    startTime: form.startTime,
+    endTime: form.endTime,
+  });
+  if (!resolved.ok) return true;
   const storedStartMs = booking.start_time ? new Date(String(booking.start_time)).getTime() : null;
   const storedEndMs = booking.end_time ? new Date(String(booking.end_time)).getTime() : null;
   const minuteMs = 60 * 1000;
-  if (startMs != null && storedStartMs != null && Math.abs(startMs - storedStartMs) > minuteMs) return true;
-  if (endMs != null && storedEndMs != null && Math.abs(endMs - storedEndMs) > minuteMs) return true;
+  const nextStartMs = new Date(resolved.startIso).getTime();
+  const nextEndMs = new Date(resolved.endIso).getTime();
+  if (storedStartMs != null && Math.abs(nextStartMs - storedStartMs) > minuteMs) return true;
+  if (storedEndMs != null && Math.abs(nextEndMs - storedEndMs) > minuteMs) return true;
   if (form.bookingType === 'captain_charter' && booking.booking_type !== 'charter') return true;
   if (form.bookingType === 'rental' && booking.booking_type === 'charter') return true;
   return false;
@@ -133,7 +161,12 @@ export function scheduleChangedFromBooking(form: AdminBookingFormState, booking:
 
 export function applyDurationToForm(form: AdminBookingFormState, durationHours: number): AdminBookingFormState {
   if (!form.date || !form.startTime || durationHours <= 0) return form;
-  const start = new Date(`${form.date}T${form.startTime}`);
-  const end = new Date(start.getTime() + durationHours * 60 * 60 * 1000);
-  return { ...form, duration: String(durationHours), endTime: hhmmLocal(end) };
+  const resolved = resolveBookingRangeFromDuration({
+    date: form.date,
+    startTime: form.startTime,
+    durationHours,
+  });
+  if (!resolved.ok) return form;
+  const endLocal = bookingFormTimesFromIso(resolved.startIso, resolved.endIso);
+  return { ...form, duration: String(durationHours), endTime: endLocal.endTime };
 }

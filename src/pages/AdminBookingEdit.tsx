@@ -16,6 +16,11 @@ import {
 } from '../lib/charterCapacity';
 import { describeError, withTimeout } from '../lib/adminDiagnostics';
 import {
+  END_BEFORE_START_MESSAGE,
+  formatEndDayNote,
+  resolveBookingDateTimeRange,
+} from '../lib/bookingDateTimeRange';
+import {
   type AdminBookingFormState,
   applyDurationToForm,
   bookingToFormState,
@@ -115,23 +120,33 @@ export default function AdminBookingEdit() {
     void load();
   }, [authLoading, isAdmin, load]);
 
-  const durationHours = useMemo(() => {
-    if (!form) return 0;
-    const n = Number(form.duration);
-    return Number.isFinite(n) && n > 0 ? n : 0;
-  }, [form]);
-
   const scheduleChanged = useMemo(() => {
     if (!form || !booking) return false;
     return scheduleChangedFromBooking(form, booking);
   }, [booking, form]);
 
+  const overnightEndNote = useMemo(
+    () => formatEndDayNote(form?.date || '', form?.startTime || '', form?.endTime || ''),
+    [form?.date, form?.endTime, form?.startTime]
+  );
+
   useEffect(() => {
     const seq = ++availabilityCheckSeq.current;
-    if (!form || !scheduleChanged || !form.boatId || !form.date || !form.startTime || durationHours <= 0) {
+    if (!form || !scheduleChanged || !form.boatId || !form.date || !form.startTime || !form.endTime) {
       setAvailability('idle');
       return;
     }
+
+    const resolved = resolveBookingDateTimeRange({
+      date: form.date,
+      startTime: form.startTime,
+      endTime: form.endTime,
+    });
+    if (!resolved.ok) {
+      setAvailability('error');
+      return;
+    }
+
     setAvailability('checking');
     const timer = window.setTimeout(async () => {
       if (seq !== availabilityCheckSeq.current) return;
@@ -142,7 +157,7 @@ export default function AdminBookingEdit() {
             boat_id: form.boatId,
             date: form.date,
             startTime: form.startTime,
-            durationHours,
+            endTime: form.endTime,
             rental_location: form.location,
             excludeBookingId: id,
           }),
@@ -160,7 +175,7 @@ export default function AdminBookingEdit() {
       }
     }, 350);
     return () => window.clearTimeout(timer);
-  }, [authedFetch, durationHours, form, id, scheduleChanged]);
+  }, [authedFetch, form, id, scheduleChanged]);
 
   const setField = (key: keyof AdminBookingFormState, value: string) => {
     setForm((prev) => {
@@ -221,6 +236,15 @@ export default function AdminBookingEdit() {
         setNotice({ variant: 'error', text: validation.error });
         return;
       }
+    }
+    const range = resolveBookingDateTimeRange({
+      date: form.date,
+      startTime: form.startTime,
+      endTime: form.endTime,
+    });
+    if (!range.ok) {
+      setNotice({ variant: 'error', text: range.error || END_BEFORE_START_MESSAGE });
+      return;
     }
     setSaving(true);
     setNotice(null);
@@ -378,6 +402,9 @@ export default function AdminBookingEdit() {
               End time
               <input className={inputClass} type="time" value={form.endTime} onChange={(e) => setField('endTime', e.target.value)} />
             </label>
+            {overnightEndNote ? (
+              <p className="sm:col-span-2 text-sm font-semibold text-cyan-900">{overnightEndNote}</p>
+            ) : null}
             <label className={labelClass}>
               Duration (hours)
               <input className={inputClass} type="number" step="0.5" min="0.5" value={form.duration} onChange={(e) => setField('duration', e.target.value)} />

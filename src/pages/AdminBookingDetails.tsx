@@ -19,6 +19,12 @@ import {
 import { adminDebugLog, describeError, withTimeout } from '../lib/adminDiagnostics';
 import { copyText } from '../lib/copyText';
 import { siteOrigin } from '../lib/siteOrigin';
+import { bookingFormTimesFromIso, formatEndDayNote, resolveBookingDateTimeRange } from '../lib/bookingDateTimeRange';
+import {
+  type AdminBookingFormState,
+  applyDurationToForm,
+  buildPatchBody,
+} from '../lib/adminBookingFormState';
 
 type BoatRow = { id: string; name: string; type?: string | null };
 type TimelineEvent = {
@@ -140,9 +146,6 @@ const customEmailTemplates = {
   },
 } as const;
 
-const pad = (n: number) => String(n).padStart(2, '0');
-const ymd = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-const hhmm = (d: Date) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 const money = (v: unknown) => (Number(v || 0)).toFixed(2);
 
 function evidencePackageFileName(customerName: string | null | undefined, createdAt: string | null | undefined, ext: 'zip' | 'pdf') {
@@ -287,11 +290,18 @@ export default function AdminBookingDetails() {
       setDisputeNotes(Array.isArray(disputePayload.notes) ? disputePayload.notes : []);
       setDisputeNoteText('');
       const b = bookingPayload.booking;
-      const start = new Date(String(b.start_time || ''));
-      const end = new Date(String(b.end_time || ''));
-      const duration = Number.isFinite(start.getTime()) && Number.isFinite(end.getTime())
-        ? Math.max(0, Math.round(((end.getTime() - start.getTime()) / 36e5) * 100) / 100)
-        : Number(b.duration_hours || 0);
+      const times = bookingFormTimesFromIso(String(b.start_time || ''), String(b.end_time || ''));
+      const resolved = times.date
+        ? resolveBookingDateTimeRange({
+            date: times.date,
+            startTime: times.startTime,
+            endTime: times.endTime,
+          })
+        : null;
+      const duration =
+        resolved && resolved.ok
+          ? resolved.durationHours
+          : Number(b.duration_hours || 0);
       setForm({
         customerName: b.customers?.full_name || b.name || '',
         phone: b.customers?.phone || b.phone || '',
@@ -300,9 +310,9 @@ export default function AdminBookingDetails() {
         boatId: b.boat_id || '',
         location: b.rental_location || '',
         bookingType: b.booking_type === 'charter' ? 'captain_charter' : 'rental',
-        date: Number.isFinite(start.getTime()) ? ymd(start) : '',
-        startTime: Number.isFinite(start.getTime()) ? hhmm(start) : '',
-        endTime: Number.isFinite(end.getTime()) ? hhmm(end) : '',
+        date: times.date,
+        startTime: times.startTime,
+        endTime: times.endTime,
         duration: String(duration || ''),
         passengers: String(b.guest_count || 1),
         source: b.booking_source || (b.staff_created ? 'admin' : 'website'),
@@ -450,25 +460,29 @@ export default function AdminBookingDetails() {
     return () => window.removeEventListener('beforeunload', beforeUnload);
   }, [dirty]);
 
-  const durationHours = useMemo(() => {
-    const n = Number(form.duration);
-    return Number.isFinite(n) && n > 0 ? n : 0;
-  }, [form.duration]);
-
   const scheduleChanged = useMemo(() => {
     if (!booking) return false;
     if (form.boatId !== booking.boat_id) return true;
-    const start = form.date && form.startTime ? new Date(`${form.date}T${form.startTime}`) : null;
-    const end = form.date && form.endTime ? new Date(`${form.date}T${form.endTime}`) : null;
-    const startMs = start && Number.isFinite(start.getTime()) ? start.getTime() : null;
-    const endMs = end && Number.isFinite(end.getTime()) ? end.getTime() : null;
+    const resolved = resolveBookingDateTimeRange({
+      date: String(form.date || ''),
+      startTime: String(form.startTime || ''),
+      endTime: String(form.endTime || ''),
+    });
+    if (!resolved.ok) return true;
     const storedStartMs = booking.start_time ? new Date(String(booking.start_time)).getTime() : null;
     const storedEndMs = booking.end_time ? new Date(String(booking.end_time)).getTime() : null;
     const minuteMs = 60 * 1000;
-    if (startMs != null && storedStartMs != null && Math.abs(startMs - storedStartMs) > minuteMs) return true;
-    if (endMs != null && storedEndMs != null && Math.abs(endMs - storedEndMs) > minuteMs) return true;
+    const nextStartMs = new Date(resolved.startIso).getTime();
+    const nextEndMs = new Date(resolved.endIso).getTime();
+    if (storedStartMs != null && Math.abs(nextStartMs - storedStartMs) > minuteMs) return true;
+    if (storedEndMs != null && Math.abs(nextEndMs - storedEndMs) > minuteMs) return true;
     return false;
   }, [booking, form.boatId, form.date, form.endTime, form.startTime]);
+
+  const overnightEndNote = useMemo(
+    () => formatEndDayNote(String(form.date || ''), String(form.startTime || ''), String(form.endTime || '')),
+    [form.date, form.endTime, form.startTime]
+  );
 
   const bookingHistory = useMemo(() => {
     return (detail?.timeline || []).filter((row) => String(row.event_type || '') === 'booking_field_changed');
@@ -498,8 +512,18 @@ export default function AdminBookingDetails() {
   useEffect(() => {
     const seq = ++availabilityCheckSeq.current;
 
-    if (!scheduleChanged || !form.boatId || !form.date || !form.startTime || durationHours <= 0) {
+    if (!scheduleChanged || !form.boatId || !form.date || !form.startTime || !form.endTime) {
       setAvailability('idle');
+      return;
+    }
+
+    const resolved = resolveBookingDateTimeRange({
+      date: String(form.date),
+      startTime: String(form.startTime),
+      endTime: String(form.endTime),
+    });
+    if (!resolved.ok) {
+      setAvailability('error');
       return;
     }
 
@@ -514,7 +538,7 @@ export default function AdminBookingDetails() {
             boat_id: form.boatId,
             date: form.date,
             startTime: form.startTime,
-            durationHours,
+            endTime: form.endTime,
             rental_location: form.location,
             excludeBookingId: id,
           }),
@@ -533,15 +557,14 @@ export default function AdminBookingDetails() {
     }, 300);
 
     return () => window.clearTimeout(timer);
-  }, [authedFetch, durationHours, form.boatId, form.date, form.location, form.startTime, id, scheduleChanged]);
+  }, [authedFetch, form.boatId, form.date, form.endTime, form.location, form.startTime, id, scheduleChanged]);
 
   const setField = (key: string, value: string) => {
     setForm((prev) => {
-      const next = { ...prev, [key]: value };
+      let next = { ...prev, [key]: value };
       if (key === 'duration' && prev.date && prev.startTime && Number(value) > 0) {
-        const start = new Date(`${prev.date}T${prev.startTime}`);
-        const end = new Date(start.getTime() + Number(value) * 60 * 60 * 1000);
-        next.endTime = hhmm(end);
+        next = applyDurationToForm(prev as AdminBookingFormState, Number(value));
+        next = { ...next, duration: value };
       }
       return next;
     });
@@ -571,30 +594,26 @@ export default function AdminBookingDetails() {
     setSaving(true);
     adminDebugLog('booking-details:save:start', { bookingId: id });
     try {
-      const body = {
-        customer: { full_name: form.customerName, phone: form.phone, email: form.email },
-        booking: {
-          boat_id: form.boatId,
-          location: form.location,
-          bookingType: form.bookingType,
-          start_time: new Date(`${form.date}T${form.startTime}`).toISOString(),
-          end_time: new Date(`${form.date}T${form.endTime}`).toISOString(),
-          passengerCount: form.passengers,
-          booking_source: form.source,
-          originalPrice: form.originalPrice,
-          discount: form.discount,
-          manual_discount_reason: form.discountReason,
-          finalPrice: form.finalPrice,
-          depositPaid: form.depositPaid,
-          amountCollected: form.amountCollected,
-          remainingBalance: form.remainingBalance,
-          payment_method: form.paymentMethod,
-          payment_status: form.paymentStatus,
-          staff_notes: form.internalNotes,
-          internal_notes: form.customerNotes,
-          status: form.status,
-        },
-      };
+      let body;
+      try {
+        body = buildPatchBody(form as AdminBookingFormState);
+      } catch (err) {
+        throw new Error(err instanceof Error ? err.message : 'Could not prepare booking times.');
+      }
+      body.booking.passengerCount = form.passengers;
+      body.booking.booking_source = form.source;
+      body.booking.originalPrice = form.originalPrice;
+      body.booking.discount = form.discount;
+      body.booking.manual_discount_reason = form.discountReason;
+      body.booking.finalPrice = form.finalPrice;
+      body.booking.depositPaid = form.depositPaid;
+      body.booking.amountCollected = form.amountCollected;
+      body.booking.remainingBalance = form.remainingBalance;
+      body.booking.payment_method = form.paymentMethod;
+      body.booking.payment_status = form.paymentStatus;
+      body.booking.staff_notes = form.internalNotes;
+      body.booking.internal_notes = form.customerNotes;
+      body.booking.status = form.status;
       const res = await authedFetch(`/api/admin/bookings/${id}`, {
         method: 'PATCH',
         body: JSON.stringify(body),
@@ -1105,6 +1124,7 @@ export default function AdminBookingDetails() {
                 <label className={labelClass}>Date<input className={inputClass} type="date" value={form.date || ''} onChange={(e) => setField('date', e.target.value)} /></label>
                 <label className={labelClass}>Start Time<input className={inputClass} type="time" value={form.startTime || ''} onChange={(e) => setField('startTime', e.target.value)} /></label>
                 <label className={labelClass}>End Time<input className={inputClass} type="time" value={form.endTime || ''} onChange={(e) => setField('endTime', e.target.value)} /></label>
+                {overnightEndNote ? <p className="sm:col-span-2 text-sm font-semibold text-cyan-900">{overnightEndNote}</p> : null}
                 <label className={labelClass}>Duration<input className={inputClass} type="number" step="0.5" value={form.duration || ''} onChange={(e) => setField('duration', e.target.value)} /></label>
                 <label className={labelClass}>
                   Passengers

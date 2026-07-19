@@ -1683,7 +1683,7 @@ export default function AdminCalendar() {
             <div className="mt-6 flex flex-wrap justify-between gap-3">
               <div className="flex flex-wrap gap-3">
                 {itemForm.id ? (
-                  <button type="button" onClick={() => void deleteCalendarItem({ ...(itemForm as any), id: itemForm.id, item_type: itemForm.itemType, start_time: new Date(`${itemForm.date}T${itemForm.startTime}`).toISOString(), end_time: new Date(`${itemForm.date}T${itemForm.endTime}`).toISOString() })} className="rounded-xl bg-red-700 px-6 py-4 text-lg font-black text-white">
+                  <button type="button" onClick={() => void deleteCalendarItem({ id: itemForm.id!, item_type: itemForm.itemType } as CalendarItem)} className="rounded-xl bg-red-700 px-6 py-4 text-lg font-black text-white">
                     {itemForm.itemType === 'blocked_time' ? 'Remove Block' : 'Delete'}
                   </button>
                 ) : null}

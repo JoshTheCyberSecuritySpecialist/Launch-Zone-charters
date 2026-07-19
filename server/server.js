@@ -26,6 +26,7 @@ const waiverContent = require('./content/waiverContent');
 const bookingReliability = require('./services/bookingReliability');
 const bookingCommunications = require('./services/bookingCommunications');
 const adminBookingUpdate = require('./services/adminBookingUpdate');
+const bookingDateTimeRange = require('./lib/bookingDateTimeRange');
 const shopService = require('./services/shopService');
 const disputeService = require('./services/disputeService');
 const disputeEvidenceService = require('./services/disputeEvidenceService');
@@ -37,7 +38,7 @@ const { getRocketConditions } = require('./services/rocketService');
 const { getLaunchSchedulePreview } = require('./services/rocketScheduleService');
 const { getWeeklyForecast } = require('./services/weeklyForecastService');
 const { getMarineConditions } = require('./services/marineConditionsService');
-const adminBookingUpdate = require('./services/adminBookingUpdate');
+const availabilityService = require('./services/availabilityService');
 const captainCharterAvailability = require('./services/captainCharterAvailability');
 const charterCapacity = require('./charterCapacity');
 const {
@@ -1615,25 +1616,11 @@ function rentalTypeForHours(hours) {
 }
 
 function staffBookingTimes(body) {
-  const startRaw = cleanText(body.start_time || body.startTime, 80);
-  const endRaw = cleanText(body.end_time || body.endTime, 80);
-  if (startRaw && endRaw) {
-    const start = new Date(startRaw);
-    const end = new Date(endRaw);
-    if (Number.isFinite(start.getTime()) && Number.isFinite(end.getTime()) && end.getTime() > start.getTime()) {
-      return { startIso: start.toISOString(), endIso: end.toISOString() };
-    }
+  const resolved = bookingDateTimeRange.resolveBookingRangeFromBody(body || {});
+  if (resolved.ok) {
+    return { startIso: resolved.startIso, endIso: resolved.endIso };
   }
-
-  const date = cleanText(body.date, 20);
-  const time = cleanText(body.start_time_local || body.startTimeLocal || body.startTime || body.time, 20);
-  const duration = parseStaffDuration(body.duration_hours ?? body.durationHours);
-  if (!date || !time || duration == null) return null;
-
-  const start = DateTime.fromISO(`${date}T${time}`, { zone: availabilityService.BUSINESS_TZ });
-  if (!start.isValid) return null;
-  const end = start.plus({ minutes: Math.round(duration * 60) });
-  return { startIso: start.toUTC().toISO(), endIso: end.toUTC().toISO() };
+  return null;
 }
 
 function staffAvailabilityConflictPayload(result) {
@@ -1776,6 +1763,14 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
     if (!customerName) return res.status(400).json({ error: 'Customer name is required.' });
     if (!boatId) return res.status(400).json({ error: 'Boat is required.' });
     if (!times || durationHours == null) return res.status(400).json({ error: 'Date, start time, and duration are required.' });
+
+    if (bookingType === 'captain_charter') {
+      try {
+        assertCharterStartTimeAllowed('captain_charter', times.startIso, times.endIso);
+      } catch (charterErr) {
+        return res.status(charterErr.statusCode || 400).json({ error: charterErr.message || 'Invalid charter time.' });
+      }
+    }
 
     const availability = await availabilityService.checkBookingSlotAvailability({
       boatId,
@@ -2055,10 +2050,9 @@ function calendarItemTimes(body) {
   }
   const startTime = cleanText(body.start_time_local || body.startTimeLocal || body.startTime || '09:00', 20);
   const endTime = cleanText(body.end_time_local || body.endTimeLocal || body.endTime || '10:00', 20);
-  const start = DateTime.fromISO(`${date}T${startTime}`, { zone: availabilityService.BUSINESS_TZ });
-  const end = DateTime.fromISO(`${date}T${endTime}`, { zone: availabilityService.BUSINESS_TZ });
-  if (!start.isValid || !end.isValid || end <= start) return null;
-  return { startIso: start.toUTC().toISO(), endIso: end.toUTC().toISO(), allDay };
+  const resolved = bookingDateTimeRange.resolveBookingDateTimeRange({ date, startTime, endTime });
+  if (!resolved.ok) return null;
+  return { startIso: resolved.startIso, endIso: resolved.endIso, allDay };
 }
 
 async function blockingCalendarItemConflicts({ boatId, startIso, endIso, excludeBlockedDateId = null, excludeItemId = null }) {
@@ -2761,12 +2755,43 @@ app.patch('/api/admin/bookings/:id', async (req, res) => {
       }
     }
     const nextBoatId = cleanText(body.boat_id || body.boatId || body.booking?.boat_id || body.booking?.boatId, 80) || existing.boat_id;
-    const nextStart = cleanText(body.start_time || body.startTime || body.booking?.start_time || body.booking?.startTime, 80) || existing.start_time;
-    const nextEnd = cleanText(body.end_time || body.endTime || body.booking?.end_time || body.booking?.endTime, 80) || existing.end_time;
+    let nextStart = existing.start_time;
+    let nextEnd = existing.end_time;
+
+    const bookingBody = body.booking || body;
+    const tripDate = cleanText(bookingBody.date, 20);
+    const localStart = cleanText(bookingBody.start_time_local || bookingBody.startTime, 20);
+    const localEnd = cleanText(bookingBody.end_time_local || bookingBody.endTime, 20);
+
+    if (tripDate && localStart && localEnd) {
+      const resolved = bookingDateTimeRange.resolveBookingDateTimeRange({
+        date: tripDate,
+        startTime: localStart,
+        endTime: localEnd,
+      });
+      if (!resolved.ok) return res.status(400).json({ error: resolved.error });
+      if (isCaptainLedCharter(nextBookingType)) {
+        try {
+          assertCharterStartTimeAllowed(existing.charter_type || 'captain_charter', resolved.startIso, resolved.endIso);
+        } catch (charterErr) {
+          return res.status(charterErr.statusCode || 400).json({ error: charterErr.message || 'Invalid charter time.' });
+        }
+      }
+      nextStart = resolved.startIso;
+      nextEnd = resolved.endIso;
+      update.start_time = resolved.startIso;
+      update.end_time = resolved.endIso;
+      update.duration_hours = resolved.durationHours;
+    } else {
+      const startRaw = cleanText(body.start_time || body.startTime || bookingBody.start_time || bookingBody.startTime, 80);
+      const endRaw = cleanText(body.end_time || body.endTime || bookingBody.end_time || bookingBody.endTime, 80);
+      if (startRaw) nextStart = new Date(startRaw).toISOString();
+      if (endRaw) nextEnd = new Date(endRaw).toISOString();
+      if (startRaw && nextStart !== existing.start_time) update.start_time = nextStart;
+      if (endRaw && nextEnd !== existing.end_time) update.end_time = nextEnd;
+    }
 
     if (nextBoatId !== existing.boat_id) update.boat_id = nextBoatId;
-    if (nextStart !== existing.start_time) update.start_time = new Date(nextStart).toISOString();
-    if (nextEnd !== existing.end_time) update.end_time = new Date(nextEnd).toISOString();
 
     const scheduleChanged = Boolean(update.boat_id || update.start_time || update.end_time || update.booking_type);
     if (scheduleChanged && String(update.status || existing.status) !== 'cancelled') {

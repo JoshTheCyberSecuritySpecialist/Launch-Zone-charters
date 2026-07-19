@@ -1783,7 +1783,7 @@ export default function AdminCalendar() {
               <div>
                 <h2 className="text-2xl font-black text-purple-950">Apply Charter Captain Availability</h2>
                 <p className="mt-2 text-sm text-slate-600">
-                  Generates charter-only closed periods. Monday–Saturday 5:00 PM – 4:00 AM stay open. Boat rentals are not affected.
+                  Generates charter-only closed periods. Seven nights a week 5:00 PM – 4:00 AM stay open. Boat rentals are not affected.
                 </p>
               </div>
               <button type="button" onClick={() => setCaptainForm(null)} className="rounded-lg bg-slate-100 px-4 py-2 font-bold">
@@ -1837,7 +1837,7 @@ export default function AdminCalendar() {
                 <h3 className="text-xl font-black">Step 3: Review</h3>
                 <div className="mt-4 rounded-xl bg-purple-50 p-4 text-lg">
                   <p><strong>Range:</strong> {captainForm.startDate} – {captainForm.endDate}</p>
-                  <p><strong>Open for charters:</strong> Monday–Saturday 5:00 PM – 4:00 AM</p>
+                  <p><strong>Open for charters:</strong> 7 nights/week 5:00 PM – 4:00 AM</p>
                   <p><strong>Rentals:</strong> unchanged</p>
                 </div>
                 {captainForm.conflictCount > 0 ? (

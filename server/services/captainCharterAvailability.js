@@ -1,6 +1,6 @@
 /**
  * Generate charter-only closed intervals for the single-captain schedule.
- * Open windows (not stored as blocks): Mon–Sat 5:00 PM → following day 4:00 AM.
+ * Open windows (not stored as blocks): 7 nights/week 5:00 PM → following day 4:00 AM.
  */
 const { DateTime } = require('luxon');
 const {

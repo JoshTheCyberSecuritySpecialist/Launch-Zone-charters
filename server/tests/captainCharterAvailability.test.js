@@ -30,9 +30,9 @@ function run() {
   assert.strictEqual(monClosed[0].end.hour, 17);
 
   const sunClosed = charterClosedLocalIntervalsForDay(sunday);
-  assert.strictEqual(sunClosed.length, 1);
-  assert.strictEqual(sunClosed[0].start.hour, 4);
-  assert.strictEqual(sunClosed[0].start.minute, 1);
+  assert.strictEqual(sunClosed.length, 2);
+  assert.ok(sunClosed.some((i) => i.start.hour === 0 && i.end.hour === 17));
+  assert.ok(sunClosed.some((i) => i.start.hour === 4 && i.start.minute === 1 && i.end.hour === 17));
 
   const blocks = generateCharterCaptainBlocks('2026-01-01', '2026-01-07');
   assert.ok(blocks.length >= 3);

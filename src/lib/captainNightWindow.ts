@@ -3,13 +3,13 @@ import { BUSINESS_TZ, resolveBookingRangeFromDuration } from './bookingDateTimeR
 
 export const CAPTAIN_NIGHT_START_HOUR = 17;
 export const CAPTAIN_NIGHT_END_HOUR = 4;
-const CAPTAIN_NIGHT_WEEKDAYS = new Set([1, 2, 3, 4, 5, 6]); // Mon–Sat
+const CAPTAIN_NIGHT_WEEKDAYS = new Set([1, 2, 3, 4, 5, 6, 7]);
 
 export const CAPTAIN_NIGHT_SCHEDULE_NOTE =
-  'Captain-led charters: Monday–Saturday, 5:00 PM until 4:00 AM the following morning. Sunday is not available. Daytime self-drive: use Rental.';
+  'Captain-led charters: 7 nights a week, 5:00 PM until 4:00 AM the following morning. Daytime self-drive: use Rental.';
 
 export const CAPTAIN_NIGHT_UNAVAILABLE_MESSAGE =
-  'Captain-led charters are available Monday through Saturday nights from 5:00 PM until 4:00 AM the following morning.';
+  'Captain-led charters are available every night from 5:00 PM until 4:00 AM the following morning.';
 
 function getCaptainNightAnchorDay(localStart: DateTime) {
   if (!localStart.isValid) return null;
@@ -37,11 +37,7 @@ function getCaptainNightWindowStart(anchorDay: DateTime) {
   });
 }
 
-export function captainNightUnavailableMessage(localStart: DateTime | null): string {
-  const anchor = localStart?.isValid ? getCaptainNightAnchorDay(localStart) : null;
-  if (anchor && anchor.weekday === 7) {
-    return `${CAPTAIN_NIGHT_UNAVAILABLE_MESSAGE} Sunday trips are not available.`;
-  }
+export function captainNightUnavailableMessage(_localStart: DateTime | null): string {
   return CAPTAIN_NIGHT_UNAVAILABLE_MESSAGE;
 }
 

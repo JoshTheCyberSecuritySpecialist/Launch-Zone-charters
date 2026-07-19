@@ -1630,6 +1630,7 @@ function staffAvailabilityConflictPayload(result) {
   return {
     available: Boolean(result?.available),
     reason: result?.reason || null,
+    message: result?.message || null,
     conflict: conflict
       ? {
           id: conflict.id,
@@ -1698,15 +1699,20 @@ app.post('/api/admin/staff-bookings/check', async (req, res) => {
   if (!adminUser) return;
   try {
     const boatId = cleanText(req.body?.boat_id || req.body?.boatId, 80);
+    const bookingType =
+      cleanText(req.body?.booking_type || req.body?.bookingType, 40) === 'captain_charter'
+        ? 'captain_charter'
+        : 'rental';
     const times = staffBookingTimes(req.body || {});
     if (!boatId || !times) {
       return res.status(400).json({ error: 'Boat, date, start time, and duration are required.' });
     }
 
-    const result = await availabilityService.checkBookingSlotAvailability({
+    const result = await availabilityService.checkStaffBookingAvailability({
       boatId,
       startTime: times.startIso,
       endTime: times.endIso,
+      bookingType,
       location: cleanText(req.body?.rental_location || req.body?.location, 80) || null,
       excludeBookingId: cleanText(req.body?.exclude_booking_id || req.body?.excludeBookingId, 80) || null,
     });
@@ -1764,21 +1770,20 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
     if (!boatId) return res.status(400).json({ error: 'Boat is required.' });
     if (!times || durationHours == null) return res.status(400).json({ error: 'Date, start time, and duration are required.' });
 
-    if (bookingType === 'captain_charter') {
-      try {
-        assertCharterStartTimeAllowed('captain_charter', times.startIso, times.endIso);
-      } catch (charterErr) {
-        return res.status(charterErr.statusCode || 400).json({ error: charterErr.message || 'Invalid charter time.' });
-      }
-    }
-
-    const availability = await availabilityService.checkBookingSlotAvailability({
+    const availability = await availabilityService.checkStaffBookingAvailability({
       boatId,
       startTime: times.startIso,
       endTime: times.endIso,
+      bookingType,
       location: location || null,
     });
     if (!availability.available) {
+      if (availability.reason === 'captain_window') {
+        return res.status(400).json({
+          error: availability.message || 'Invalid charter time.',
+          availability: staffAvailabilityConflictPayload(availability),
+        });
+      }
       return res.status(409).json({
         error: SLOT_TAKEN_USER_MESSAGE,
         availability: staffAvailabilityConflictPayload(availability),

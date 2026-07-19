@@ -19,7 +19,7 @@ const BIO_CHARTER_START_HOURS = new Set([20, 21, 22, 23, 0, 1, 2, 3, 4]);
 const DEFAULT_CHARTER_START_HOURS = new Set([17, 18, 19, 20, 21]);
 
 const CAPTAIN_NIGHT_UNAVAILABLE_MESSAGE =
-  'Captain is only available Friday and Saturday nights (5:00 PM – 4:00 AM).';
+  'Captain-led charters are available Friday and Saturday nights from 5:00 PM until 4:00 AM the following morning.';
 const CHARTER_END_TOO_LATE_MESSAGE = 'Bookings must finish by 4:00 AM.';
 const BIO_CHARTER_TIME_MESSAGE =
   'Bioluminescence night tours are available from 8:00 PM through 4:00 AM.';
@@ -219,6 +219,40 @@ function parseSlotRange(startIso, endIso) {
   };
 }
 
+async function checkStaffBookingAvailability({
+  boatId,
+  startTime,
+  endTime,
+  bookingType = 'rental',
+  location = null,
+  excludeBookingId = null,
+} = {}) {
+  if (String(bookingType || '').trim().toLowerCase() === 'captain_charter') {
+    const windowCheck = validateCharterSlotWindow({
+      charterType: 'captain_charter',
+      startIso: startTime,
+      endIso: endTime,
+    });
+    if (!windowCheck.valid) {
+      return {
+        available: false,
+        reason: 'captain_window',
+        message: windowCheck.message || CAPTAIN_NIGHT_UNAVAILABLE_MESSAGE,
+        conflict: null,
+        location,
+      };
+    }
+  }
+
+  return checkBookingSlotAvailability({
+    boatId,
+    startTime,
+    endTime,
+    location,
+    excludeBookingId,
+  });
+}
+
 async function checkBookingSlotAvailability({
   boatId,
   startTime,
@@ -295,7 +329,14 @@ function normalizeCharterType(charterType) {
   if (type === 'bio' || type === 'night_bio') return 'bio';
   if (type === 'sunset' || type === 'sunset_cruise') return 'sunset';
   if (type === 'rocket' || type === 'rocket_launch') return 'rocket';
+  if (type === 'captain_charter' || type === 'captain-charter' || type === 'captain_led') {
+    return 'captain_charter';
+  }
   return type;
+}
+
+function isCaptainLedStaffCharter(charterType) {
+  return normalizeCharterType(charterType) === 'captain_charter';
 }
 
 function charterStartHoursForType(charterType) {
@@ -310,6 +351,16 @@ function getCaptainNightAnchorDay(localStart) {
     return localStart.minus({ days: 1 }).startOf('day');
   }
   return localStart.startOf('day');
+}
+
+function getCaptainNightWindowStart(anchorDay) {
+  if (!anchorDay?.isValid || !CAPTAIN_NIGHT_WEEKDAYS.has(anchorDay.weekday)) return null;
+  return anchorDay.set({
+    hour: CAPTAIN_NIGHT_START_HOUR,
+    minute: 0,
+    second: 0,
+    millisecond: 0,
+  });
 }
 
 function getCaptainNightWindowEnd(localStart) {
@@ -335,21 +386,21 @@ function validateCharterSlotWindow({ charterType, startIso, endIso }) {
 
   const anchorDay = getCaptainNightAnchorDay(start);
   const windowEnd = getCaptainNightWindowEnd(start);
-  if (!anchorDay || !windowEnd || !CAPTAIN_NIGHT_WEEKDAYS.has(anchorDay.weekday)) {
+  const windowStart = anchorDay ? getCaptainNightWindowStart(anchorDay) : null;
+  if (!anchorDay || !windowEnd || !windowStart) {
     return { valid: false, message: CAPTAIN_NIGHT_UNAVAILABLE_MESSAGE };
   }
 
-  const windowStart = anchorDay.set({
-    hour: CAPTAIN_NIGHT_START_HOUR,
-    minute: 0,
-    second: 0,
-    millisecond: 0,
-  });
   if (start < windowStart || start >= windowEnd) {
     return { valid: false, message: CAPTAIN_NIGHT_UNAVAILABLE_MESSAGE };
   }
-  if (end > windowEnd) {
-    return { valid: false, message: CHARTER_END_TOO_LATE_MESSAGE };
+  if (end > windowEnd || end <= windowStart) {
+    return { valid: false, message: end > windowEnd ? CHARTER_END_TOO_LATE_MESSAGE : CAPTAIN_NIGHT_UNAVAILABLE_MESSAGE };
+  }
+
+  const endAnchor = getCaptainNightAnchorDay(end);
+  if (!endAnchor || endAnchor.toMillis() !== anchorDay.toMillis()) {
+    return { valid: false, message: CAPTAIN_NIGHT_UNAVAILABLE_MESSAGE };
   }
 
   const type = normalizeCharterType(charterType);
@@ -357,8 +408,10 @@ function validateCharterSlotWindow({ charterType, startIso, endIso }) {
     if (start.minute !== 0 || !BIO_CHARTER_START_HOURS.has(start.hour)) {
       return { valid: false, message: BIO_CHARTER_TIME_MESSAGE };
     }
-  } else if (start.hour < CAPTAIN_NIGHT_START_HOUR) {
-    return { valid: false, message: NON_BIO_LATE_NIGHT_MESSAGE };
+  } else if (!isCaptainLedStaffCharter(charterType)) {
+    if (start.hour <= CAPTAIN_NIGHT_END_HOUR || start.hour < CAPTAIN_NIGHT_START_HOUR) {
+      return { valid: false, message: NON_BIO_LATE_NIGHT_MESSAGE };
+    }
   }
 
   return { valid: true, message: null };
@@ -732,6 +785,7 @@ module.exports = {
   assertBookingSlotAvailable,
   checkCharterSlotAvailability,
   checkBookingSlotAvailability,
+  checkStaffBookingAvailability,
   isStartTimeAllowed,
   listDatesAvailability,
   listSlotsForDay,

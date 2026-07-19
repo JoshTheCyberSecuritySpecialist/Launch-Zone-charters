@@ -297,6 +297,7 @@ export default function AdminStaffBooking() {
           method: 'POST',
           body: JSON.stringify({
             boat_id: form.boatId,
+            booking_type: form.bookingType,
             date: form.date,
             startTime: form.startTime,
             durationHours,
@@ -306,15 +307,25 @@ export default function AdminStaffBooking() {
         const payload = (await res.json().catch(() => ({}))) as {
           available?: boolean;
           conflict?: AvailabilityConflict;
+          message?: string | null;
+          reason?: string | null;
           error?: string;
         };
         if (seq !== availabilityCheckSeq.current) return;
-        if (!res.ok) throw new Error(payload.error || 'Could not check availability.');
-        setAvailability(
-          payload.available
-            ? { status: 'available', message: 'Available' }
-            : { status: 'unavailable', message: 'Already Booked', conflict: payload.conflict || null }
-        );
+        if (!res.ok) throw new Error(payload.error || payload.message || 'Could not check availability.');
+        if (!payload.available) {
+          const charterMsg =
+            payload.message ||
+            (payload.reason === 'captain_window' ? payload.error : null) ||
+            'Already Booked';
+          setAvailability(
+            payload.reason === 'captain_window' || payload.message
+              ? { status: 'error', message: charterMsg }
+              : { status: 'unavailable', message: 'Already Booked', conflict: payload.conflict || null }
+          );
+          return;
+        }
+        setAvailability({ status: 'available', message: 'Available' });
       } catch (err) {
         if (seq !== availabilityCheckSeq.current) return;
         setAvailability({
@@ -325,7 +336,7 @@ export default function AdminStaffBooking() {
     }, 300);
 
     return () => window.clearTimeout(timer);
-  }, [authedFetch, durationHours, form.boatId, form.date, form.location, form.startTime]);
+  }, [authedFetch, durationHours, form.boatId, form.bookingType, form.date, form.location, form.startTime]);
 
   const submitGate = useMemo(() => {
     const blockers: string[] = [];

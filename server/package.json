@@ -12,6 +12,7 @@
     "setup:captains-log": "node scripts/ensure-captains-log-venv.js",
     "test:lead-time": "node tests/bookingLeadTime.test.js",
     "test:booking-datetime-range": "node tests/bookingDateTimeRange.test.js",
+    "test:staff-booking-duration": "node tests/staffBookingDuration.test.js",
     "test:pre-trip": "node tests/preTripSubmissionGuard.test.js",
     "test:admin-smoke": "node ../scripts/adminSmokeTest.mjs",
     "test:ollama": "node --test tests/ollamaClient.test.js"

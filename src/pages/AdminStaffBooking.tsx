@@ -11,12 +11,19 @@ import MobileAdminCard from '../components/admin/MobileAdminCard';
 import StatusBadge from '../components/admin/StatusBadge';
 import { humanizeLabel } from '../components/admin/adminDisplay';
 import { env } from '../config/env.js';
-import { PRICING, captainFeeForHours } from '../config/pricing';
+import { PRICING } from '../config/pricing';
 import { CHARTER_MAX_PASSENGERS, validateCharterPassengerCount } from '../lib/charterCapacity';
+import {
+  type StaffDurationPreset,
+  applyStaffDurationPresetChange,
+  computeStaffBookingOriginalPrice,
+  durationFieldsForNewBookingType,
+  durationHoursFromStaffForm,
+  staffDurationFieldsFromHours,
+} from '../lib/staffBookingDuration';
 
 type BookingType = 'rental' | 'captain_charter';
 type LocationValue = 'Port Orange' | 'Titusville';
-type DurationPreset = '2' | '4' | '6' | '8' | 'custom';
 type PaymentStatus = 'pending' | 'deposit_paid' | 'paid';
 type PaymentMethod = '' | 'stripe' | 'cash' | 'venmo' | 'zelle' | 'paypal' | 'groupon' | 'comp' | 'other';
 
@@ -58,26 +65,29 @@ type StaffBookingRow = {
 
 const todayYmd = () => new Date().toISOString().slice(0, 10);
 
-const blankForm = () => ({
-  customerName: '',
-  phone: '',
-  email: '',
-  bookingType: 'rental' as BookingType,
-  location: 'Port Orange' as LocationValue,
-  boatId: '',
-  date: todayYmd(),
-  startTime: '',
-  durationPreset: '4' as DurationPreset,
-  customDuration: '',
-  passengerCount: '1',
-  originalPrice: '0.00',
-  discount: '0.00',
-  finalPrice: '0.00',
-  paymentStatus: 'pending' as PaymentStatus,
-  paymentMethod: '' as PaymentMethod,
-  bookingSource: 'admin',
-  staffNotes: '',
-});
+const blankForm = () => {
+  const duration = durationFieldsForNewBookingType('rental');
+  return {
+    customerName: '',
+    phone: '',
+    email: '',
+    bookingType: 'rental' as BookingType,
+    location: 'Port Orange' as LocationValue,
+    boatId: '',
+    date: todayYmd(),
+    startTime: '',
+    durationPreset: duration.durationPreset,
+    customDuration: duration.customDuration,
+    passengerCount: '1',
+    originalPrice: '0.00',
+    discount: '0.00',
+    finalPrice: '0.00',
+    paymentStatus: 'pending' as PaymentStatus,
+    paymentMethod: '' as PaymentMethod,
+    bookingSource: 'admin',
+    staffNotes: '',
+  };
+};
 
 function formatPhone(value: string): string {
   const digits = value.replace(/\D/g, '').slice(0, 10);
@@ -120,13 +130,10 @@ export default function AdminStaffBooking() {
   const availabilityCheckSeq = useRef(0);
 
   const selectedBoat = boats.find((boat) => boat.id === form.boatId) || null;
-  const durationHours = useMemo(() => {
-    if (form.durationPreset === 'custom') {
-      const n = Number(form.customDuration);
-      return Number.isFinite(n) && n > 0 ? n : 0;
-    }
-    return Number(form.durationPreset);
-  }, [form.customDuration, form.durationPreset]);
+  const durationHours = useMemo(
+    () => durationHoursFromStaffForm(form.durationPreset, form.customDuration),
+    [form.customDuration, form.durationPreset]
+  );
 
   const getAdminToken = useCallback(async () => {
     const { data } = await supabase.auth.getSession();
@@ -160,21 +167,40 @@ export default function AdminStaffBooking() {
     ) {
       return;
     }
-    setForm((prev) => ({
-      ...prev,
-      boatId: boatId || prev.boatId,
-      date: date || prev.date,
-      startTime: startTime || prev.startTime,
-      location: location === 'Titusville' || location === 'Port Orange' ? (location as LocationValue) : prev.location,
-      durationPreset: ['2', '4', '6', '8'].includes(duration) ? (duration as DurationPreset) : prev.durationPreset,
-      customDuration: duration && !['2', '4', '6', '8'].includes(duration) ? duration : prev.customDuration,
-      customerName: customerName || prev.customerName,
-      phone: phone || prev.phone,
-      email: email || prev.email,
-      bookingType: bookingType === 'captain_charter' ? 'captain_charter' : bookingType === 'rental' ? 'rental' : prev.bookingType,
-      passengerCount: passengerCount || prev.passengerCount,
-      bookingSource: bookingSource || prev.bookingSource,
-    }));
+    setForm((prev) => {
+      const nextBookingType =
+        bookingType === 'captain_charter'
+          ? 'captain_charter'
+          : bookingType === 'rental'
+            ? 'rental'
+            : prev.bookingType;
+      let durationPreset = prev.durationPreset;
+      let customDuration = prev.customDuration;
+      if (duration) {
+        const fromUrl = staffDurationFieldsFromHours(duration);
+        durationPreset = fromUrl.durationPreset;
+        customDuration = fromUrl.customDuration;
+      } else if (bookingType === 'captain_charter') {
+        const charterDefault = durationFieldsForNewBookingType('captain_charter');
+        durationPreset = charterDefault.durationPreset;
+        customDuration = charterDefault.customDuration;
+      }
+      return {
+        ...prev,
+        boatId: boatId || prev.boatId,
+        date: date || prev.date,
+        startTime: startTime || prev.startTime,
+        location: location === 'Titusville' || location === 'Port Orange' ? (location as LocationValue) : prev.location,
+        durationPreset,
+        customDuration,
+        customerName: customerName || prev.customerName,
+        phone: phone || prev.phone,
+        email: email || prev.email,
+        bookingType: nextBookingType,
+        passengerCount: passengerCount || prev.passengerCount,
+        bookingSource: bookingSource || prev.bookingSource,
+      };
+    });
   }, [searchParams]);
 
   const authedFetch = useCallback(
@@ -240,13 +266,7 @@ export default function AdminStaffBooking() {
 
   useEffect(() => {
     if (!selectedBoat || durationHours <= 0) return;
-    const hourly = Number(selectedBoat.hourly_rate || 0);
-    const half = Number(selectedBoat.half_day_rate || 0);
-    const full = Number(selectedBoat.full_day_rate || 0);
-    let base = hourly * durationHours;
-    if (Math.abs(durationHours - 4) < 0.01) base = half || base;
-    if (Math.abs(durationHours - 8) < 0.01) base = full || base;
-    if (form.bookingType === 'captain_charter') base += captainFeeForHours(durationHours);
+    const base = computeStaffBookingOriginalPrice(selectedBoat, durationHours, form.bookingType);
     const discount = Number(form.discount) || 0;
     setForm((prev) => ({
       ...prev,
@@ -511,6 +531,8 @@ export default function AdminStaffBooking() {
                 onClick={() => {
                   setCreateSuccess(null);
                   setNotice(null);
+                  setForm(blankForm());
+                  resetAvailability();
                 }}
                 className="inline-flex min-h-14 items-center justify-center rounded-xl border-2 border-green-700 bg-white px-5 text-lg font-black text-green-950"
               >
@@ -564,7 +586,18 @@ export default function AdminStaffBooking() {
               </label>
               <label className={labelClass}>
                 Booking Type
-                <select className={inputClass} value={form.bookingType} onChange={(e) => setForm((p) => ({ ...p, bookingType: e.target.value as BookingType }))}>
+                <select
+                  className={inputClass}
+                  value={form.bookingType}
+                  onChange={(e) => {
+                    const nextType = e.target.value as BookingType;
+                    setForm((p) => ({
+                      ...p,
+                      bookingType: nextType,
+                      ...durationFieldsForNewBookingType(nextType),
+                    }));
+                  }}
+                >
                   <option value="rental">Rental</option>
                   <option value="captain_charter">Captain Charter</option>
                 </select>
@@ -597,7 +630,18 @@ export default function AdminStaffBooking() {
               </label>
               <label className={labelClass}>
                 Duration
-                <select className={inputClass} value={form.durationPreset} onChange={(e) => setForm((p) => ({ ...p, durationPreset: e.target.value as DurationPreset }))}>
+                <select
+                  className={inputClass}
+                  value={form.durationPreset}
+                  onChange={(e) => {
+                    const nextPreset = e.target.value as StaffDurationPreset;
+                    setForm((p) => ({
+                      ...p,
+                      ...applyStaffDurationPresetChange(nextPreset, p.customDuration),
+                    }));
+                  }}
+                >
+                  <option value="1">1 hr</option>
                   <option value="2">2 hr</option>
                   <option value="4">4 hr</option>
                   <option value="6">6 hr</option>

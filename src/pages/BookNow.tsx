@@ -2145,7 +2145,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                         )}
                         {charterTimesFromApi && !availTimesLoading && bookingData.date && timeSlots.length === 0 && (
                           <p className="mt-2 text-sm text-amber-200">
-                            No captain availability that night. Try another Friday or Saturday.
+                            No captain availability that night. Try another night Monday through Saturday.
                           </p>
                         )}
                         {!isBioCharter && (

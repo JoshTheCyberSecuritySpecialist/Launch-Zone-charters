@@ -1,14 +1,12 @@
 /**
  * Generate charter-only closed intervals for the single-captain schedule.
- * Open windows (not stored as blocks):
- *   Friday    5:00 PM → Saturday 4:00 AM
- *   Saturday  5:00 PM → Sunday 4:00 AM
+ * Open windows (not stored as blocks): Mon–Sat 5:00 PM → following day 4:00 AM.
  */
 const { DateTime } = require('luxon');
-
-const BUSINESS_TZ = String(process.env.BUSINESS_TIMEZONE || 'America/New_York').trim();
-const CAPTAIN_NIGHT_START_HOUR = Number(process.env.CAPTAIN_NIGHT_START_HOUR || 17);
-const CAPTAIN_NIGHT_END_HOUR = Number(process.env.CAPTAIN_NIGHT_END_HOUR || 4);
+const {
+  BUSINESS_TZ,
+  charterClosedLocalIntervalsForDay,
+} = require('../lib/captainNightSchedule');
 
 const GENERATED_BLOCK_SOURCE = 'charter_captain_availability';
 const GENERATED_BLOCK_TITLE = 'Charter Captain Closed';
@@ -30,42 +28,6 @@ function parseDateOnlyInZone(dateStr, zone) {
   if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return null;
   const dt = DateTime.fromObject({ year: y, month: m, day: d }, { zone });
   return dt.isValid ? dt : null;
-}
-
-function charterClosedLocalIntervalsForDay(day) {
-  const dow = day.weekday;
-  const dayStart = day.startOf('day');
-  const intervals = [];
-
-  if (dow >= 1 && dow <= 4) {
-    intervals.push({ start: dayStart, end: dayStart.plus({ days: 1 }) });
-    return intervals;
-  }
-
-  if (dow === 5) {
-    intervals.push({
-      start: dayStart,
-      end: dayStart.set({ hour: CAPTAIN_NIGHT_START_HOUR, minute: 0, second: 0, millisecond: 0 }),
-    });
-    return intervals;
-  }
-
-  if (dow === 6) {
-    intervals.push({
-      start: dayStart.set({ hour: CAPTAIN_NIGHT_END_HOUR, minute: 1, second: 0, millisecond: 0 }),
-      end: dayStart.set({ hour: CAPTAIN_NIGHT_START_HOUR, minute: 0, second: 0, millisecond: 0 }),
-    });
-    return intervals;
-  }
-
-  if (dow === 7) {
-    intervals.push({
-      start: dayStart.set({ hour: CAPTAIN_NIGHT_END_HOUR, minute: 1, second: 0, millisecond: 0 }),
-      end: dayStart.plus({ days: 1 }),
-    });
-  }
-
-  return intervals;
 }
 
 function mergeClosedIntervals(rows) {

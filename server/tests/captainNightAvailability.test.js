@@ -22,7 +22,7 @@ function run() {
   assert.strictEqual(validate('rocket', '2026-01-02T17:00', '2026-01-02T18:00').valid, true);
   assert.strictEqual(validate('rocket', '2026-01-03T21:00', '2026-01-03T22:00').valid, true);
 
-  assert.strictEqual(validate('rocket', '2026-01-01T18:00', '2026-01-01T19:00').valid, false);
+  assert.strictEqual(validate('rocket', '2026-01-01T18:00', '2026-01-01T19:00').valid, true);
   assert.strictEqual(validate('rocket', '2026-01-04T18:00', '2026-01-04T19:00').valid, false);
   assert.strictEqual(validate('bio', '2026-01-02T19:00', '2026-01-02T20:00').valid, false);
   assert.strictEqual(validate('rocket', '2026-01-02T02:00', '2026-01-02T03:00').valid, false);
@@ -40,8 +40,8 @@ function run() {
   assert.strictEqual(staff('2026-01-02T16:00', '2026-01-02T17:00').valid, false);
   assert.strictEqual(staff('2026-01-03T04:30', '2026-01-03T05:30').valid, false);
   assert.strictEqual(staff('2026-01-04T17:00', '2026-01-04T18:00').valid, false);
-  assert.strictEqual(staff('2026-01-05T18:00', '2026-01-05T19:00').valid, false);
-  assert.strictEqual(staff('2026-01-01T18:00', '2026-01-01T19:00').valid, false);
+  assert.strictEqual(staff('2026-01-05T18:00', '2026-01-05T19:00').valid, true);
+  assert.strictEqual(staff('2026-01-01T18:00', '2026-01-01T19:00').valid, true);
   assert.strictEqual(staff('2026-01-02T23:00', '2026-01-03T05:00').valid, false);
 
   const overnightDuration = bookingDateTimeRange.resolveBookingRangeFromBody({

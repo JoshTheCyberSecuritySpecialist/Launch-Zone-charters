@@ -21,6 +21,10 @@ import {
   durationHoursFromStaffForm,
   staffDurationFieldsFromHours,
 } from '../lib/staffBookingDuration';
+import {
+  CAPTAIN_NIGHT_SCHEDULE_NOTE,
+  previewCaptainCharterWindow,
+} from '../lib/captainNightWindow';
 
 type BookingType = 'rental' | 'captain_charter';
 type LocationValue = 'Port Orange' | 'Titusville';
@@ -134,6 +138,13 @@ export default function AdminStaffBooking() {
     () => durationHoursFromStaffForm(form.durationPreset, form.customDuration),
     [form.customDuration, form.durationPreset]
   );
+
+  const captainWindowPreview = useMemo(() => {
+    if (form.bookingType !== 'captain_charter' || !form.date || !form.startTime || durationHours <= 0) {
+      return null;
+    }
+    return previewCaptainCharterWindow(form.date, form.startTime, durationHours);
+  }, [durationHours, form.bookingType, form.date, form.startTime]);
 
   const getAdminToken = useCallback(async () => {
     const { data } = await supabase.auth.getSession();
@@ -357,6 +368,9 @@ export default function AdminStaffBooking() {
     if (form.bookingType === 'captain_charter') {
       const validation = validateCharterPassengerCount(form.passengerCount);
       if (!validation.valid) blockers.push(validation.error);
+      if (captainWindowPreview && !captainWindowPreview.valid) {
+        blockers.push(captainWindowPreview.message || CAPTAIN_NIGHT_SCHEDULE_NOTE);
+      }
     }
     if (availability.status === 'checking') {
       blockers.push('Waiting for availability check to finish.');
@@ -386,6 +400,7 @@ export default function AdminStaffBooking() {
     form.passengerCount,
     form.phone,
     form.startTime,
+    captainWindowPreview,
     saving,
   ]);
 
@@ -612,7 +627,22 @@ export default function AdminStaffBooking() {
                   <option value="rental">Rental</option>
                   <option value="captain_charter">Captain Charter</option>
                 </select>
+                {form.bookingType === 'captain_charter' ? (
+                  <span className="mt-2 block text-sm font-normal leading-relaxed text-slate-600">
+                    {CAPTAIN_NIGHT_SCHEDULE_NOTE}
+                  </span>
+                ) : null}
               </label>
+              {form.bookingType === 'captain_charter' &&
+              captainWindowPreview &&
+              !captainWindowPreview.valid &&
+              form.date &&
+              form.startTime &&
+              durationHours > 0 ? (
+                <p className="sm:col-span-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-base font-semibold text-amber-950">
+                  {captainWindowPreview.message}
+                </p>
+              ) : null}
               <label className={labelClass}>
                 Location
                 <select className={inputClass} value={form.location} onChange={(e) => setForm((p) => ({ ...p, location: e.target.value as LocationValue }))}>

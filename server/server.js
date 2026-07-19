@@ -4307,7 +4307,7 @@ app.get('/api/availability/times', async (req, res) => {
 });
 
 /**
- * Captain charter calendar availability (Fri/Sat nights + admin blocks).
+ * Captain charter calendar availability (Mon–Sat nights + admin blocks).
  * GET /api/availability/charter?from=&to=&charterType=bio|rocket|sunset
  */
 app.get('/api/availability/charter', async (req, res) => {
@@ -4328,7 +4328,7 @@ app.get('/api/availability/charter', async (req, res) => {
     return res.json({
       charterType,
       timezone: availabilityService.BUSINESS_TZ,
-      captainNights: 'Friday/Saturday 5:00 PM – 4:00 AM',
+      captainNights: 'Monday–Saturday 5:00 PM – 4:00 AM',
       from,
       to,
       dates,

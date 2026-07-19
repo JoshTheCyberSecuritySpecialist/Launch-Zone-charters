@@ -4,6 +4,14 @@
  */
 const { DateTime } = require('luxon');
 const supabase = require('../supabaseClient');
+const {
+  CAPTAIN_NIGHT_END_HOUR,
+  CAPTAIN_NIGHT_START_HOUR,
+  CAPTAIN_NIGHT_UNAVAILABLE_MESSAGE,
+  CAPTAIN_NIGHT_WEEKDAYS,
+  captainNightUnavailableMessage,
+  getCaptainNightAnchorDay,
+} = require('../lib/captainNightSchedule');
 
 const BUSINESS_TZ = String(process.env.BUSINESS_TIMEZONE || 'America/New_York').trim();
 const DEFAULT_OPEN_HOUR = Number(process.env.AVAILABILITY_OPEN_HOUR || 7);
@@ -11,16 +19,10 @@ const DEFAULT_CLOSE_HOUR = Number(process.env.AVAILABILITY_CLOSE_HOUR || 20);
 const DEFAULT_STEP_MINUTES = Number(process.env.AVAILABILITY_SLOT_MINUTES || 30);
 const DEFAULT_RANGE_DAYS = Number(process.env.AVAILABILITY_CALENDAR_DAYS || 60);
 const MIN_LEAD_HOURS = Math.max(0, Number(process.env.BOOKING_MIN_LEAD_HOURS || 2));
-const CAPTAIN_NIGHT_START_HOUR = Number(process.env.CAPTAIN_NIGHT_START_HOUR || 17);
-const CAPTAIN_NIGHT_END_HOUR = Number(process.env.CAPTAIN_NIGHT_END_HOUR || 4);
 const CHARTER_DURATION_HOURS = 1;
-const CAPTAIN_NIGHT_WEEKDAYS = new Set([5, 6]); // Luxon: Friday=5, Saturday=6
+const CHARTER_END_TOO_LATE_MESSAGE = 'Bookings must finish by 4:00 AM.';
 const BIO_CHARTER_START_HOURS = new Set([20, 21, 22, 23, 0, 1, 2, 3, 4]);
 const DEFAULT_CHARTER_START_HOURS = new Set([17, 18, 19, 20, 21]);
-
-const CAPTAIN_NIGHT_UNAVAILABLE_MESSAGE =
-  'Captain-led charters are available Friday and Saturday nights from 5:00 PM until 4:00 AM the following morning.';
-const CHARTER_END_TOO_LATE_MESSAGE = 'Bookings must finish by 4:00 AM.';
 const BIO_CHARTER_TIME_MESSAGE =
   'Bioluminescence night tours are available from 8:00 PM through 4:00 AM.';
 const NON_BIO_LATE_NIGHT_MESSAGE =
@@ -345,14 +347,6 @@ function charterStartHoursForType(charterType) {
     : DEFAULT_CHARTER_START_HOURS;
 }
 
-function getCaptainNightAnchorDay(localStart) {
-  if (!localStart?.isValid) return null;
-  if (localStart.hour <= CAPTAIN_NIGHT_END_HOUR) {
-    return localStart.minus({ days: 1 }).startOf('day');
-  }
-  return localStart.startOf('day');
-}
-
 function getCaptainNightWindowStart(anchorDay) {
   if (!anchorDay?.isValid || !CAPTAIN_NIGHT_WEEKDAYS.has(anchorDay.weekday)) return null;
   return anchorDay.set({
@@ -388,19 +382,22 @@ function validateCharterSlotWindow({ charterType, startIso, endIso }) {
   const windowEnd = getCaptainNightWindowEnd(start);
   const windowStart = anchorDay ? getCaptainNightWindowStart(anchorDay) : null;
   if (!anchorDay || !windowEnd || !windowStart) {
-    return { valid: false, message: CAPTAIN_NIGHT_UNAVAILABLE_MESSAGE };
+    return { valid: false, message: captainNightUnavailableMessage(start) };
   }
 
   if (start < windowStart || start >= windowEnd) {
-    return { valid: false, message: CAPTAIN_NIGHT_UNAVAILABLE_MESSAGE };
+    return { valid: false, message: captainNightUnavailableMessage(start) };
   }
   if (end > windowEnd || end <= windowStart) {
-    return { valid: false, message: end > windowEnd ? CHARTER_END_TOO_LATE_MESSAGE : CAPTAIN_NIGHT_UNAVAILABLE_MESSAGE };
+    return {
+      valid: false,
+      message: end > windowEnd ? CHARTER_END_TOO_LATE_MESSAGE : captainNightUnavailableMessage(start),
+    };
   }
 
   const endAnchor = getCaptainNightAnchorDay(end);
   if (!endAnchor || endAnchor.toMillis() !== anchorDay.toMillis()) {
-    return { valid: false, message: CAPTAIN_NIGHT_UNAVAILABLE_MESSAGE };
+    return { valid: false, message: captainNightUnavailableMessage(start) };
   }
 
   const type = normalizeCharterType(charterType);

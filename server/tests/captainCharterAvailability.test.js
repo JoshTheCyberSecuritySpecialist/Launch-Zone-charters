@@ -15,19 +15,19 @@ function run() {
   const sunday = DateTime.fromISO('2026-01-04', { zone: BUSINESS_TZ });
 
   const friClosed = charterClosedLocalIntervalsForDay(friday);
-  assert.strictEqual(friClosed.length, 1);
-  assert.strictEqual(friClosed[0].start.hour, 0);
-  assert.strictEqual(friClosed[0].end.hour, 17);
+  assert.strictEqual(friClosed.length, 2);
+  assert.ok(friClosed.some((i) => i.start.hour === 0 && i.end.hour === 17));
+  assert.ok(friClosed.some((i) => i.start.hour === 4 && i.start.minute === 1 && i.end.hour === 17));
 
   const satClosed = charterClosedLocalIntervalsForDay(saturday);
-  assert.strictEqual(satClosed.length, 1);
-  assert.strictEqual(satClosed[0].start.hour, 4);
-  assert.strictEqual(satClosed[0].start.minute, 1);
-  assert.strictEqual(satClosed[0].end.hour, 17);
+  assert.strictEqual(satClosed.length, 2);
+  assert.ok(satClosed.some((i) => i.start.hour === 0 && i.end.hour === 17));
+  assert.ok(satClosed.some((i) => i.start.hour === 4 && i.start.minute === 1 && i.end.hour === 17));
 
   const monClosed = charterClosedLocalIntervalsForDay(monday);
   assert.strictEqual(monClosed.length, 1);
-  assert.strictEqual(monClosed[0].end.day, monClosed[0].start.day + 1);
+  assert.strictEqual(monClosed[0].start.hour, 0);
+  assert.strictEqual(monClosed[0].end.hour, 17);
 
   const sunClosed = charterClosedLocalIntervalsForDay(sunday);
   assert.strictEqual(sunClosed.length, 1);

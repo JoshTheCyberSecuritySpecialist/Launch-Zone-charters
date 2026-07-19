@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { CalendarPlus, Pencil, RotateCcw, Save } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/useAuth';
@@ -48,12 +48,33 @@ type AvailabilityConflict = {
   status: string;
 } | null;
 
+type CharterCapacityInfo = {
+  max: number;
+  used: number;
+  remaining: number;
+  requested: number;
+};
+
 type AvailabilityState =
-  | { status: 'idle'; message: string; conflict?: null }
-  | { status: 'checking'; message: string; conflict?: null }
-  | { status: 'available'; message: string; conflict?: null }
-  | { status: 'unavailable'; message: string; conflict: AvailabilityConflict }
-  | { status: 'error'; message: string; conflict?: null };
+  | { status: 'idle'; message: string; conflict?: null; capacity?: null }
+  | { status: 'checking'; message: string; conflict?: null; capacity?: null }
+  | { status: 'available'; message: string; conflict?: null; capacity?: CharterCapacityInfo | null }
+  | { status: 'unavailable'; message: string; conflict: AvailabilityConflict; capacity?: CharterCapacityInfo | null }
+  | { status: 'error'; message: string; conflict?: null; capacity?: null };
+
+function charterCapacityLabel(capacity: CharterCapacityInfo | null | undefined, available: boolean): string {
+  if (!capacity) {
+    return available ? 'Available' : 'Unavailable';
+  }
+  const remaining = Math.max(0, Math.floor(Number(capacity.remaining) || 0));
+  if (!available) {
+    if (remaining <= 0) return 'Full — 0 spots remaining';
+    return `Only ${remaining} spot${remaining === 1 ? '' : 's'} remaining for this time`;
+  }
+  if (remaining === 0) return 'Available — this fills the charter';
+  if (remaining === 1) return 'Only 1 spot remaining';
+  return `Available — ${remaining} spot${remaining === 1 ? '' : 's'} remaining`;
+}
 
 type StaffBookingRow = {
   id: string;
@@ -115,7 +136,17 @@ function timeLabel(start: string, end: string): string {
   return endLabel ? `${startLabel} - ${endLabel}` : startLabel;
 }
 
+type ScheduleSnapshot = {
+  date: string;
+  startTime: string;
+  durationPreset: StaffDurationPreset;
+  customDuration: string;
+  location: LocationValue;
+  bookingType: BookingType;
+};
+
 export default function AdminStaffBooking() {
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { user, isAdmin, loading: authLoading } = useAuth();
   const [form, setForm] = useState(blankForm);
@@ -132,6 +163,7 @@ export default function AdminStaffBooking() {
   const [createSuccess, setCreateSuccess] = useState<{ id: string; kind: 'hold' | 'booking' } | null>(null);
   const [postCreateBusy, setPostCreateBusy] = useState<string | null>(null);
   const availabilityCheckSeq = useRef(0);
+  const lastSavedScheduleRef = useRef<ScheduleSnapshot | null>(null);
 
   const selectedBoat = boats.find((boat) => boat.id === form.boatId) || null;
   const durationHours = useMemo(
@@ -313,6 +345,8 @@ export default function AdminStaffBooking() {
             startTime: form.startTime,
             durationHours,
             rental_location: form.location,
+            passenger_count:
+              form.bookingType === 'captain_charter' ? Math.floor(Number(form.passengerCount) || 1) : 1,
           }),
         });
         const payload = (await res.json().catch(() => ({}))) as {
@@ -320,6 +354,7 @@ export default function AdminStaffBooking() {
           conflict?: AvailabilityConflict;
           message?: string | null;
           reason?: string | null;
+          capacity?: CharterCapacityInfo | null;
           error?: string;
         };
         if (seq !== availabilityCheckSeq.current) return;
@@ -328,15 +363,24 @@ export default function AdminStaffBooking() {
           const charterMsg =
             payload.message ||
             (payload.reason === 'captain_window' ? payload.error : null) ||
-            'Already Booked';
-          setAvailability(
-            payload.reason === 'captain_window' || payload.message
-              ? { status: 'error', message: charterMsg }
-              : { status: 'unavailable', message: 'Already Booked', conflict: payload.conflict || null }
-          );
+            charterCapacityLabel(payload.capacity, false);
+          if (payload.reason === 'captain_window') {
+            setAvailability({ status: 'error', message: charterMsg || 'Invalid charter time.' });
+            return;
+          }
+          setAvailability({
+            status: 'unavailable',
+            message: charterMsg,
+            conflict: payload.conflict || null,
+            capacity: payload.capacity || null,
+          });
           return;
         }
-        setAvailability({ status: 'available', message: 'Available' });
+        setAvailability({
+          status: 'available',
+          message: charterCapacityLabel(payload.capacity, true),
+          capacity: payload.capacity || null,
+        });
       } catch (err) {
         if (seq !== availabilityCheckSeq.current) return;
         setAvailability({
@@ -347,7 +391,16 @@ export default function AdminStaffBooking() {
     }, 300);
 
     return () => window.clearTimeout(timer);
-  }, [authedFetch, durationHours, form.boatId, form.bookingType, form.date, form.location, form.startTime]);
+  }, [
+    authedFetch,
+    durationHours,
+    form.boatId,
+    form.bookingType,
+    form.date,
+    form.location,
+    form.passengerCount,
+    form.startTime,
+  ]);
 
   const submitGate = useMemo(() => {
     const blockers: string[] = [];
@@ -377,7 +430,12 @@ export default function AdminStaffBooking() {
     } else if (availability.status === 'idle' && form.boatId && form.date && form.startTime && durationHours > 0) {
       blockers.push('Availability has not been checked yet for this slot.');
     } else if (availability.status === 'unavailable') {
-      blockers.push('This boat and time slot is already booked.');
+      blockers.push(
+        availability.message ||
+          (form.bookingType === 'captain_charter'
+            ? 'This charter is full or unavailable for the selected passengers and time.'
+            : 'This boat is already booked for that time.')
+      );
     } else if (availability.status === 'error') {
       blockers.push(availability.message || 'Availability check failed. Change the schedule or try again.');
     } else if (availability.status !== 'available') {
@@ -404,10 +462,36 @@ export default function AdminStaffBooking() {
     saving,
   ]);
 
+  const clearStaffBookingUrl = useCallback(() => {
+    navigate('/admin/staff-booking', { replace: true });
+  }, [navigate]);
+
   const resetAvailability = useCallback(() => {
     availabilityCheckSeq.current += 1;
     setAvailability({ status: 'idle', message: 'Select a boat first.' });
   }, []);
+
+  const startSameTimeDifferentBoat = useCallback(() => {
+    const snap = lastSavedScheduleRef.current;
+    setCreateSuccess(null);
+    setNotice(null);
+    clearStaffBookingUrl();
+    availabilityCheckSeq.current += 1;
+    setForm({
+      ...blankForm(),
+      date: snap?.date || todayYmd(),
+      startTime: snap?.startTime || '',
+      durationPreset: snap?.durationPreset || durationFieldsForNewBookingType('rental').durationPreset,
+      customDuration: snap?.customDuration || '',
+      location: snap?.location || 'Port Orange',
+      bookingType: snap?.bookingType || 'rental',
+      boatId: '',
+    });
+    setAvailability({
+      status: 'idle',
+      message: 'Select a different boat — multiple boats can run at the same time.',
+    });
+  }, [clearStaffBookingUrl]);
 
   const reset = (clearNotice = true) => {
     availabilityCheckSeq.current += 1;
@@ -467,10 +551,19 @@ export default function AdminStaffBooking() {
         }
         throw new Error(payload.error || 'Could not save booking.');
       }
+      lastSavedScheduleRef.current = {
+        date: form.date,
+        startTime: form.startTime,
+        durationPreset: form.durationPreset,
+        customDuration: form.customDuration,
+        location: form.location,
+        bookingType: form.bookingType,
+      };
       setNotice({
         variant: 'success',
         text: action === 'hold' ? 'Hold saved and availability blocked.' : 'Staff booking created.',
       });
+      clearStaffBookingUrl();
       resetAvailability();
       setForm(blankForm());
       setSaving(null);
@@ -557,6 +650,7 @@ export default function AdminStaffBooking() {
                 onClick={() => {
                   setCreateSuccess(null);
                   setNotice(null);
+                  clearStaffBookingUrl();
                   setForm(blankForm());
                   resetAvailability();
                 }}
@@ -564,7 +658,17 @@ export default function AdminStaffBooking() {
               >
                 Create Another Booking
               </button>
+              <button
+                type="button"
+                onClick={startSameTimeDifferentBoat}
+                className="sm:col-span-2 inline-flex min-h-14 items-center justify-center rounded-xl bg-green-800 px-5 text-lg font-black text-white"
+              >
+                Same time · different boat
+              </button>
             </div>
+            <p className="mt-4 text-base text-green-900">
+              Each boat is booked separately. To run two trips at once, pick another boat — not the same one twice.
+            </p>
           </div>
         ) : null}
 
@@ -652,7 +756,21 @@ export default function AdminStaffBooking() {
               </label>
               <label className={labelClass}>
                 Boat
-                <select className={inputClass} value={form.boatId} onChange={(e) => setForm((p) => ({ ...p, boatId: e.target.value }))} disabled={boatsLoading}>
+                <select
+                  className={inputClass}
+                  value={form.boatId}
+                  onChange={(e) => {
+                    availabilityCheckSeq.current += 1;
+                    const nextBoatId = e.target.value;
+                    setForm((p) => ({ ...p, boatId: nextBoatId }));
+                    if (nextBoatId && form.date && form.startTime && durationHours > 0) {
+                      setAvailability({ status: 'checking', message: 'Checking availability...' });
+                    } else if (!nextBoatId) {
+                      setAvailability({ status: 'idle', message: 'Select a boat first.' });
+                    }
+                  }}
+                  disabled={boatsLoading}
+                >
                   <option value="">{boatsLoading ? 'Loading boats...' : 'Select boat'}</option>
                   {boats.map((boat) => (
                     <option key={boat.id} value={boat.id}>
@@ -804,8 +922,18 @@ export default function AdminStaffBooking() {
               }`}
             >
               <div className="text-2xl font-black">
-                {availability.status === 'available' ? '✅ Available' : availability.status === 'unavailable' ? '❌ Already Booked' : availability.message}
+                {availability.status === 'available'
+                  ? `✅ ${availability.message}`
+                  : availability.status === 'unavailable'
+                    ? `❌ ${availability.message}`
+                    : availability.message}
               </div>
+              {form.bookingType === 'captain_charter' && availability.capacity ? (
+                <p className="mt-3 text-base font-semibold text-slate-800">
+                  {availability.capacity.used} of {availability.capacity.max} passenger
+                  {availability.capacity.max === 1 ? '' : 's'} already booked for this overlapping time.
+                </p>
+              ) : null}
               {availability.status === 'unavailable' && availability.conflict ? (
                 <dl className="mt-4 space-y-3 text-sm">
                   <div>
@@ -824,6 +952,11 @@ export default function AdminStaffBooking() {
                     <dt className="font-bold text-slate-600">Status</dt>
                     <dd className="text-lg font-semibold capitalize text-slate-900">{availability.conflict.status.replace(/_/g, ' ')}</dd>
                   </div>
+                  <p className="pt-2 text-base font-semibold text-red-900">
+                    {form.bookingType === 'captain_charter'
+                      ? 'Reduce passengers or pick another time. Other groups may already share this charter.'
+                      : 'Pick another time or boat.'}
+                  </p>
                 </dl>
               ) : availability.status === 'error' ? (
                 <p className="mt-3 text-sm font-semibold text-red-800">{availability.message}</p>

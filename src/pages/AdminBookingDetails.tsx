@@ -734,7 +734,7 @@ export default function AdminBookingDetails() {
 
   const duplicateBooking = () => {
     const params = new URLSearchParams();
-    if (booking?.boat_id || form.boatId) params.set('boatId', String(booking?.boat_id || form.boatId));
+    // Omit boat so staff can book another vessel at the same time (per-boat availability).
     if (form.date) params.set('date', form.date);
     if (form.startTime) params.set('startTime', form.startTime);
     if (form.duration) params.set('durationHours', String(form.duration));

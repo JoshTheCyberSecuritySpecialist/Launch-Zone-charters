@@ -27,6 +27,7 @@ const bookingReliability = require('./services/bookingReliability');
 const bookingCommunications = require('./services/bookingCommunications');
 const adminBookingUpdate = require('./services/adminBookingUpdate');
 const bookingDateTimeRange = require('./lib/bookingDateTimeRange');
+const { isSharedCharterBooking, formatCapacityMessage } = require('./lib/sharedCharterCapacity');
 const shopService = require('./services/shopService');
 const disputeService = require('./services/disputeService');
 const disputeEvidenceService = require('./services/disputeEvidenceService');
@@ -183,6 +184,21 @@ function isOverlapConstraintError(err) {
   if (String(err.code || '') === '23P01') return true;
   const msg = String(err.message || '');
   return /exclusion|overlap|bookings_boat_no_time_overlap/i.test(msg);
+}
+
+function sharedCharterErrorMessage(err) {
+  const msg = String(err?.message || '');
+  if (/shared_charter_exclusive_conflict/i.test(msg)) {
+    return 'This boat already has an exclusive booking during that time.';
+  }
+  const cap = msg.match(/shared_charter_capacity_exceeded:(\d+)/i);
+  if (cap) {
+    return formatCapacityMessage(Number(cap[1]));
+  }
+  if (/shared_charter_capacity/i.test(msg)) {
+    return 'This charter is full for the selected time.';
+  }
+  return null;
 }
 
 function isUniqueConstraintError(err) {
@@ -1627,10 +1643,19 @@ function staffAvailabilityConflictPayload(result) {
   const conflict = result?.conflict || null;
   const customer = Array.isArray(conflict?.customers) ? conflict.customers[0] : conflict?.customers;
   const boat = Array.isArray(conflict?.boats) ? conflict.boats[0] : conflict?.boats;
+  const capacity = result?.capacity || null;
   return {
     available: Boolean(result?.available),
     reason: result?.reason || null,
     message: result?.message || null,
+    capacity: capacity
+      ? {
+          max: capacity.max,
+          used: capacity.used,
+          remaining: capacity.remaining,
+          requested: capacity.requested,
+        }
+      : null,
     conflict: conflict
       ? {
           id: conflict.id,
@@ -1707,6 +1732,12 @@ app.post('/api/admin/staff-bookings/check', async (req, res) => {
     if (!boatId || !times) {
       return res.status(400).json({ error: 'Boat, date, start time, and duration are required.' });
     }
+    let passengerCount = Math.max(1, Math.floor(Number(req.body?.passenger_count ?? req.body?.passengerCount ?? 1) || 1));
+    if (bookingType === 'captain_charter') {
+      const validation = validateCharterPassengerCount(passengerCount);
+      if (!validation.valid) return res.status(400).json({ error: validation.error });
+      passengerCount = validation.count;
+    }
 
     const result = await availabilityService.checkStaffBookingAvailability({
       boatId,
@@ -1715,6 +1746,7 @@ app.post('/api/admin/staff-bookings/check', async (req, res) => {
       bookingType,
       location: cleanText(req.body?.rental_location || req.body?.location, 80) || null,
       excludeBookingId: cleanText(req.body?.exclude_booking_id || req.body?.excludeBookingId, 80) || null,
+      passengerCount: bookingType === 'captain_charter' ? passengerCount : 1,
     });
     return res.json(staffAvailabilityConflictPayload(result));
   } catch (err) {
@@ -1776,6 +1808,7 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
       endTime: times.endIso,
       bookingType,
       location: location || null,
+      passengerCount: bookingType === 'captain_charter' ? passengerCount : 1,
     });
     if (!availability.available) {
       if (availability.reason === 'captain_window') {
@@ -1785,7 +1818,7 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
         });
       }
       return res.status(409).json({
-        error: SLOT_TAKEN_USER_MESSAGE,
+        error: availability.message || SLOT_TAKEN_USER_MESSAGE,
         availability: staffAvailabilityConflictPayload(availability),
       });
     }
@@ -1817,6 +1850,7 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
       boat_id: boat.id,
       booking_type: bookingType === 'captain_charter' ? 'charter' : 'rental',
       charter_type: bookingType === 'captain_charter' ? 'captain_charter' : null,
+      charter_seating: bookingType === 'captain_charter' ? 'shared' : null,
       guest_count: passengerCount,
       rental_location: location || null,
       start_time: times.startIso,
@@ -1861,6 +1895,10 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
       .select('id, status')
       .single();
     if (error) {
+      const sharedMsg = sharedCharterErrorMessage(error);
+      if (sharedMsg) {
+        return res.status(409).json({ error: sharedMsg });
+      }
       if (isOverlapConstraintError(error)) {
         return res.status(409).json({ error: SLOT_TAKEN_USER_MESSAGE });
       }
@@ -2681,6 +2719,11 @@ function bookingDetailUpdateFromBody(body) {
     out.booking_type = bookingType === 'captain_charter' ? 'charter' : 'rental';
     out.charter_type = bookingType === 'captain_charter' ? 'captain_charter' : null;
     out.captain_included = bookingType === 'captain_charter';
+    if (bookingType === 'captain_charter') {
+      out.charter_seating = 'shared';
+    } else if (bookingType === 'rental') {
+      out.charter_seating = null;
+    }
   }
   const guestCount = Number(body.guest_count ?? body.passengerCount ?? body.passengers);
   if (Number.isFinite(guestCount) && guestCount > 0) out.guest_count = Math.floor(guestCount);
@@ -2798,25 +2841,56 @@ app.patch('/api/admin/bookings/:id', async (req, res) => {
 
     if (nextBoatId !== existing.boat_id) update.boat_id = nextBoatId;
 
+    const nextGuestCount = Object.prototype.hasOwnProperty.call(update, 'guest_count')
+      ? update.guest_count
+      : existing.guest_count;
     const scheduleChanged = Boolean(update.boat_id || update.start_time || update.end_time || update.booking_type);
-    if (scheduleChanged && String(update.status || existing.status) !== 'cancelled') {
+    const guestCountChanged =
+      Object.prototype.hasOwnProperty.call(update, 'guest_count') &&
+      Number(update.guest_count) !== Number(existing.guest_count);
+    const needsAvailabilityCheck =
+      (scheduleChanged || guestCountChanged) && String(update.status || existing.status) !== 'cancelled';
+
+    if (needsAvailabilityCheck) {
       if (!nextBoatId) return res.status(400).json({ error: 'Select a boat first.' });
       try {
-        await availabilityService.assertBookingSlotAvailable({
-          boatId: nextBoatId,
-          startTime: nextStart,
-          endTime: nextEnd,
-          location: update.rental_location || existing.rental_location || null,
-          excludeBookingId: id,
-        });
+        const rowForRules = {
+          ...existing,
+          ...update,
+          boat_id: nextBoatId,
+          guest_count: nextGuestCount,
+        };
+        if (isSharedCharterBooking(rowForRules)) {
+          await availabilityService.assertSharedCharterSlotAvailable({
+            boatId: nextBoatId,
+            startTime: nextStart,
+            endTime: nextEnd,
+            passengerCount: nextGuestCount,
+            location: update.rental_location || existing.rental_location || null,
+            excludeBookingId: id,
+          });
+        } else {
+          await availabilityService.assertBookingSlotAvailable({
+            boatId: nextBoatId,
+            startTime: nextStart,
+            endTime: nextEnd,
+            location: update.rental_location || existing.rental_location || null,
+            excludeBookingId: id,
+          });
+        }
       } catch (slotErr) {
         const msg =
-          slotErr?.statusCode === 409 || isOverlapConstraintError(slotErr)
+          slotErr?.message ||
+          (slotErr?.statusCode === 409 || isOverlapConstraintError(slotErr)
             ? adminBookingUpdate.SLOT_OVERLAP_MESSAGE
-            : slotErr?.message || adminBookingUpdate.SLOT_OVERLAP_MESSAGE;
+            : adminBookingUpdate.SLOT_OVERLAP_MESSAGE);
         return res.status(slotErr?.statusCode || 409).json({ error: msg });
       }
-      update.duration_hours = roundMoney((new Date(nextEnd).getTime() - new Date(nextStart).getTime()) / (1000 * 60 * 60));
+      if (scheduleChanged) {
+        update.duration_hours = roundMoney(
+          (new Date(nextEnd).getTime() - new Date(nextStart).getTime()) / (1000 * 60 * 60)
+        );
+      }
     }
 
     const afterCustomer = beforeCustomer
@@ -2832,6 +2906,10 @@ app.patch('/api/admin/bookings/:id', async (req, res) => {
     if (Object.keys(update).length > 0) {
       const { error } = await supabase.from('bookings').update(update).eq('id', id);
       if (error) {
+        const sharedMsg = sharedCharterErrorMessage(error);
+        if (sharedMsg) {
+          return res.status(409).json({ error: sharedMsg });
+        }
         if (isOverlapConstraintError(error)) {
           return res.status(409).json({ error: adminBookingUpdate.SLOT_OVERLAP_MESSAGE });
         }

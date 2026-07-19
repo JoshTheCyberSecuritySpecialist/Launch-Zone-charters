@@ -155,11 +155,14 @@ export default function AdminBookingEdit() {
           method: 'POST',
           body: JSON.stringify({
             boat_id: form.boatId,
+            booking_type: form.bookingType === 'captain_charter' ? 'captain_charter' : 'rental',
             date: form.date,
             startTime: form.startTime,
             endTime: form.endTime,
+            durationHours: form.duration,
             rental_location: form.location,
-            excludeBookingId: id,
+            passenger_count: form.bookingType === 'captain_charter' ? Math.floor(Number(form.passengers) || 1) : 1,
+            exclude_booking_id: id,
           }),
         });
         const body = (await res.json().catch(() => ({}))) as { available?: boolean };

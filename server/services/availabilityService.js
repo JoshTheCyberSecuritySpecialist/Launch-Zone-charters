@@ -12,6 +12,9 @@ const {
   captainNightUnavailableMessage,
   getCaptainNightAnchorDay,
 } = require('../lib/captainNightSchedule');
+const {
+  evaluateSharedCharterCapacity,
+} = require('../lib/sharedCharterCapacity');
 
 const BUSINESS_TZ = String(process.env.BUSINESS_TIMEZONE || 'America/New_York').trim();
 const DEFAULT_OPEN_HOUR = Number(process.env.AVAILABILITY_OPEN_HOUR || 7);
@@ -58,7 +61,9 @@ function intervalsOverlap(aStartMs, aEndMs, bStartMs, bEndMs) {
 async function fetchBlockingBookings(boatId, rangeStartIso, rangeEndIso) {
   const { data, error } = await supabase
     .from('bookings')
-    .select('id, start_time, end_time, status, expires_at, customer_id, boat_id, customers(full_name, email, phone), boats(name)')
+    .select(
+      'id, start_time, end_time, status, expires_at, customer_id, boat_id, booking_type, charter_type, charter_seating, guest_count, customers(full_name, email, phone), boats(name)'
+    )
     .eq('boat_id', String(boatId))
     .lt('start_time', rangeEndIso)
     .gt('end_time', rangeStartIso);
@@ -221,6 +226,80 @@ function parseSlotRange(startIso, endIso) {
   };
 }
 
+async function checkSharedCharterSlotAvailability({
+  boatId,
+  startTime,
+  endTime,
+  passengerCount = 1,
+  location = null,
+  excludeBookingId = null,
+} = {}) {
+  const boat = String(boatId || '').trim();
+  if (!boat) {
+    const err = new Error('Boat id required for availability check');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const slot = parseSlotRange(startTime, endTime);
+  const [bookings, blockedDates, adminBlocks] = await Promise.all([
+    fetchBlockingBookings(boat, slot.startIso, slot.endIso),
+    fetchBlockedDateRanges(boat, slot.startIso, slot.endIso),
+    fetchAdminBlockingItemRanges(boat, slot.startIso, slot.endIso),
+  ]);
+
+  const capacityResult = evaluateSharedCharterCapacity({
+    overlappingBookings: bookings,
+    proposedGuestCount: passengerCount,
+    excludeBookingId,
+  });
+
+  if (!capacityResult.available) {
+    return {
+      available: false,
+      reason: capacityResult.reason,
+      message: capacityResult.message,
+      conflict: capacityResult.conflict,
+      capacity: capacityResult.capacity,
+      location,
+    };
+  }
+
+  const blockedIntervals = toIntervals(blockedDates, 'start_time', 'end_time').concat(
+    toIntervals(adminBlocks, 'start_time', 'end_time')
+  );
+  if (slotConflicts(slot.startMs, slot.endMs, blockedIntervals)) {
+    return {
+      available: false,
+      reason: 'blocked_date',
+      conflict: null,
+      message: null,
+      capacity: capacityResult.capacity,
+      location,
+    };
+  }
+
+  return {
+    available: true,
+    reason: null,
+    conflict: null,
+    message: null,
+    capacity: capacityResult.capacity,
+    location,
+  };
+}
+
+async function assertSharedCharterSlotAvailable(input) {
+  const result = await checkSharedCharterSlotAvailability(input);
+  if (result.available) return result;
+
+  const err = new Error(result.message || SLOT_TAKEN_USER_MESSAGE);
+  err.statusCode = result.reason === 'invalid_passenger_count' ? 400 : 409;
+  err.code = result.reason || 'slot_unavailable';
+  err.availability = result;
+  throw err;
+}
+
 async function checkStaffBookingAvailability({
   boatId,
   startTime,
@@ -228,6 +307,7 @@ async function checkStaffBookingAvailability({
   bookingType = 'rental',
   location = null,
   excludeBookingId = null,
+  passengerCount = 1,
 } = {}) {
   if (String(bookingType || '').trim().toLowerCase() === 'captain_charter') {
     const windowCheck = validateCharterSlotWindow({
@@ -241,9 +321,19 @@ async function checkStaffBookingAvailability({
         reason: 'captain_window',
         message: windowCheck.message || CAPTAIN_NIGHT_UNAVAILABLE_MESSAGE,
         conflict: null,
+        capacity: null,
         location,
       };
     }
+
+    return checkSharedCharterSlotAvailability({
+      boatId,
+      startTime,
+      endTime,
+      passengerCount,
+      location,
+      excludeBookingId,
+    });
   }
 
   return checkBookingSlotAvailability({
@@ -783,6 +873,8 @@ module.exports = {
   checkCharterSlotAvailability,
   checkBookingSlotAvailability,
   checkStaffBookingAvailability,
+  checkSharedCharterSlotAvailability,
+  assertSharedCharterSlotAvailable,
   isStartTimeAllowed,
   listDatesAvailability,
   listSlotsForDay,

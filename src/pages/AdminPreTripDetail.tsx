@@ -28,6 +28,7 @@ import {
   isPreTripTerminal,
   preTripNeedsReview,
   preTripStatusTone,
+  resolvePreTripSelectedBookingId,
   tripTypeLabel,
   type PreTripSubmissionRow,
 } from '../lib/preTripAdminShared';
@@ -95,6 +96,7 @@ export default function AdminPreTripDetail() {
       setSubmission(row);
       setAdminNotes(row.admin_notes || '');
       setSelectedMatchId(row.matched_booking_id);
+      setSuggestions(undefined);
     } catch (err) {
       setSubmission(null);
       setNotice({ variant: 'error', text: describeError(err, 'Could not load submission.') });
@@ -120,8 +122,8 @@ export default function AdminPreTripDetail() {
         );
         if (out.ok) {
           setSuggestions(out.suggestions);
-          if (out.suggestions.length === 1 && !selectedMatchId) {
-            setSelectedMatchId(out.suggestions[0].id);
+          if (out.suggestions.length === 1) {
+            setSelectedMatchId((prev) => prev || out.suggestions[0].id);
           }
         } else {
           setSuggestions([]);
@@ -133,7 +135,7 @@ export default function AdminPreTripDetail() {
         setSuggestionsLoading(false);
       }
     },
-    [getAdminToken, id, selectedMatchId]
+    [getAdminToken, id]
   );
 
   useEffect(() => {
@@ -142,17 +144,12 @@ export default function AdminPreTripDetail() {
   }, [authLoading, isAdmin, loadSubmission]);
 
   useEffect(() => {
-    if (!submission || !preTripNeedsReview(submission.admin_status)) return;
-    if (suggestions !== undefined || suggestionsLoading) return;
+    if (!submission?.id || !preTripNeedsReview(submission.admin_status)) return;
     void loadSuggestions();
-  }, [loadSuggestions, submission, suggestions, suggestionsLoading]);
+  }, [loadSuggestions, submission?.id, submission?.admin_status]);
 
-  const resolveBookingId = (): string | null => {
-    if (selectedMatchId?.trim()) return selectedMatchId.trim();
-    if (submission?.matched_booking_id) return submission.matched_booking_id;
-    if (suggestions?.length === 1) return suggestions[0].id;
-    return null;
-  };
+  const resolveBookingId = (): string | null =>
+    resolvePreTripSelectedBookingId(selectedMatchId, submission?.matched_booking_id, suggestions);
 
   const runAction = async (action: 'approve' | 'reject', rejectionReason?: string) => {
     if (!submission) return;
@@ -208,6 +205,7 @@ export default function AdminPreTripDetail() {
   if (!isAdmin) return <AdminAccessDenied signedIn={Boolean(user)} />;
 
   const title = submission?.customer_name || submission?.email || 'Pre-Trip Submission';
+  const needsReview = submission ? preTripNeedsReview(submission.admin_status) : false;
 
   return (
     <AdminShell
@@ -273,6 +271,24 @@ export default function AdminPreTripDetail() {
               </Link>
             ) : null}
           </div>
+
+          {needsReview ? (
+            <PreTripReviewActions
+              row={submission}
+              suggestions={suggestions}
+              suggestionsLoading={suggestionsLoading}
+              selectedId={selectedMatchId}
+              adminNotes={adminNotes}
+              actionBusy={actionBusy}
+              sticky
+              onSelectMatch={setSelectedMatchId}
+              onLoadSuggestions={() => void loadSuggestions()}
+              onSearch={(query) => void loadSuggestions(query)}
+              onNotesChange={setAdminNotes}
+              onApprove={() => void runAction('approve')}
+              onReject={() => setRejectOpen(true)}
+            />
+          ) : null}
 
           <div className="grid gap-4 lg:grid-cols-2">
             <InfoCard title="Customer">
@@ -358,23 +374,6 @@ export default function AdminPreTripDetail() {
               ) : null}
             </InfoCard>
           ) : null}
-
-          <InfoCard title="Match & review">
-            <PreTripReviewActions
-              row={submission}
-              suggestions={suggestions}
-              suggestionsLoading={suggestionsLoading}
-              selectedId={selectedMatchId}
-              adminNotes={adminNotes}
-              actionBusy={actionBusy}
-              onSelectMatch={setSelectedMatchId}
-              onLoadSuggestions={() => void loadSuggestions()}
-              onSearch={(query) => void loadSuggestions(query)}
-              onNotesChange={setAdminNotes}
-              onApprove={() => void runAction('approve')}
-              onReject={() => setRejectOpen(true)}
-            />
-          </InfoCard>
         </div>
       )}
 

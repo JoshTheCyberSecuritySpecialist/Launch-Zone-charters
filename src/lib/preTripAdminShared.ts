@@ -71,3 +71,40 @@ export function filterPreTripSubmissions(
   }
   return rows;
 }
+
+/** Staff booking form URL pre-filled from a pre-trip / waiver submission. */
+export function staffBookingUrlFromPreTripSubmission(row: PreTripSubmissionRow): string {
+  const params = new URLSearchParams();
+  if (row.customer_name?.trim()) params.set('customerName', row.customer_name.trim());
+  if (row.email?.trim()) params.set('email', row.email.trim());
+  if (row.phone?.trim()) params.set('phone', row.phone.trim());
+  if (row.requested_trip_date) {
+    const d = new Date(row.requested_trip_date);
+    if (Number.isFinite(d.getTime())) {
+      params.set('date', d.toISOString().slice(0, 10));
+      if (row.requested_trip_date.includes('T')) {
+        const hh = String(d.getHours()).padStart(2, '0');
+        const mm = String(d.getMinutes()).padStart(2, '0');
+        params.set('startTime', `${hh}:${mm}`);
+      }
+    }
+  }
+  params.set('bookingType', row.trip_type === 'captain_charter' ? 'captain_charter' : 'rental');
+  if (row.groupon_code?.trim()) {
+    params.set('bookingSource', 'groupon');
+    params.set('paymentMethod', 'groupon');
+  }
+  params.set('preTripSubmissionId', row.id);
+  return `/admin/staff-booking?${params.toString()}`;
+}
+
+export function resolvePreTripSelectedBookingId(
+  selectedId: string | null | undefined,
+  matchedBookingId: string | null | undefined,
+  suggestions: { id: string }[] | undefined
+): string | null {
+  if (selectedId?.trim()) return selectedId.trim();
+  if (matchedBookingId?.trim()) return matchedBookingId.trim();
+  if (suggestions?.length === 1) return suggestions[0].id;
+  return null;
+}

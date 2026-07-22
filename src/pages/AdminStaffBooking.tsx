@@ -195,6 +195,8 @@ export default function AdminStaffBooking() {
     const bookingType = searchParams.get('bookingType') || '';
     const passengerCount = searchParams.get('passengerCount') || '';
     const bookingSource = searchParams.get('bookingSource') || '';
+    const paymentMethod = searchParams.get('paymentMethod') || '';
+    const preTripSubmissionId = searchParams.get('preTripSubmissionId') || '';
     if (
       !boatId &&
       !date &&
@@ -206,7 +208,9 @@ export default function AdminStaffBooking() {
       !email &&
       !bookingType &&
       !passengerCount &&
-      !bookingSource
+      !bookingSource &&
+      !paymentMethod &&
+      !preTripSubmissionId
     ) {
       return;
     }
@@ -242,6 +246,20 @@ export default function AdminStaffBooking() {
         bookingType: nextBookingType,
         passengerCount: passengerCount || prev.passengerCount,
         bookingSource: bookingSource || prev.bookingSource,
+        paymentMethod:
+          paymentMethod === 'groupon' ||
+          paymentMethod === 'cash' ||
+          paymentMethod === 'venmo' ||
+          paymentMethod === 'zelle' ||
+          paymentMethod === 'paypal' ||
+          paymentMethod === 'stripe' ||
+          paymentMethod === 'comp' ||
+          paymentMethod === 'other'
+            ? (paymentMethod as PaymentMethod)
+            : prev.paymentMethod,
+        staffNotes: preTripSubmissionId
+          ? `Created from pre-trip submission ${preTripSubmissionId}. Return to /admin/pre-trip/${preTripSubmissionId} after saving to approve the waiver.`
+          : prev.staffNotes,
       };
     });
   }, [searchParams]);

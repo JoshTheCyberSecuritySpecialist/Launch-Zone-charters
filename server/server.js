@@ -2759,9 +2759,6 @@ app.get('/api/admin/bookings/:id', async (req, res) => {
   }
 });
 
-/**
- * GET /api/admin/bookings/:id/capacity — latest saved capacity calculation + passenger manifest.
- */
 app.get('/api/admin/bookings/:id/capacity', async (req, res) => {
   const adminUser = await verifyAdminRequest(req, res);
   if (!adminUser) return;
@@ -2769,33 +2766,110 @@ app.get('/api/admin/bookings/:id/capacity', async (req, res) => {
     const id = cleanText(req.params.id, 80);
     if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid booking id.' });
 
-    const [calculation, passengersResult, profileResult] = await Promise.all([
-      boatCapacityService.getLatestCapacityCalculation(supabase, { bookingId: id }),
-      supabase
-        .from('booking_passengers')
-        .select(
-          'id, passenger_number, passenger_name, passenger_type, weight_lbs, life_jacket_size, mobility_assistance_required, mobility_notes, created_at'
-        )
-        .eq('booking_id', id)
-        .order('passenger_number', { ascending: true }),
-      supabase.from('bookings').select('boat_id').eq('id', id).maybeSingle(),
-    ]);
-
-    if (passengersResult.error) throw passengersResult.error;
-
-    let profile = null;
-    if (profileResult.data?.boat_id) {
-      profile = await boatCapacityService.loadCapacityProfile(supabase, profileResult.data.boat_id);
-    }
-
-    return res.json({
-      calculation,
-      passengers: passengersResult.data || [],
-      boat_capacity_profile: profile,
-    });
+    const detail = await boatCapacityService.getCapacityDetailForBooking(supabase, id);
+    return res.json(detail);
   } catch (err) {
     console.error('[admin-booking-capacity:get]', err);
     return res.status(500).json({ error: err.message || 'Could not load capacity data.' });
+  }
+});
+
+/**
+ * POST /api/admin/bookings/:id/capacity-recalculate — re-run calculator from saved manifest.
+ */
+app.post('/api/admin/bookings/:id/capacity-recalculate', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const id = cleanText(req.params.id, 80);
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid booking id.' });
+
+    const run = await boatCapacityService.recalculateCapacityFromManifest(supabase, id);
+    if (!run) {
+      return res.status(404).json({
+        error: 'No passenger manifest saved for this booking. Customer must complete waivers passenger section first.',
+      });
+    }
+
+    await bookingReliability.insertActivity(supabase, {
+      booking_id: id,
+      event_type: 'capacity_recalculated',
+      actor_type: 'admin',
+      actor_id: adminUser.id || null,
+      message: `Capacity recalculated — status ${run.result.status.replace(/_/g, ' ')}.`,
+      payload: {
+        calculation_id: run.calculationId,
+        status: run.result.status,
+        config_version: run.result.config_version,
+      },
+    });
+
+    const detail = await boatCapacityService.getCapacityDetailForBooking(supabase, id);
+    return res.json({
+      ok: true,
+      calculation_id: run.calculationId,
+      status: run.result.status,
+      threshold_band: run.result.threshold_band,
+      totals: run.result.totals,
+      ...detail,
+    });
+  } catch (err) {
+    console.error('[admin-booking-capacity:recalculate]', err.message || err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Recalculate failed.' });
+  }
+});
+
+/**
+ * POST /api/admin/bookings/:id/capacity-override — admin override with audit reason.
+ */
+app.post('/api/admin/bookings/:id/capacity-override', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const id = cleanText(req.params.id, 80);
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid booking id.' });
+
+    const calculationId = cleanText(
+      req.body?.calculationId || req.body?.calculation_id,
+      80
+    );
+    const overrideStatus = cleanText(req.body?.overrideStatus || req.body?.override_status, 80);
+    const reason = String(req.body?.reason || '').trim();
+
+    if (!isBookingUuidParam(calculationId)) {
+      return res.status(400).json({ error: 'calculationId is required.' });
+    }
+
+    const result = await boatCapacityService.applyCapacityOverride(supabase, {
+      calculationId,
+      overrideStatus,
+      reason,
+      adminUserId: adminUser.id || null,
+    });
+
+    if (String(result.booking_id) !== String(id)) {
+      return res.status(400).json({ error: 'Calculation does not belong to this booking.' });
+    }
+
+    await bookingReliability.insertActivity(supabase, {
+      booking_id: id,
+      event_type: 'capacity_override',
+      actor_type: 'admin',
+      actor_id: adminUser.id || null,
+      message: `Capacity status overridden to ${overrideStatus.replace(/_/g, ' ')}.`,
+      payload: {
+        calculation_id: calculationId,
+        original_status: result.override.original_status,
+        override_status: result.override.override_status,
+        reason,
+      },
+    });
+
+    const detail = await boatCapacityService.getCapacityDetailForBooking(supabase, id);
+    return res.json({ ok: true, override: result.override, ...detail });
+  } catch (err) {
+    console.error('[admin-booking-capacity:override]', err.message || err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Override failed.' });
   }
 });
 
@@ -3015,6 +3089,37 @@ app.patch('/api/admin/bookings/:id', async (req, res) => {
           message: 'Booking saved with no field changes.',
           payload: { fields: [] },
         });
+      }
+
+      if (nextBoatId !== existing.boat_id) {
+        try {
+          const recalc = await boatCapacityService.recalculateCapacityFromManifest(supabase, id);
+          if (recalc) {
+            await bookingReliability.insertActivity(supabase, {
+              booking_id: id,
+              event_type: 'capacity_recalculated',
+              actor_type: 'system',
+              actor_id: adminUser.id || null,
+              message: 'Boat assignment changed — capacity recalculated from saved passenger manifest.',
+              payload: {
+                calculation_id: recalc.calculationId,
+                status: recalc.result.status,
+                boat_id: nextBoatId,
+              },
+            });
+          } else {
+            await bookingReliability.insertActivity(supabase, {
+              booking_id: id,
+              event_type: 'capacity_review_required',
+              actor_type: 'system',
+              actor_id: adminUser.id || null,
+              message: 'Boat assignment changed — request updated passenger information if needed.',
+              payload: { boat_id: nextBoatId },
+            });
+          }
+        } catch (recalcErr) {
+          console.warn('[admin-booking-detail] capacity recalc after boat change:', recalcErr.message || recalcErr);
+        }
       }
     } else if (customerChanges.length > 0) {
       await adminBookingUpdate.logBookingChanges(supabase, bookingReliability, {
@@ -5977,6 +6082,8 @@ function toPublicBookingRow(booking, customer, boat) {
     boat_id: String(booking.boat_id || ''),
     boat_name: boat?.name ? String(boat.name) : null,
     boat_type: boat?.type ? String(boat.type) : null,
+    guest_count: booking.guest_count != null ? Math.floor(Number(booking.guest_count)) : null,
+    booking_type: booking.booking_type ? String(booking.booking_type) : null,
     captain_included: Boolean(booking.captain_included),
     status: String(booking.status || ''),
     payment_status: String(booking.payment_status || ''),
@@ -5988,6 +6095,11 @@ function toPublicBookingRow(booking, customer, boat) {
       String(booking.insurance_url || customer?.insurance_proof_url || '').trim()
     ),
   };
+}
+
+async function toPublicBookingRowWithCapacity(booking, customer, boat) {
+  const row = toPublicBookingRow(booking, customer, boat);
+  return boatCapacityService.attachCapacityFieldsToPublicBooking(supabase, row, booking.id);
 }
 
 function pickBestBookingRow(rows) {
@@ -6018,7 +6130,7 @@ app.get('/api/public/waivers-booking', async (req, res) => {
     const { data: booking, error: bErr } = await supabase
       .from('bookings')
       .select(
-        'id, customer_id, boat_id, start_time, end_time, rental_type, captain_included, status, payment_status, waiver_signed, license_status, insurance_status, license_url, insurance_url, boats(id, name, type)'
+        'id, customer_id, boat_id, start_time, end_time, rental_type, booking_type, guest_count, captain_included, status, payment_status, waiver_signed, license_status, insurance_status, license_url, insurance_url, boats(id, name, type)'
       )
       .eq('id', bookingId)
       .maybeSingle();
@@ -6037,7 +6149,7 @@ app.get('/api/public/waivers-booking', async (req, res) => {
     if (cErr || !customer) return res.status(404).json(notFound);
 
     const boat = Array.isArray(booking.boats) ? booking.boats[0] : booking.boats;
-    const publicRow = toPublicBookingRow(booking, customer, boat);
+    const publicRow = await toPublicBookingRowWithCapacity(booking, customer, boat);
     delete publicRow.email;
     publicRow.email_masked = bookingAccess.maskEmail(customer.email);
     return res.json({ booking: publicRow });
@@ -6078,7 +6190,7 @@ app.post('/api/public/confirm-waivers-access', async (req, res) => {
     }
 
     return res.json({
-      booking: toPublicBookingRow(booking, customer, boat),
+      booking: await toPublicBookingRowWithCapacity(booking, customer, boat),
     });
   } catch (err) {
     console.error('[confirm-waivers-access]', err);
@@ -6388,7 +6500,7 @@ app.post('/api/public/find-booking', async (req, res) => {
     const { data: bookings, error: bErr } = await supabase
       .from('bookings')
       .select(
-        'id, customer_id, boat_id, start_time, end_time, rental_type, captain_included, status, payment_status, waiver_signed, license_status, insurance_status, license_url, insurance_url, promo_code, boats(id, name, type)'
+        'id, customer_id, boat_id, start_time, end_time, rental_type, booking_type, guest_count, captain_included, status, payment_status, waiver_signed, license_status, insurance_status, license_url, insurance_url, promo_code, boats(id, name, type)'
       )
       .in('customer_id', customerIds)
       .not('status', 'eq', 'cancelled');
@@ -6418,7 +6530,9 @@ app.post('/api/public/find-booking', async (req, res) => {
     const customer = matchedCustomers.find((c) => c.id === picked.customer_id) || matchedCustomers[0];
     const boat = Array.isArray(picked.boats) ? picked.boats[0] : picked.boats;
 
-    return res.json({ booking: toPublicBookingRow(picked, customer, boat) });
+    return res.json({
+      booking: await toPublicBookingRowWithCapacity(picked, customer, boat),
+    });
   } catch (err) {
     console.error('[find-booking]', err);
     return res.status(500).json({ message: noMatchMessage });
@@ -6427,14 +6541,14 @@ app.post('/api/public/find-booking', async (req, res) => {
 
 /**
  * POST /api/public/capacity-check
- * Server-side boat safety capacity check (Phase 2 — no public UI yet).
- * Requires booking contact verification. Persists when customerConfirmed is true.
+ * Server-side boat safety capacity check for matched bookings or trip-type previews.
  */
 app.post('/api/public/capacity-check', async (req, res) => {
   try {
     if (!supabaseConfigured) return res.status(503).json({ error: 'Server not configured' });
 
     const bookingId = String(req.body?.bookingId || '').trim();
+    const tripType = String(req.body?.tripType || req.body?.trip_type || '').trim();
     const email = normalizeEmailParam(req.body?.email);
     const phone = String(req.body?.phone || '').trim();
     const passengers = req.body?.passengers;
@@ -6445,38 +6559,54 @@ app.post('/api/public/capacity-check', async (req, res) => {
     const shouldPersist = customerConfirmed && req.body?.persist !== false;
     const preTripSubmissionId = String(req.body?.preTripSubmissionId || req.body?.pre_trip_submission_id || '').trim();
 
-    if (!isBookingUuidParam(bookingId)) {
-      return res.status(400).json({ error: 'Invalid booking id.' });
-    }
-    if (!email && !phone) {
-      return res.status(400).json({ error: 'Email or phone is required to verify this booking.' });
-    }
-
     const ip = requestIpBestEffort(req);
     if (!checkFindBookingRate(ip)) {
       return res.status(429).json({ error: 'Too many attempts. Please wait a minute.' });
     }
 
-    const verified = await bookingAccess.verifyBookingContact(supabase, bookingId, email, phone, {
-      requirePhone: !email,
-    });
-    if (!verified.ok) {
-      return res.status(verified.statusCode || 403).json({ error: verified.message || 'Could not verify booking' });
-    }
+    let run;
+    if (isBookingUuidParam(bookingId)) {
+      if (!email && !phone) {
+        return res.status(400).json({ error: 'Email or phone is required to verify this booking.' });
+      }
 
-    if (['cancelled', 'completed'].includes(String(verified.booking.status || ''))) {
-      return res.status(404).json({ error: 'Booking not found or no longer active.' });
-    }
+      const verified = await bookingAccess.verifyBookingContact(supabase, bookingId, email, phone, {
+        requirePhone: !email,
+      });
+      if (!verified.ok) {
+        return res.status(verified.statusCode || 403).json({ error: verified.message || 'Could not verify booking' });
+      }
 
-    const run = await boatCapacityService.runCapacityCheckForBooking(supabase, {
-      bookingId,
-      preTripSubmissionId: isBookingUuidParam(preTripSubmissionId) ? preTripSubmissionId : null,
-      passengers,
-      expectedPassengerCount,
-      load,
-      customerConfirmed,
-      persist: shouldPersist,
-    });
+      if (['cancelled', 'completed'].includes(String(verified.booking.status || ''))) {
+        return res.status(404).json({ error: 'Booking not found or no longer active.' });
+      }
+
+      run = await boatCapacityService.runCapacityCheckForBooking(supabase, {
+        bookingId,
+        preTripSubmissionId: isBookingUuidParam(preTripSubmissionId) ? preTripSubmissionId : null,
+        passengers,
+        expectedPassengerCount,
+        load,
+        customerConfirmed,
+        persist: shouldPersist,
+      });
+    } else if (['pontoon_rental', 'center_console_rental', 'captain_charter'].includes(tripType)) {
+      if (!email || !phone) {
+        return res.status(400).json({ error: 'Email and phone are required for manual trip capacity checks.' });
+      }
+
+      run = await boatCapacityService.runCapacityCheckForTripType(supabase, {
+        tripType,
+        preTripSubmissionId: isBookingUuidParam(preTripSubmissionId) ? preTripSubmissionId : null,
+        passengers,
+        expectedPassengerCount,
+        load,
+        customerConfirmed,
+        persist: shouldPersist,
+      });
+    } else {
+      return res.status(400).json({ error: 'bookingId or tripType is required.' });
+    }
 
     return res.json({
       ...boatSafetyCapacity.toPublicCapacityResult(run.result),
@@ -6488,6 +6618,9 @@ app.post('/api/public/capacity-check', async (req, res) => {
     }
     if (err.code === 'confirmation_required') {
       return res.status(400).json({ error: err.message });
+    }
+    if (err.code === 'capacity_exceeded') {
+      return res.status(400).json({ error: err.message, status: boatSafetyCapacity.CAPACITY_STATUS.EXCEEDED });
     }
     if (err.code === 'boat_assignment_pending') {
       return res.status(400).json({ error: err.message, boat_assignment_pending: true });
@@ -6835,6 +6968,25 @@ app.post('/api/public/pre-trip-submission', async (req, res) => {
       businessName: (process.env.BUSINESS_NAME || 'Launch Zone Charters').trim(),
       submission: { ...row, id: inserted.id },
     });
+
+    const capacityConfirmed = Boolean(body.customerConfirmed ?? body.customer_confirmed);
+    const capacityPassengers = body.passengers;
+    if (capacityConfirmed && Array.isArray(capacityPassengers) && capacityPassengers.length > 0) {
+      try {
+        await boatCapacityService.runCapacityCheckForTripType(supabase, {
+          tripType,
+          preTripSubmissionId: inserted.id,
+          passengers: capacityPassengers,
+          expectedPassengerCount:
+            body.expectedPassengerCount ?? body.passengerCount ?? body.guest_count ?? capacityPassengers.length,
+          load: body.load || {},
+          customerConfirmed: true,
+          persist: true,
+        });
+      } catch (capErr) {
+        console.warn('[pre-trip-submission] capacity save:', capErr.message || capErr);
+      }
+    }
 
     return res.json({ ok: true, submissionId: inserted.id, duplicate: false });
   } catch (err) {

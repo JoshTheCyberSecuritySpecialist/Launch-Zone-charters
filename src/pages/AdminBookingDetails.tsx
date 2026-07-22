@@ -10,6 +10,7 @@ import { humanizeLabel, shortId } from '../components/admin/adminDisplay';
 import LoadingSection from '../components/admin/LoadingSection';
 import AdminId from '../components/admin/AdminId';
 import AdminLegalEvidencePanel from '../components/admin/AdminLegalEvidencePanel';
+import AdminBookingCapacityPanel from '../components/admin/AdminBookingCapacityPanel';
 import { env } from '../config/env.js';
 import {
   CHARTER_MAX_PASSENGERS,
@@ -1561,6 +1562,12 @@ export default function AdminBookingDetails() {
           </div>
 
           <div className="admin-booking-no-print">
+          <AdminBookingCapacityPanel
+            bookingId={id || booking.id}
+            authedFetch={authedFetch}
+            boatId={form.boatId || booking.boat_id || null}
+          />
+
           <AdminLegalEvidencePanel
             bookingId={id || booking.id}
             booking={booking}

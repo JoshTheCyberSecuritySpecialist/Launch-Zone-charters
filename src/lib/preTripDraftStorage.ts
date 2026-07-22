@@ -9,7 +9,7 @@ const DRAFT_KEY = 'lz_pre_trip_manual_draft_v2';
 const DRAFT_KEY_V1 = 'lz_pre_trip_manual_draft_v1';
 const COMPLETED_KEY = 'lz_pre_trip_completed_v1';
 
-export type ManualPreTripStep = 'info' | 'trip' | 'documents' | 'review';
+export type ManualPreTripStep = 'info' | 'trip' | 'passengers' | 'documents' | 'review';
 
 export type ManualPreTripDraft = {
   draftId: string;

@@ -41,6 +41,8 @@ const REQUIRED_ADMIN_APIS = [
   "app.get('/api/admin/bookings/:id'",
   "app.get('/api/admin/bookings/:id/capacity'",
   "app.post('/api/admin/bookings/:id/capacity-check'",
+  "app.post('/api/admin/bookings/:id/capacity-recalculate'",
+  "app.post('/api/admin/bookings/:id/capacity-override'",
   "app.patch('/api/admin/bookings/:id'",
   "app.get('/api/admin/documents/access'",
   "app.get('/api/admin/documents/download'",

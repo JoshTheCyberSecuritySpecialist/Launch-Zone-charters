@@ -12,6 +12,8 @@ export type PublicBookingMatch = {
   boat_id: string;
   boat_name: string | null;
   boat_type: string | null;
+  guest_count?: number | null;
+  booking_type?: string | null;
   captain_included: boolean;
   status: string;
   payment_status: string;
@@ -20,6 +22,32 @@ export type PublicBookingMatch = {
   insurance_status: string;
   has_license_url: boolean;
   has_insurance_url: boolean;
+  boat_capacity_verified?: boolean;
+  capacity_status?:
+    | 'within_operating_range'
+    | 'captain_review_required'
+    | 'capacity_exceeded'
+    | 'capacity_unverified'
+    | null;
+  capacity_completed?: boolean;
+};
+
+export type PublicCapacityCheckResult = {
+  status:
+    | 'within_operating_range'
+    | 'captain_review_required'
+    | 'capacity_exceeded'
+    | 'capacity_unverified';
+  threshold_band: 'green' | 'yellow' | 'red' | null;
+  message: string;
+  canProceed: boolean;
+  requiresStaffReview: boolean;
+  passenger_count: number;
+  total_persons_aboard: number;
+  capacity_verified: boolean;
+  has_mobility_concerns: boolean;
+  has_life_jacket_concerns: boolean;
+  calculation_id?: string | null;
 };
 
 export type FindBookingResult =
@@ -342,6 +370,65 @@ export async function signBookingWaiver(input: {
   return { ok: true };
 }
 
+export async function submitPublicCapacityCheck(input: {
+  bookingId?: string;
+  tripType?: PreTripTripType;
+  email: string;
+  phone: string;
+  expectedPassengerCount: number;
+  passengers: Array<{
+    passenger_name: string;
+    passenger_type: 'adult' | 'child' | 'infant';
+    weight_lbs: number;
+    life_jacket_size: string;
+    mobility_assistance_required: boolean;
+    mobility_notes?: string;
+  }>;
+  load: {
+    cooler_weight_lbs: number;
+    personal_gear_weight_lbs: number;
+    other_equipment_weight_lbs: number;
+    other_equipment_description?: string;
+  };
+  customerConfirmed: boolean;
+  persist?: boolean;
+}): Promise<{ ok: true; result: PublicCapacityCheckResult } | { ok: false; error: string }> {
+  if (!env.apiUrlConfigured || !env.apiUrl) {
+    return { ok: false, error: 'API is not configured. Please call 803-542-1761 for help.' };
+  }
+
+  const res = await fetch(`${env.apiUrl}/api/public/capacity-check`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      bookingId: input.bookingId,
+      tripType: input.tripType,
+      email: input.email.trim().toLowerCase(),
+      phone: input.phone.trim(),
+      expectedPassengerCount: input.expectedPassengerCount,
+      passengerCount: input.expectedPassengerCount,
+      passengers: input.passengers,
+      load: input.load,
+      customerConfirmed: input.customerConfirmed,
+      persist: input.persist,
+    }),
+  });
+
+  const payload = (await res.json().catch(() => ({}))) as PublicCapacityCheckResult & {
+    error?: string;
+    message?: string;
+  };
+
+  if (!res.ok) {
+    return {
+      ok: false,
+      error: payload.error || payload.message || 'Could not save passenger information.',
+    };
+  }
+
+  return { ok: true, result: payload };
+}
+
 export type PreTripTripType = 'pontoon_rental' | 'center_console_rental' | 'captain_charter';
 
 export async function submitPreTripSubmission(input: {
@@ -359,6 +446,22 @@ export async function submitPreTripSubmission(input: {
   insuranceUrl?: string | null;
   /** Stable client draft UUID — used for server-side idempotency. */
   clientDraftId?: string;
+  expectedPassengerCount?: number;
+  passengers?: Array<{
+    passenger_name: string;
+    passenger_type: 'adult' | 'child' | 'infant';
+    weight_lbs: number;
+    life_jacket_size: string;
+    mobility_assistance_required: boolean;
+    mobility_notes?: string;
+  }>;
+  load?: {
+    cooler_weight_lbs: number;
+    personal_gear_weight_lbs: number;
+    other_equipment_weight_lbs: number;
+    other_equipment_description?: string;
+  };
+  customerConfirmed?: boolean;
 }): Promise<
   | { ok: true; submissionId: string; duplicate?: boolean }
   | { ok: false; error: string }
@@ -389,6 +492,10 @@ export async function submitPreTripSubmission(input: {
       client_draft_id: clientDraftId,
       idempotencyKey: clientDraftId,
       idempotency_key: clientDraftId,
+      passengers: input.passengers,
+      load: input.load,
+      expectedPassengerCount: input.expectedPassengerCount,
+      customerConfirmed: input.customerConfirmed,
     }),
   });
 

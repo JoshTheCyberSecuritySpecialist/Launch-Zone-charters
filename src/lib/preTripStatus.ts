@@ -50,6 +50,18 @@ export function buildBookingChecklist(booking: PublicBookingMatch, isRental: boo
       note: 'We located your reservation',
     },
     {
+      key: 'capacity',
+      label: 'Passenger & safety information',
+      done: Boolean(booking.capacity_completed),
+      note: booking.capacity_completed
+        ? booking.capacity_status === 'captain_review_required'
+          ? 'Saved — captain review before departure'
+          : 'Saved for your assigned boat'
+        : booking.boat_capacity_verified === false
+          ? 'Required — contact us if the form is blocked'
+          : 'Enter passenger weights and gear before waiver',
+    },
+    {
       key: 'waiver',
       label: 'Waiver signed',
       done: booking.waiver_signed,
@@ -152,6 +164,12 @@ export function buildSubmissionChecklist(
       note: submission.waiver_signed ? 'On file' : 'Still needed',
     },
     {
+      key: 'capacity',
+      label: 'Passenger & safety information',
+      done: ['matched', 'approved'].includes(submission.admin_status),
+      note: 'Saved when your manual submission is processed by staff',
+    },
+    {
       key: 'license',
       label: 'License / ID uploaded',
       done:
@@ -231,6 +249,7 @@ export function deriveSubmissionOverallStatus(
 }
 
 export function bookingAllCustomerStepsDone(booking: PublicBookingMatch, isRental: boolean): boolean {
+  if (!booking.capacity_completed) return false;
   if (!booking.waiver_signed) return false;
   if (!isRental) return true;
   const insuranceOk =

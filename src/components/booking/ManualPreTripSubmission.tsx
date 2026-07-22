@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ExternalLink, Loader2, Upload } from 'lucide-react';
 import WaiverBlock, { waiverFormComplete, type WaiverFormData } from './WaiverBlock';
+import BoatSafetyPassengerForm, {
+  type CapacityFormPayload,
+} from './BoatSafetyPassengerForm';
 import PreTripStepper from './PreTripStepper';
 import WaiversHelpCard from './WaiversHelpCard';
 import {
@@ -8,7 +11,7 @@ import {
   getInsuranceConfigForTripType,
   type PreTripTripType,
 } from '../../config/buoyInsurance';
-import { submitPreTripSubmission, type PreTripTripType as ApiTripType } from '../../lib/publicBooking';
+import { submitPreTripSubmission, submitPublicCapacityCheck, type PreTripTripType as ApiTripType, type PublicCapacityCheckResult } from '../../lib/publicBooking';
 import {
   clearManualPreTripDraft,
   loadManualPreTripDraft,
@@ -42,6 +45,7 @@ const TRIP_OPTIONS: { value: PreTripTripType; label: string }[] = [
 const FLOW_STEPS = [
   { key: 'info', label: 'Your Information' },
   { key: 'trip', label: 'Trip Details' },
+  { key: 'passengers', label: 'Passengers' },
   { key: 'documents', label: 'Documents' },
   { key: 'review', label: 'Review & Submit' },
 ] as const;
@@ -115,6 +119,8 @@ export default function ManualPreTripSubmission({
 
   const [submitBusy, setSubmitBusy] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [capacityPayload, setCapacityPayload] = useState<CapacityFormPayload | null>(null);
+  const [capacityResult, setCapacityResult] = useState<PublicCapacityCheckResult | null>(null);
   const submitLockRef = useRef(false);
 
   const isRental = tripType !== 'captain_charter';
@@ -245,6 +251,12 @@ export default function ManualPreTripSubmission({
   };
 
   const continueFromDocuments = () => {
+    if (!capacityResult?.canProceed) {
+      setSubmitError('Complete passenger and safety information before continuing.');
+      setStep('passengers');
+      focusErrors();
+      return;
+    }
     if (!waiverComplete) {
       setSubmitError('Please accept the waiver before continuing.');
       focusErrors();
@@ -277,6 +289,12 @@ export default function ManualPreTripSubmission({
     if (isRental && !licenseUrl) {
       setSubmitError('Upload a clear photo of your license or ID.');
       setStep('documents');
+      focusErrors();
+      return;
+    }
+    if (!capacityResult?.canProceed || !capacityPayload) {
+      setSubmitError('Complete passenger and safety information.');
+      setStep('passengers');
       focusErrors();
       return;
     }
@@ -320,6 +338,10 @@ export default function ManualPreTripSubmission({
       licenseUrl,
       insuranceUrl,
       clientDraftId: resolvedClientDraftId,
+      expectedPassengerCount: capacityPayload.expectedPassengerCount,
+      passengers: capacityPayload.passengers,
+      load: capacityPayload.load,
+      customerConfirmed: true,
     });
     setSubmitBusy(false);
 
@@ -374,7 +396,8 @@ export default function ManualPreTripSubmission({
 
       <WaiversHelpCard />
 
-      {(infoError || submitError) && (step === 'info' || step === 'documents' || step === 'review') ? (
+      {(infoError || submitError) &&
+      (step === 'info' || step === 'passengers' || step === 'documents' || step === 'review') ? (
         <div
           ref={errorSummaryRef}
           tabIndex={-1}
@@ -499,13 +522,45 @@ export default function ManualPreTripSubmission({
             </div>
           </div>
           <div className="mt-8 flex flex-col gap-3">
-            <button type="button" onClick={() => setStep('documents')} className={WI_PRIMARY_BTN}>
-              Continue to Documents
+            <button type="button" onClick={() => setStep('passengers')} className={WI_PRIMARY_BTN}>
+              Continue to Passenger Information
             </button>
             <button type="button" onClick={() => setStep('info')} className={WI_SECONDARY_BTN}>
               Edit Your Information
             </button>
           </div>
+        </section>
+      ) : null}
+
+      {step === 'passengers' ? (
+        <section className={WI_SECTION}>
+          <BoatSafetyPassengerForm
+            boatLabel={tripLabel}
+            captainIncluded={tripType === 'captain_charter'}
+            disabled={false}
+            completedResult={capacityResult}
+            idPrefix="mpt-cap-"
+            onSubmit={async (payload) => {
+              setCapacityPayload(payload);
+              const out = await submitPublicCapacityCheck({
+                tripType: tripType as ApiTripType,
+                email: email.trim().toLowerCase(),
+                phone: phone.trim(),
+                ...payload,
+                persist: false,
+              });
+              if (!out.ok) throw new Error(out.error);
+              setCapacityResult(out.result);
+              return out.result;
+            }}
+            onSuccess={() => {
+              setSubmitError(null);
+              setStep('documents');
+            }}
+          />
+          <button type="button" onClick={() => setStep('trip')} className={`${WI_SECONDARY_BTN} mt-6`}>
+            Edit Trip Details
+          </button>
         </section>
       ) : null}
 
@@ -629,8 +684,8 @@ export default function ManualPreTripSubmission({
             <button type="button" onClick={continueFromDocuments} className={WI_PRIMARY_BTN}>
               Continue to Review &amp; Submit
             </button>
-            <button type="button" onClick={() => setStep('trip')} className={WI_SECONDARY_BTN}>
-              Edit Trip Details
+            <button type="button" onClick={() => setStep('passengers')} className={WI_SECONDARY_BTN}>
+              Edit Passenger Information
             </button>
           </div>
         </div>
@@ -676,6 +731,24 @@ export default function ManualPreTripSubmission({
               {requestedTripDate ? (
                 <p className="text-lg text-slate-200">Requested: {requestedTripDate}</p>
               ) : null}
+            </div>
+
+            <div className="rounded-xl border border-white/10 bg-slate-950/40 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <h4 className="text-lg font-bold text-white">Passenger &amp; safety information</h4>
+                <button
+                  type="button"
+                  onClick={() => setStep('passengers')}
+                  className="min-h-12 text-base font-semibold text-cyan-200 underline"
+                >
+                  Edit
+                </button>
+              </div>
+              <p className="mt-2 text-lg text-slate-200">
+                {capacityResult?.canProceed
+                  ? `${capacityPayload?.expectedPassengerCount ?? 0} passenger(s) entered`
+                  : 'Not completed'}
+              </p>
             </div>
 
             <div className="rounded-xl border border-white/10 bg-slate-950/40 p-4">

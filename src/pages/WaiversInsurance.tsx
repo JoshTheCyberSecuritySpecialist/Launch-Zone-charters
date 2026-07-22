@@ -4,6 +4,10 @@ import { Calendar, ClipboardCheck, ExternalLink, Loader2, Search, Upload, Shield
 import WaiverBlock, { waiverFormComplete, type WaiverFormData } from '../components/booking/WaiverBlock';
 import PreTripStatusPanel from '../components/booking/PreTripStatusPanel';
 import ManualPreTripSubmission from '../components/booking/ManualPreTripSubmission';
+import BoatSafetyPassengerForm, {
+  capacityAllowsWaiver,
+  type CapacityFormPayload,
+} from '../components/booking/BoatSafetyPassengerForm';
 import WaiversHelpCard from '../components/booking/WaiversHelpCard';
 import {
   confirmWaiversAccess,
@@ -12,7 +16,9 @@ import {
   findPublicBooking,
   markInsuranceProof,
   signBookingWaiver,
+  submitPublicCapacityCheck,
   type PublicBookingMatch,
+  type PublicCapacityCheckResult,
   type PreTripStatusPayload,
 } from '../lib/publicBooking';
 import {
@@ -74,6 +80,29 @@ function formatTripDate(iso: string) {
   }
 }
 
+function capacityResultFromBooking(booking: PublicBookingMatch): PublicCapacityCheckResult | null {
+  if (!booking.capacity_completed || !booking.capacity_status) return null;
+  const status = booking.capacity_status;
+  return {
+    status,
+    threshold_band: null,
+    message:
+      status === 'within_operating_range'
+        ? 'Passenger information is on file for this booking.'
+        : status === 'captain_review_required'
+          ? 'Passenger information saved. The captain must review this group before departure.'
+          : 'Please contact Launch Zone Charters for assistance with passenger planning.',
+    canProceed: status !== 'capacity_exceeded' && status !== 'capacity_unverified',
+    requiresStaffReview:
+      status === 'captain_review_required' || status === 'capacity_unverified',
+    passenger_count: booking.guest_count ?? 0,
+    total_persons_aboard: 0,
+    capacity_verified: booking.boat_capacity_verified ?? false,
+    has_mobility_concerns: false,
+    has_life_jacket_concerns: false,
+  };
+}
+
 export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) {
   const [searchParams, setSearchParams] = useSearchParams();
   const bookingIdFromUrl = searchParams.get('bookingId')?.trim() || '';
@@ -106,6 +135,7 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
   const [licenseMessage, setLicenseMessage] = useState<string | null>(null);
   const [proofBusy, setProofBusy] = useState(false);
   const [proofMessage, setProofMessage] = useState<string | null>(null);
+  const [capacityResult, setCapacityResult] = useState<PublicCapacityCheckResult | null>(null);
 
   const [manualMode, setManualMode] = useState(
     () =>
@@ -150,6 +180,14 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
     booking != null &&
     bookingOverallStatus !== 'ready_for_departure' &&
     !bookingAllCustomerStepsDone(booking, isRental);
+
+  useEffect(() => {
+    if (booking) {
+      setCapacityResult(capacityResultFromBooking(booking));
+    } else {
+      setCapacityResult(null);
+    }
+  }, [booking]);
 
   const loadSubmissionStatus = useCallback(
     async (submissionId: string, email: string, phone: string) => {
@@ -281,6 +319,10 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
   const handleSignWaiver = async () => {
     if (!booking || actionsBlocked) {
       setWaiverMessage('Confirm the phone number on your booking to continue.');
+      return;
+    }
+    if (!capacityAllowsWaiver(capacityResult)) {
+      setWaiverMessage('Complete passenger and safety information in the section above first.');
       return;
     }
     if (!waiverFormComplete(waiverData, termsAccepted, damageFeeAcknowledged)) {
@@ -441,7 +483,16 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
     ? 'Completed'
     : waiverBusy
       ? 'Uploading'
-      : 'Not started';
+      : !capacityAllowsWaiver(capacityResult)
+        ? 'Needs attention'
+        : 'Not started';
+  const capacityDocStatus: DocStatusText = capacityResult?.canProceed
+    ? 'Completed'
+    : booking?.boat_capacity_verified === false
+      ? 'Needs attention'
+      : capacityResult
+        ? 'Needs attention'
+        : 'Not started';
   const licenseDocStatus: DocStatusText = licenseBusy
     ? 'Uploading'
     : booking?.has_license_url || booking?.license_status === 'verified'
@@ -845,11 +896,57 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
                 <section className={WI_SECTION}>
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
+                      <h2 className="text-xl font-bold text-white">Boat Safety and Passenger Information</h2>
+                      <p className={`${WI_HINT} mt-1`}>Required before waiver and documents.</p>
+                    </div>
+                    <DocStatusBadge status={capacityDocStatus} />
+                  </div>
+                  {!booking.boat_id ? (
+                    <p className={`${WI_BODY} mt-4`} role="status">
+                      Boat assignment pending. Please contact Launch Zone Charters at 803-542-1761 so
+                      we can confirm your vessel before you enter passenger information.
+                    </p>
+                  ) : (
+                    <div className="mt-5">
+                      <BoatSafetyPassengerForm
+                        boatLabel={booking.boat_name || 'Assigned boat'}
+                        captainIncluded={!isRental || booking.captain_included}
+                        suggestedPassengerCount={booking.guest_count}
+                        disabled={actionsBlocked}
+                        completedResult={capacityResult}
+                        idPrefix="wi-cap-"
+                        onSubmit={async (payload: CapacityFormPayload) => {
+                          const out = await submitPublicCapacityCheck({
+                            bookingId: booking.id,
+                            email: contactEmail,
+                            phone: contactPhone,
+                            ...payload,
+                          });
+                          if (!out.ok) {
+                            throw new Error(out.error);
+                          }
+                          setCapacityResult(out.result);
+                          await refreshBooking();
+                          return out.result;
+                        }}
+                      />
+                    </div>
+                  )}
+                </section>
+
+                <section className={WI_SECTION}>
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
                       <h2 className="text-xl font-bold text-white">Waiver</h2>
                       <p className={`${WI_HINT} mt-1`}>Read and sign before your trip.</p>
                     </div>
                     <DocStatusBadge status={waiverDocStatus} />
                   </div>
+                  {!capacityAllowsWaiver(capacityResult) && !booking.waiver_signed ? (
+                    <p className={`${WI_BODY} mt-4 text-amber-100`}>
+                      Complete passenger and safety information above before signing the waiver.
+                    </p>
+                  ) : null}
                   {!booking.waiver_signed ? (
                     <>
                       <div className="mt-5">
@@ -868,7 +965,7 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
                       </div>
                       <button
                         type="button"
-                        disabled={waiverBusy || actionsBlocked}
+                        disabled={waiverBusy || actionsBlocked || !capacityAllowsWaiver(capacityResult)}
                         onClick={() => void handleSignWaiver()}
                         className={`${WI_PRIMARY_BTN} mt-6`}
                       >

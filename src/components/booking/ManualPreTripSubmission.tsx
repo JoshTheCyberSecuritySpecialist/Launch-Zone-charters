@@ -544,6 +544,7 @@ export default function ManualPreTripSubmission({
               setCapacityPayload(payload);
               const out = await submitPublicCapacityCheck({
                 tripType: tripType as ApiTripType,
+                captainLed: tripType === 'captain_charter',
                 email: email.trim().toLowerCase(),
                 phone: phone.trim(),
                 ...payload,

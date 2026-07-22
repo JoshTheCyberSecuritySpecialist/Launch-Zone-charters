@@ -92,9 +92,8 @@ function capacityResultFromBooking(booking: PublicBookingMatch): PublicCapacityC
         : status === 'captain_review_required'
           ? 'Passenger information saved. The captain must review this group before departure.'
           : 'Please contact Launch Zone Charters for assistance with passenger planning.',
-    canProceed: status !== 'capacity_exceeded' && status !== 'capacity_unverified',
-    requiresStaffReview:
-      status === 'captain_review_required' || status === 'capacity_unverified',
+    canProceed: status !== 'capacity_exceeded',
+    requiresStaffReview: status === 'captain_review_required',
     passenger_count: booking.guest_count ?? 0,
     total_persons_aboard: 0,
     capacity_verified: booking.boat_capacity_verified ?? false,
@@ -901,16 +900,10 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
                     </div>
                     <DocStatusBadge status={capacityDocStatus} />
                   </div>
-                  {!booking.boat_id ? (
-                    <p className={`${WI_BODY} mt-4`} role="status">
-                      Boat assignment pending. Please contact Launch Zone Charters at 803-542-1761 so
-                      we can confirm your vessel before you enter passenger information.
-                    </p>
-                  ) : (
-                    <div className="mt-5">
+                  <div className="mt-5">
                       <BoatSafetyPassengerForm
-                        boatLabel={booking.boat_name || 'Assigned boat'}
-                        captainIncluded={!isRental || booking.captain_included}
+                        boatLabel={booking.boat_name || undefined}
+                        captainIncluded={!isRental || Boolean(booking.captain_included)}
                         suggestedPassengerCount={booking.guest_count}
                         disabled={actionsBlocked}
                         completedResult={capacityResult}
@@ -920,6 +913,7 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
                             bookingId: booking.id,
                             email: contactEmail,
                             phone: contactPhone,
+                            captainLed: !isRental || Boolean(booking.captain_included),
                             ...payload,
                           });
                           if (!out.ok) {
@@ -931,7 +925,6 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
                         }}
                       />
                     </div>
-                  )}
                 </section>
 
                 <section className={WI_SECTION}>

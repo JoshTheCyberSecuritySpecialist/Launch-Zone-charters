@@ -14,7 +14,7 @@
     "test:booking-datetime-range": "node tests/bookingDateTimeRange.test.js",
     "test:staff-booking-duration": "node tests/staffBookingDuration.test.js",
     "test:admin-login-redirect": "node tests/adminLoginRedirect.test.js",
-    "test:pre-trip": "node tests/preTripSubmissionGuard.test.js && node --test tests/preTripMatchSuggestions.test.js",
+    "test:pre-trip": "node tests/preTripSubmissionGuard.test.js && node --test tests/preTripMatchSuggestions.test.js tests/waiverPassengerLimits.test.js",
     "test:boat-capacity": "node tests/boatSafetyCapacity.test.js && node --test tests/boatCapacityService.test.js",
     "test:admin-smoke": "node ../scripts/adminSmokeTest.mjs",
     "test:ollama": "node --test tests/ollamaClient.test.js"

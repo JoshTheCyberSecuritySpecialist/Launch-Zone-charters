@@ -23,6 +23,7 @@ const preTripSubmissionGuard = require('./services/preTripSubmissionGuard');
 const preTripAdminActions = require('./services/preTripAdminActions');
 const preTripApprovalService = require('./services/preTripApprovalService');
 const boatCapacityService = require('./services/boatCapacityService');
+const waiverPassengerService = require('./services/waiverPassengerService');
 const boatSafetyCapacity = require('./lib/boatSafetyCapacity');
 const waiverContent = require('./content/waiverContent');
 const bookingReliability = require('./services/bookingReliability');
@@ -379,6 +380,93 @@ async function verifyAdminRequest(req, res) {
   }
   res.status(403).json({ error: 'Forbidden' });
   return null;
+}
+
+const CAPTAIN_PROFILE_COLUMNS =
+  'id, auth_user_id, full_name, phone, email, photo_url, active, default_boat_id';
+
+/**
+ * Resolve active captain row for authenticated Supabase user (service role lookup).
+ */
+async function lookupActiveCaptainForUser(user) {
+  if (!user?.id) return null;
+
+  const { data: byAuth, error: errAuth } = await supabase
+    .from('captains')
+    .select(CAPTAIN_PROFILE_COLUMNS)
+    .eq('auth_user_id', user.id)
+    .eq('active', true)
+    .maybeSingle();
+  if (!errAuth && byAuth?.id) {
+    return byAuth;
+  }
+
+  const email = (user.email || '').trim();
+  if (email) {
+    const { data: byEmail, error: errEmail } = await supabase
+      .from('captains')
+      .select(CAPTAIN_PROFILE_COLUMNS)
+      .ilike('email', email)
+      .eq('active', true)
+      .maybeSingle();
+    if (!errEmail && byEmail?.id) {
+      return byEmail;
+    }
+  }
+
+  if (errAuth) {
+    console.warn('[captain-auth] captains auth_user_id lookup:', errAuth.message);
+  }
+  return null;
+}
+
+function sanitizeCaptainProfile(row) {
+  if (!row?.id) return null;
+  return {
+    id: row.id,
+    full_name: row.full_name,
+    phone: row.phone ?? null,
+    email: row.email ?? null,
+    photo_url: row.photo_url ?? null,
+    default_boat_id: row.default_boat_id ?? null,
+  };
+}
+
+/**
+ * Validate Supabase JWT and active captains row. Sends response on failure; returns { user, captain } or null.
+ */
+async function verifyCaptainRequest(req, res) {
+  if (!supabaseConfigured) {
+    res.status(503).json({ error: 'Server not configured' });
+    return null;
+  }
+  const auth = req.headers.authorization || '';
+  const m = auth.match(/^Bearer\s+(.+)$/i);
+  if (!m) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return null;
+  }
+  const jwt = m[1].trim();
+  const { data: udat, error: authErr } = await authGetUserWithRetry(jwt);
+  if (authErr || !udat?.user) {
+    if (isSupabaseNetworkError(authErr)) {
+      console.error('[captain-auth] Supabase unreachable:', authErr?.cause?.message || authErr?.message);
+      res.status(503).json({
+        error:
+          'Cannot reach Supabase (network timeout). Check internet, firewall, VPN, or try again. Optional: set SUPABASE_CONNECT_TIMEOUT_MS in server/.env',
+      });
+      return null;
+    }
+    console.warn('[captain-auth] getUser failed:', authErr?.message || 'no user');
+    res.status(401).json({ error: 'Unauthorized' });
+    return null;
+  }
+  const captain = await lookupActiveCaptainForUser(udat.user);
+  if (!captain) {
+    res.status(403).json({ error: 'Forbidden' });
+    return null;
+  }
+  return { user: udat.user, captain };
 }
 
 /**
@@ -4469,6 +4557,54 @@ app.get('/api/admin/verify', async (req, res) => {
 });
 
 /**
+ * Browser captain check fallback — uses service role + JWT.
+ * GET /api/captain/verify — Authorization: Bearer &lt;access_token&gt;
+ * Response: { isCaptain: boolean, captain?: object | null }
+ */
+app.get('/api/captain/verify', async (req, res) => {
+  try {
+    if (!supabaseConfigured) {
+      return res.status(503).json({ error: 'Server not configured' });
+    }
+    const authHeader = req.headers.authorization || '';
+    const m = authHeader.match(/^Bearer\s+(.+)$/i);
+    if (!m) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    const jwt = m[1].trim();
+    const { data: udat, error: authErr } = await authGetUserWithRetry(jwt);
+    if (authErr || !udat?.user) {
+      if (isSupabaseNetworkError(authErr)) {
+        return res.status(503).json({
+          error:
+            authErr?.message ||
+            'Cannot reach Supabase Auth. Check server connectivity and SUPABASE_* env on the API host.',
+        });
+      }
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    const captain = await lookupActiveCaptainForUser(udat.user);
+    if (!captain) {
+      return res.json({ isCaptain: false, captain: null });
+    }
+    return res.json({ isCaptain: true, captain: sanitizeCaptainProfile(captain) });
+  } catch (err) {
+    console.error('[api/captain/verify]', err?.stack || err);
+    return res.status(500).json({ error: err?.message || 'Verification failed' });
+  }
+});
+
+/**
+ * GET /api/captain/me — Authorization: Bearer &lt;access_token&gt;
+ * Response: { captain: { id, full_name, phone, email, photo_url, default_boat_id } }
+ */
+app.get('/api/captain/me', async (req, res) => {
+  const verified = await verifyCaptainRequest(req, res);
+  if (!verified) return;
+  return res.json({ captain: sanitizeCaptainProfile(verified.captain) });
+});
+
+/**
  * Calendar-style availability across the active fleet (blocking bookings + blocked_dates per boat).
  * GET /api/availability?from=&to=&durationHours=
  * boatId is optional (legacy clients); ignored for calendar day availability.
@@ -6099,7 +6235,7 @@ function toPublicBookingRow(booking, customer, boat) {
 
 async function toPublicBookingRowWithCapacity(booking, customer, boat) {
   const row = toPublicBookingRow(booking, customer, boat);
-  return boatCapacityService.attachCapacityFieldsToPublicBooking(supabase, row, booking.id);
+  return waiverPassengerService.attachWaiverPassengerFieldsToPublicBooking(supabase, row, booking.id);
 }
 
 function pickBestBookingRow(rows) {
@@ -6539,9 +6675,16 @@ app.post('/api/public/find-booking', async (req, res) => {
   }
 });
 
+const PRE_TRIP_TYPES = new Set(['pontoon_rental', 'center_console_rental', 'captain_charter']);
+const PRE_TRIP_REG_BY_TYPE = {
+  pontoon_rental: 'FL0278PU',
+  center_console_rental: 'FL3827TT',
+  captain_charter: 'FL3827TT',
+};
+
 /**
  * POST /api/public/capacity-check
- * Server-side boat safety capacity check for matched bookings or trip-type previews.
+ * Waiver passenger information — fixed 745 lb combined guest-weight limit (no boat assignment required).
  */
 app.post('/api/public/capacity-check', async (req, res) => {
   try {
@@ -6549,6 +6692,7 @@ app.post('/api/public/capacity-check', async (req, res) => {
 
     const bookingId = String(req.body?.bookingId || '').trim();
     const tripType = String(req.body?.tripType || req.body?.trip_type || '').trim();
+    const captainLedInput = req.body?.captainLed ?? req.body?.captain_led ?? req.body?.captainIncluded;
     const email = normalizeEmailParam(req.body?.email);
     const phone = String(req.body?.phone || '').trim();
     const passengers = req.body?.passengers;
@@ -6581,26 +6725,40 @@ app.post('/api/public/capacity-check', async (req, res) => {
         return res.status(404).json({ error: 'Booking not found or no longer active.' });
       }
 
-      run = await boatCapacityService.runCapacityCheckForBooking(supabase, {
+      const booking = verified.booking;
+      run = await waiverPassengerService.runWaiverPassengerCheck(supabase, {
         bookingId,
         preTripSubmissionId: isBookingUuidParam(preTripSubmissionId) ? preTripSubmissionId : null,
+        boatId: booking.boat_id || null,
         passengers,
         expectedPassengerCount,
         load,
+        tripContext: {
+          captainLed:
+            captainLedInput === true ||
+            Boolean(booking.captain_included) ||
+            String(booking.booking_type || '') === 'charter',
+          captainIncluded: Boolean(booking.captain_included),
+          bookingType: booking.booking_type,
+          tripType,
+        },
         customerConfirmed,
         persist: shouldPersist,
       });
     } else if (['pontoon_rental', 'center_console_rental', 'captain_charter'].includes(tripType)) {
       if (!email || !phone) {
-        return res.status(400).json({ error: 'Email and phone are required for manual trip capacity checks.' });
+        return res.status(400).json({ error: 'Email and phone are required for passenger information.' });
       }
 
-      run = await boatCapacityService.runCapacityCheckForTripType(supabase, {
-        tripType,
+      run = await waiverPassengerService.runWaiverPassengerCheck(supabase, {
         preTripSubmissionId: isBookingUuidParam(preTripSubmissionId) ? preTripSubmissionId : null,
         passengers,
         expectedPassengerCount,
         load,
+        tripContext: {
+          tripType,
+          captainLed: captainLedInput === true || tripType === 'captain_charter',
+        },
         customerConfirmed,
         persist: shouldPersist,
       });
@@ -6609,24 +6767,32 @@ app.post('/api/public/capacity-check', async (req, res) => {
     }
 
     return res.json({
-      ...boatSafetyCapacity.toPublicCapacityResult(run.result),
+      ...run.result,
       calculation_id: run.calculationId,
     });
   } catch (err) {
-    if (err.code === 'invalid_passengers') {
-      return res.status(400).json({ error: err.message, details: err.details || [] });
+    if (err.details && err.code) {
+      return res.status(err.statusCode || 400).json({
+        success: false,
+        code: err.code,
+        message: err.message,
+        totalGuestWeight: err.details.totalGuestWeight,
+        maximumGuestWeight: err.details.maximumGuestWeight,
+        guestCount: err.details.guestCount,
+        maximumGuests: err.details.maximumGuests,
+        errors: err.details.errors,
+      });
     }
-    if (err.code === 'confirmation_required') {
-      return res.status(400).json({ error: err.message });
-    }
-    if (err.code === 'capacity_exceeded') {
-      return res.status(400).json({ error: err.message, status: boatSafetyCapacity.CAPACITY_STATUS.EXCEEDED });
-    }
-    if (err.code === 'boat_assignment_pending') {
-      return res.status(400).json({ error: err.message, boat_assignment_pending: true });
+    if (err.code === 'INVALID_PASSENGER_DATA') {
+      return res.status(400).json({
+        success: false,
+        code: err.code,
+        message: err.message,
+        errors: err.details?.errors || [],
+      });
     }
     console.error('[capacity-check]', err.message || err);
-    return res.status(err.statusCode || 500).json({ error: err.message || 'Capacity check failed.' });
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not save passenger information.' });
   }
 });
 
@@ -6730,13 +6896,6 @@ app.post('/api/booking-sign-waiver', async (req, res) => {
 const PRE_TRIP_SUBMIT_RATE_WINDOW_MS = 60 * 1000;
 const PRE_TRIP_SUBMIT_RATE_MAX = 15;
 const preTripSubmitRateByIp = new Map();
-
-const PRE_TRIP_TYPES = new Set(['pontoon_rental', 'center_console_rental', 'captain_charter']);
-const PRE_TRIP_REG_BY_TYPE = {
-  pontoon_rental: 'FL0278PU',
-  center_console_rental: 'FL3827TT',
-  captain_charter: null,
-};
 
 function checkPreTripSubmitRate(ip) {
   const key = String(ip || 'unknown').trim() || 'unknown';
@@ -6973,18 +7132,21 @@ app.post('/api/public/pre-trip-submission', async (req, res) => {
     const capacityPassengers = body.passengers;
     if (capacityConfirmed && Array.isArray(capacityPassengers) && capacityPassengers.length > 0) {
       try {
-        await boatCapacityService.runCapacityCheckForTripType(supabase, {
-          tripType,
+        await waiverPassengerService.runWaiverPassengerCheck(supabase, {
           preTripSubmissionId: inserted.id,
           passengers: capacityPassengers,
           expectedPassengerCount:
             body.expectedPassengerCount ?? body.passengerCount ?? body.guest_count ?? capacityPassengers.length,
           load: body.load || {},
+          tripContext: {
+            tripType,
+            captainLed: tripType === 'captain_charter',
+          },
           customerConfirmed: true,
           persist: true,
         });
       } catch (capErr) {
-        console.warn('[pre-trip-submission] capacity save:', capErr.message || capErr);
+        console.warn('[pre-trip-submission] passenger save:', capErr.message || capErr);
       }
     }
 

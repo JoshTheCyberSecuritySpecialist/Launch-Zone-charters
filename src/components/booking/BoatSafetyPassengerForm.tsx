@@ -2,6 +2,17 @@ import { useEffect, useMemo, useState } from 'react';
 import { Loader2, Plus, Trash2 } from 'lucide-react';
 import { LIFE_JACKET_SIZES, type PassengerType } from '../../lib/boatCapacityTypes';
 import type { PublicCapacityCheckResult } from '../../lib/publicBooking';
+import {
+  COUNT_LIMIT_MESSAGE,
+  MAX_CAPTAIN_LED_GUESTS,
+  MAX_GUEST_WEIGHT_LBS,
+  MAX_SINGLE_PASSENGER_WEIGHT_LBS,
+  WEIGHT_LIMIT_MESSAGE,
+  guestCountLimitExceeded,
+  guestWeightLimitExceeded,
+  remainingGuestWeightLbs,
+  totalGuestWeightFromRows,
+} from '../../lib/waiverPassengerLimits';
 import { WI_BODY, WI_FIELD, WI_HINT, WI_LABEL, WI_PRIMARY_BTN } from '../../lib/waiversSeniorUi';
 
 export type PassengerFormRow = {
@@ -40,7 +51,7 @@ export type CapacityFormPayload = {
 };
 
 type BoatSafetyPassengerFormProps = {
-  boatLabel: string;
+  boatLabel?: string;
   captainIncluded: boolean;
   suggestedPassengerCount?: number | null;
   disabled?: boolean;
@@ -109,6 +120,33 @@ export default function BoatSafetyPassengerForm({
     const n = parseInt(passengerCount, 10);
     return Number.isFinite(n) && n > 0 ? n : 0;
   }, [passengerCount]);
+
+  const totalGuestWeight = useMemo(() => totalGuestWeightFromRows(passengers), [passengers]);
+  const remainingWeight = useMemo(() => remainingGuestWeightLbs(totalGuestWeight), [totalGuestWeight]);
+  const maxGuests = captainIncluded ? MAX_CAPTAIN_LED_GUESTS : 12;
+  const countOverLimit = guestCountLimitExceeded(captainIncluded, countNum);
+  const weightOverLimit = guestWeightLimitExceeded(totalGuestWeight);
+
+  const clientValidationError = useMemo(() => {
+    if (countNum < 1) return 'Enter how many passengers are in your group.';
+    if (countOverLimit) return COUNT_LIMIT_MESSAGE;
+    if (weightOverLimit) return WEIGHT_LIMIT_MESSAGE;
+    for (let i = 0; i < passengers.length; i += 1) {
+      const row = passengers[i];
+      if (!row.passenger_name.trim()) return `Enter a name for passenger ${i + 1}.`;
+      const weight = parseFloat(row.weight_lbs);
+      if (!Number.isFinite(weight) || weight <= 0) {
+        return `Enter a valid weight in pounds for passenger ${i + 1}.`;
+      }
+      if (weight > MAX_SINGLE_PASSENGER_WEIGHT_LBS) {
+        return `Passenger ${i + 1} weight exceeds the allowed entry range.`;
+      }
+    }
+    return null;
+  }, [countNum, countOverLimit, passengers, weightOverLimit]);
+
+  const saveDisabled =
+    disabled || busy || !accuracyConfirmed || Boolean(clientValidationError) || passengers.length !== countNum;
 
   useEffect(() => {
     if (countNum <= 0) return;
@@ -201,23 +239,25 @@ export default function BoatSafetyPassengerForm({
 
   const showForm =
     !result ||
-    (!result.canProceed &&
-      result.status !== 'capacity_exceeded' &&
-      result.status !== 'capacity_unverified');
+    (!result.canProceed && result.status === 'capacity_exceeded');
 
   return (
     <div className="space-y-6">
       <div>
         <h3 className="text-xl font-bold text-white">Boat Safety and Passenger Information</h3>
         <p className={`${WI_BODY} mt-2`}>
-          To help us safely assign your boat and required safety equipment, please provide accurate
-          information for every passenger. This information is used for vessel capacity and safety
-          planning only.
+          Please provide accurate information for every guest in your group. We use this for vessel
+          safety and life-jacket preparation. The captain is not included in your guest count or
+          combined guest weight.
         </p>
-        <p className={`${WI_HINT} mt-2`}>
-          Assigned boat: <span className="font-semibold text-white">{boatLabel}</span>
-          {captainIncluded ? ' · Captain included (+1 aboard)' : ''}
-        </p>
+        {boatLabel ? (
+          <p className={`${WI_HINT} mt-2`}>
+            Trip: <span className="font-semibold text-white">{boatLabel}</span>
+            {captainIncluded ? ' · Captain-led (max 5 guests)' : ''}
+          </p>
+        ) : captainIncluded ? (
+          <p className={`${WI_HINT} mt-2`}>Captain-led trip · maximum 5 guests</p>
+        ) : null}
       </div>
 
       {result ? (
@@ -241,6 +281,7 @@ export default function BoatSafetyPassengerForm({
               id={`${idPrefix}count`}
               type="number"
               min={1}
+              max={maxGuests}
               inputMode="numeric"
               className={WI_FIELD}
               value={passengerCount}
@@ -249,6 +290,28 @@ export default function BoatSafetyPassengerForm({
             {suggestedPassengerCount != null ? (
               <p className={WI_HINT}>Your booking lists {suggestedPassengerCount} guest(s).</p>
             ) : null}
+            {captainIncluded ? (
+              <p className={WI_HINT}>Captain-led trips are limited to {MAX_CAPTAIN_LED_GUESTS} guests.</p>
+            ) : null}
+          </div>
+
+          <div
+            className={`rounded-xl border px-4 py-3 ${
+              weightOverLimit || countOverLimit
+                ? 'border-red-400/40 bg-red-950/30 text-red-50'
+                : 'border-cyan-400/30 bg-cyan-950/20 text-cyan-50'
+            }`}
+            aria-live="polite"
+          >
+            <p className="text-lg font-semibold">
+              Combined guest weight: {totalGuestWeight.toLocaleString()} lbs
+            </p>
+            <p className="mt-1 text-base">
+              Remaining available weight: {remainingWeight.toLocaleString()} lbs
+            </p>
+            <p className="mt-1 text-sm opacity-90">Maximum: {MAX_GUEST_WEIGHT_LBS.toLocaleString()} lbs</p>
+            {countOverLimit ? <p className="mt-2 text-base font-semibold">{COUNT_LIMIT_MESSAGE}</p> : null}
+            {weightOverLimit ? <p className="mt-2 text-base font-semibold">{WEIGHT_LIMIT_MESSAGE}</p> : null}
           </div>
 
           <div className="space-y-5">
@@ -364,11 +427,12 @@ export default function BoatSafetyPassengerForm({
             ))}
           </div>
 
-          {passengers.length < 12 ? (
+          {passengers.length < maxGuests ? (
             <button
               type="button"
               className="inline-flex min-h-12 items-center gap-2 rounded-xl border border-white/20 px-4 text-lg font-semibold text-cyan-100"
               onClick={() => {
+                if (passengers.length >= maxGuests) return;
                 setPassengers((prev) => [...prev, emptyPassenger()]);
                 setPassengerCount(String(passengers.length + 1));
               }}
@@ -454,13 +518,19 @@ export default function BoatSafetyPassengerForm({
 
           <button
             type="button"
-            disabled={busy}
+            disabled={saveDisabled}
             onClick={() => void handleSubmit()}
             className={WI_PRIMARY_BTN}
           >
             {busy ? <Loader2 className="h-5 w-5 animate-spin" aria-hidden /> : null}
             Save Passenger Information
           </button>
+
+          {clientValidationError && !busy ? (
+            <p className="text-lg text-amber-100" role="alert">
+              {clientValidationError}
+            </p>
+          ) : null}
 
           {error ? (
             <p className="text-lg text-amber-100" role="alert">
@@ -481,7 +551,7 @@ export default function BoatSafetyPassengerForm({
 
 export function capacityBlocksDocuments(result: PublicCapacityCheckResult | null | undefined): boolean {
   if (!result) return true;
-  if (result.status === 'capacity_exceeded' || result.status === 'capacity_unverified') return true;
+  if (result.status === 'capacity_exceeded') return true;
   return !result.canProceed;
 }
 

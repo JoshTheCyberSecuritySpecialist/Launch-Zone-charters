@@ -44,10 +44,14 @@ export type PublicCapacityCheckResult = {
   requiresStaffReview: boolean;
   passenger_count: number;
   total_persons_aboard: number;
+  total_guest_weight_lbs?: number;
+  remaining_guest_weight_lbs?: number;
+  maximum_guest_weight_lbs?: number;
   capacity_verified: boolean;
   has_mobility_concerns: boolean;
   has_life_jacket_concerns: boolean;
   calculation_id?: string | null;
+  code?: string | null;
 };
 
 export type FindBookingResult =
@@ -373,6 +377,7 @@ export async function signBookingWaiver(input: {
 export async function submitPublicCapacityCheck(input: {
   bookingId?: string;
   tripType?: PreTripTripType;
+  captainLed?: boolean;
   email: string;
   phone: string;
   expectedPassengerCount: number;
@@ -403,6 +408,7 @@ export async function submitPublicCapacityCheck(input: {
     body: JSON.stringify({
       bookingId: input.bookingId,
       tripType: input.tripType,
+      captainLed: input.captainLed,
       email: input.email.trim().toLowerCase(),
       phone: input.phone.trim(),
       expectedPassengerCount: input.expectedPassengerCount,
@@ -417,13 +423,20 @@ export async function submitPublicCapacityCheck(input: {
   const payload = (await res.json().catch(() => ({}))) as PublicCapacityCheckResult & {
     error?: string;
     message?: string;
+    success?: boolean;
+    code?: string;
   };
 
   if (!res.ok) {
-    return {
-      ok: false,
-      error: payload.error || payload.message || 'Could not save passenger information.',
-    };
+    const message =
+      payload.message ||
+      payload.error ||
+      (payload.code === 'PASSENGER_WEIGHT_LIMIT_EXCEEDED'
+        ? 'The combined passenger weight is above the 745 lb safety limit. Please contact Launch Zone Charters so we can safely review your trip.'
+        : payload.code === 'PASSENGER_COUNT_LIMIT_EXCEEDED'
+          ? 'Captain-led trips are limited to 5 guests because the vessel carries 6 people total, including the captain.'
+          : 'Could not save passenger information.');
+    return { ok: false, error: message };
   }
 
   return { ok: true, result: payload };

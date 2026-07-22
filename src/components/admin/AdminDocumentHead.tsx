@@ -1,5 +1,5 @@
 import { Helmet } from 'react-helmet-async';
-import { SITE_FAVICON_PATH } from '../../constants/branding';
+import { SITE_APPLE_TOUCH_ICON_PATH, SITE_FAVICON_PATH } from '../../constants/branding';
 
 /** Admin-area document title and mobile home-screen hints (does not replace public SEO). */
 export default function AdminDocumentHead() {
@@ -11,8 +11,8 @@ export default function AdminDocumentHead() {
       <meta name="apple-mobile-web-app-capable" content="yes" />
       <meta name="mobile-web-app-capable" content="yes" />
       <meta name="theme-color" content="#0f172a" />
-      <link rel="icon" type="image/png" href={SITE_FAVICON_PATH} />
-      <link rel="apple-touch-icon" href={SITE_FAVICON_PATH} />
+      <link rel="icon" type="image/png" sizes="32x32" href={SITE_FAVICON_PATH} />
+      <link rel="apple-touch-icon" sizes="180x180" href={SITE_APPLE_TOUCH_ICON_PATH} />
     </Helmet>
   );
 }

@@ -5,7 +5,6 @@ const PDFDocument = require('pdfkit');
 const LOGO_CANDIDATES = [
   'rocket-launch-boat-rentals-titusville-florida-launch-zone-charters-logo-indian-river-lagoon.png',
   'launchzone-new-logo-boat-rentals-boat-tours.png',
-  'favicon_launch_Zone_Charters.png',
 ];
 
 const DEFAULT_WAIVER_CONTENT =

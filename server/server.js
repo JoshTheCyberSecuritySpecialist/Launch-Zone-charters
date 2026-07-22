@@ -22,6 +22,8 @@ const documentUrlValidation = require('./services/documentUrlValidation');
 const preTripSubmissionGuard = require('./services/preTripSubmissionGuard');
 const preTripAdminActions = require('./services/preTripAdminActions');
 const preTripApprovalService = require('./services/preTripApprovalService');
+const boatCapacityService = require('./services/boatCapacityService');
+const boatSafetyCapacity = require('./lib/boatSafetyCapacity');
 const waiverContent = require('./content/waiverContent');
 const bookingReliability = require('./services/bookingReliability');
 const bookingCommunications = require('./services/bookingCommunications');
@@ -2754,6 +2756,89 @@ app.get('/api/admin/bookings/:id', async (req, res) => {
   } catch (err) {
     console.error('[admin-booking-detail:get]', err);
     return res.status(500).json({ error: err.message || 'Could not load booking.' });
+  }
+});
+
+/**
+ * GET /api/admin/bookings/:id/capacity — latest saved capacity calculation + passenger manifest.
+ */
+app.get('/api/admin/bookings/:id/capacity', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const id = cleanText(req.params.id, 80);
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid booking id.' });
+
+    const [calculation, passengersResult, profileResult] = await Promise.all([
+      boatCapacityService.getLatestCapacityCalculation(supabase, { bookingId: id }),
+      supabase
+        .from('booking_passengers')
+        .select(
+          'id, passenger_number, passenger_name, passenger_type, weight_lbs, life_jacket_size, mobility_assistance_required, mobility_notes, created_at'
+        )
+        .eq('booking_id', id)
+        .order('passenger_number', { ascending: true }),
+      supabase.from('bookings').select('boat_id').eq('id', id).maybeSingle(),
+    ]);
+
+    if (passengersResult.error) throw passengersResult.error;
+
+    let profile = null;
+    if (profileResult.data?.boat_id) {
+      profile = await boatCapacityService.loadCapacityProfile(supabase, profileResult.data.boat_id);
+    }
+
+    return res.json({
+      calculation,
+      passengers: passengersResult.data || [],
+      boat_capacity_profile: profile,
+    });
+  } catch (err) {
+    console.error('[admin-booking-capacity:get]', err);
+    return res.status(500).json({ error: err.message || 'Could not load capacity data.' });
+  }
+});
+
+/**
+ * POST /api/admin/bookings/:id/capacity-check — admin recalculate and optionally persist.
+ */
+app.post('/api/admin/bookings/:id/capacity-check', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const id = cleanText(req.params.id, 80);
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid booking id.' });
+
+    const passengers = req.body?.passengers;
+    const expectedPassengerCount =
+      req.body?.expectedPassengerCount ?? req.body?.passengerCount ?? req.body?.guest_count;
+    const load = req.body?.load || {};
+    const persist = req.body?.persist !== false;
+
+    const run = await boatCapacityService.runCapacityCheckForBooking(supabase, {
+      bookingId: id,
+      passengers,
+      expectedPassengerCount,
+      load,
+      customerConfirmed: persist,
+      persist,
+    });
+
+    return res.json({
+      calculation_id: run.calculationId,
+      status: run.result.status,
+      threshold_band: run.result.threshold_band,
+      message: run.result.message,
+      totals: run.result.totals,
+      review_flags: run.result.review_flags,
+      config_version: run.result.config_version,
+    });
+  } catch (err) {
+    if (err.code === 'invalid_passengers') {
+      return res.status(400).json({ error: err.message, details: err.details || [] });
+    }
+    console.error('[admin-booking-capacity:check]', err.message || err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Capacity check failed.' });
   }
 });
 
@@ -6341,6 +6426,78 @@ app.post('/api/public/find-booking', async (req, res) => {
 });
 
 /**
+ * POST /api/public/capacity-check
+ * Server-side boat safety capacity check (Phase 2 — no public UI yet).
+ * Requires booking contact verification. Persists when customerConfirmed is true.
+ */
+app.post('/api/public/capacity-check', async (req, res) => {
+  try {
+    if (!supabaseConfigured) return res.status(503).json({ error: 'Server not configured' });
+
+    const bookingId = String(req.body?.bookingId || '').trim();
+    const email = normalizeEmailParam(req.body?.email);
+    const phone = String(req.body?.phone || '').trim();
+    const passengers = req.body?.passengers;
+    const expectedPassengerCount =
+      req.body?.expectedPassengerCount ?? req.body?.passengerCount ?? req.body?.guest_count;
+    const load = req.body?.load || {};
+    const customerConfirmed = Boolean(req.body?.customerConfirmed);
+    const shouldPersist = customerConfirmed && req.body?.persist !== false;
+    const preTripSubmissionId = String(req.body?.preTripSubmissionId || req.body?.pre_trip_submission_id || '').trim();
+
+    if (!isBookingUuidParam(bookingId)) {
+      return res.status(400).json({ error: 'Invalid booking id.' });
+    }
+    if (!email && !phone) {
+      return res.status(400).json({ error: 'Email or phone is required to verify this booking.' });
+    }
+
+    const ip = requestIpBestEffort(req);
+    if (!checkFindBookingRate(ip)) {
+      return res.status(429).json({ error: 'Too many attempts. Please wait a minute.' });
+    }
+
+    const verified = await bookingAccess.verifyBookingContact(supabase, bookingId, email, phone, {
+      requirePhone: !email,
+    });
+    if (!verified.ok) {
+      return res.status(verified.statusCode || 403).json({ error: verified.message || 'Could not verify booking' });
+    }
+
+    if (['cancelled', 'completed'].includes(String(verified.booking.status || ''))) {
+      return res.status(404).json({ error: 'Booking not found or no longer active.' });
+    }
+
+    const run = await boatCapacityService.runCapacityCheckForBooking(supabase, {
+      bookingId,
+      preTripSubmissionId: isBookingUuidParam(preTripSubmissionId) ? preTripSubmissionId : null,
+      passengers,
+      expectedPassengerCount,
+      load,
+      customerConfirmed,
+      persist: shouldPersist,
+    });
+
+    return res.json({
+      ...boatSafetyCapacity.toPublicCapacityResult(run.result),
+      calculation_id: run.calculationId,
+    });
+  } catch (err) {
+    if (err.code === 'invalid_passengers') {
+      return res.status(400).json({ error: err.message, details: err.details || [] });
+    }
+    if (err.code === 'confirmation_required') {
+      return res.status(400).json({ error: err.message });
+    }
+    if (err.code === 'boat_assignment_pending') {
+      return res.status(400).json({ error: err.message, boat_assignment_pending: true });
+    }
+    console.error('[capacity-check]', err.message || err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Capacity check failed.' });
+  }
+});
+
+/**
  * Post-booking waiver signing for /waivers-insurance (email + phone must match customer).
  */
 app.post('/api/booking-sign-waiver', async (req, res) => {
@@ -6783,6 +6940,17 @@ app.patch('/api/admin/pre-trip-submissions/:id', async (req, res) => {
       return res.status(400).json({ error: 'matched_booking_id is required to match or approve' });
     }
 
+    let capacityGate = null;
+    if (action === 'approve') {
+      capacityGate = await boatCapacityService.evaluateCapacityApprovalGate(supabase, bookingIdToMatch);
+      if (!capacityGate.allowApprove) {
+        return res.status(409).json({
+          error: capacityGate.warning || 'Capacity limit exceeded for assigned boat.',
+          capacity_status: capacityGate.calculation?.status || null,
+        });
+      }
+    }
+
     const result = await preTripApprovalService.approveOrMatchPreTripSubmission(supabase, {
       submissionId,
       submission,
@@ -6806,7 +6974,25 @@ app.patch('/api/admin/pre-trip-submissions/:id', async (req, res) => {
       payload: { pre_trip_submission_id: submissionId },
     });
 
-    return res.json(result);
+    if (action === 'approve' && capacityGate?.warning) {
+      await bookingReliability.insertActivity(supabase, {
+        booking_id: bookingIdToMatch,
+        event_type: 'capacity_review_required',
+        actor_type: 'system',
+        actor_id: null,
+        message: capacityGate.warning,
+        payload: {
+          capacity_status: capacityGate.calculation?.status || null,
+          capacity_calculation_id: capacityGate.calculation?.id || null,
+        },
+      });
+    }
+
+    return res.json({
+      ...result,
+      capacity_warning: capacityGate?.warning || null,
+      capacity_status: capacityGate?.calculation?.status || null,
+    });
   } catch (err) {
     console.error('[admin/pre-trip-submissions]', err.message || err);
     return res.status(err.statusCode || 500).json({ error: err.message || 'Failed' });

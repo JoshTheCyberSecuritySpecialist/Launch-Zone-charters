@@ -15,6 +15,7 @@
     "test:staff-booking-duration": "node tests/staffBookingDuration.test.js",
     "test:admin-login-redirect": "node tests/adminLoginRedirect.test.js",
     "test:pre-trip": "node tests/preTripSubmissionGuard.test.js",
+    "test:boat-capacity": "node tests/boatSafetyCapacity.test.js && node --test tests/boatCapacityService.test.js",
     "test:admin-smoke": "node ../scripts/adminSmokeTest.mjs",
     "test:ollama": "node --test tests/ollamaClient.test.js"
   },

@@ -5,12 +5,18 @@ import { useAuth } from '../contexts/useAuth';
 import FullPageLoader from '../components/FullPageLoader';
 import AdminShell from '../components/admin/AdminShell';
 import AdminAccessDenied from '../components/admin/AdminAccessDenied';
+import AdminBoatCapacityPanel from '../components/admin/AdminBoatCapacityPanel';
+import type { BoatVesselMetadata } from '../lib/boatCapacityTypes';
 
 interface AdminBoatsProps {
   onNavigate: (page: string) => void;
 }
 
 type BoatType = 'standard' | 'premium';
+
+type BoatCapacityProfileSummary = {
+  capacity_verified: boolean;
+};
 
 type BoatRow = {
   id: string;
@@ -23,7 +29,29 @@ type BoatRow = {
   half_day_rate: number;
   full_day_rate: number;
   is_active: boolean;
+  year: number | null;
+  manufacturer: string | null;
+  model: string | null;
+  length_feet: number | null;
+  engine_description: string | null;
+  boat_capacity_profiles?: BoatCapacityProfileSummary | BoatCapacityProfileSummary[] | null;
 };
+
+function capacityVerifiedForBoat(boat: BoatRow): boolean {
+  const profile = boat.boat_capacity_profiles;
+  if (Array.isArray(profile)) return profile[0]?.capacity_verified === true;
+  return profile?.capacity_verified === true;
+}
+
+function vesselMetadataFromBoat(boat: BoatRow): BoatVesselMetadata {
+  return {
+    year: boat.year ?? null,
+    manufacturer: boat.manufacturer ?? null,
+    model: boat.model ?? null,
+    length_feet: boat.length_feet ?? null,
+    engine_description: boat.engine_description ?? null,
+  };
+}
 
 /**
  * Object path within the `boats` storage bucket from a public object URL.
@@ -67,6 +95,13 @@ export default function AdminBoats(_props: AdminBoatsProps) {
   const [saving, setSaving] = useState(false);
   const [deletingBoatId, setDeletingBoatId] = useState<string | null>(null);
   const [message, setMessage] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
+  const [vesselMetadata, setVesselMetadata] = useState<BoatVesselMetadata>({
+    year: null,
+    manufacturer: null,
+    model: null,
+    length_feet: null,
+    engine_description: null,
+  });
 
   const fetchBoats = useCallback(async (opts?: { silent?: boolean }) => {
     if (!isAdmin) return;
@@ -74,7 +109,10 @@ export default function AdminBoats(_props: AdminBoatsProps) {
       setListLoading(true);
     }
     try {
-      const { data, error } = await supabase.from('boats').select('*').order('created_at', { ascending: false });
+      const { data, error } = await supabase
+        .from('boats')
+        .select('*, boat_capacity_profiles ( capacity_verified )')
+        .order('created_at', { ascending: false });
       if (error) {
         logSupabaseError('AdminBoats.fetchBoats', error);
         // Silent refetch must not wipe the list on transient errors (would make a deleted boat "reappear").
@@ -104,6 +142,7 @@ export default function AdminBoats(_props: AdminBoatsProps) {
       setPrice(String(editingBoat.hourly_rate));
       setBoatType(editingBoat.type);
       setFile(null);
+      setVesselMetadata(vesselMetadataFromBoat(editingBoat));
     }
   }, [editingBoat]);
 
@@ -115,6 +154,13 @@ export default function AdminBoats(_props: AdminBoatsProps) {
     setPrice('');
     setBoatType('standard');
     setFile(null);
+    setVesselMetadata({
+      year: null,
+      manufacturer: null,
+      model: null,
+      length_feet: null,
+      engine_description: null,
+    });
   };
 
   const handleDelete = async (id: string) => {
@@ -344,6 +390,11 @@ export default function AdminBoats(_props: AdminBoatsProps) {
         full_day_rate: full,
         image_url: publicUrl,
         is_active: true,
+        year: null,
+        manufacturer: null,
+        model: null,
+        length_feet: null,
+        engine_description: null,
       },
     ]);
 
@@ -388,7 +439,7 @@ export default function AdminBoats(_props: AdminBoatsProps) {
   return (
     <AdminShell
       title="Manage boats"
-      subtitle="Upload images and add vessels to Supabase"
+      subtitle="Fleet listings, photos, and USCG capacity plate settings"
       maxWidth="5xl"
     >
         {message && (
@@ -485,8 +536,20 @@ export default function AdminBoats(_props: AdminBoatsProps) {
             onClick={() => handleSubmit()}
             className="mt-6 rounded-lg bg-amber-600 px-6 py-3 font-bold text-white transition-colors hover:bg-amber-700 disabled:opacity-60"
           >
-            {saving ? 'Saving…' : editingBoat ? 'Update Boat' : 'Add Boat'}
+            {saving ? 'Saving…' : editingBoat ? 'Update Boat listing' : 'Add Boat'}
           </button>
+
+          {editingBoat && (
+            <AdminBoatCapacityPanel
+              boatId={editingBoat.id}
+              boatName={editingBoat.name}
+              vesselMetadata={vesselMetadata}
+              onMetadataChange={(patch) =>
+                setVesselMetadata((prev) => ({ ...prev, ...patch }))
+              }
+              onSaved={() => void fetchBoats({ silent: true })}
+            />
+          )}
         </section>
 
         <section>
@@ -522,6 +585,13 @@ export default function AdminBoats(_props: AdminBoatsProps) {
                     </p>
                     {!boat.is_active && (
                       <p className="mt-1 text-xs font-semibold text-amber-700">Inactive</p>
+                    )}
+                    {capacityVerifiedForBoat(boat) ? (
+                      <p className="mt-1 text-xs font-semibold text-green-800">Capacity verified</p>
+                    ) : (
+                      <p className="mt-1 text-xs font-semibold text-slate-600">
+                        Capacity plate not verified
+                      </p>
                     )}
                     <div className="mt-4 flex flex-wrap gap-2">
                       <button

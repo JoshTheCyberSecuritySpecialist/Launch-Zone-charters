@@ -39,6 +39,8 @@ const REQUIRED_ADMIN_APIS = [
   "app.get('/api/admin/calendar-items'",
   "app.post('/api/admin/staff-bookings'",
   "app.get('/api/admin/bookings/:id'",
+  "app.get('/api/admin/bookings/:id/capacity'",
+  "app.post('/api/admin/bookings/:id/capacity-check'",
   "app.patch('/api/admin/bookings/:id'",
   "app.get('/api/admin/documents/access'",
   "app.get('/api/admin/documents/download'",

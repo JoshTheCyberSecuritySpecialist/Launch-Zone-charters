@@ -48,7 +48,7 @@ import ShopOrderSuccess from './pages/ShopOrderSuccess';
 import AdminShopOrders from './pages/AdminShopOrders';
 import { pageKeyFromPath, pathFromPageKey } from './navigation';
 import ScrollToTop from './components/ScrollToTop';
-import { SITE_FAVICON_PATH } from './constants/branding';
+import { SITE_APPLE_TOUCH_ICON_PATH, SITE_FAVICON_PATH } from './constants/branding';
 import { isAdminAreaPath } from './components/admin/adminNav';
 
 const BioGuidePage = lazy(() => import('./pages/BioGuidePage'));
@@ -71,9 +71,11 @@ function AppLayout() {
   return (
     <div className="min-h-screen flex flex-col">
       <Helmet>
-        <link rel="icon" type="image/png" href={SITE_FAVICON_PATH} />
-        <link rel="apple-touch-icon" href={SITE_FAVICON_PATH} />
-        <link rel="shortcut icon" href={SITE_FAVICON_PATH} />
+        <link rel="icon" href="/favicon.ico" sizes="any" />
+        <link rel="icon" type="image/png" sizes="32x32" href={SITE_FAVICON_PATH} />
+        <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
+        <link rel="apple-touch-icon" sizes="180x180" href={SITE_APPLE_TOUCH_ICON_PATH} />
+        <link rel="shortcut icon" href="/favicon.ico" />
       </Helmet>
       {!showHeaderFooter ? <AdminDocumentHead /> : null}
       <ScrollToTop />

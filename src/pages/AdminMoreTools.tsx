@@ -56,7 +56,7 @@ const TOOLS = [
   {
     to: '/admin/boats',
     title: 'Boats',
-    description: 'Fleet settings.',
+    description: 'Fleet listings and USCG capacity plate settings.',
     icon: <Anchor className="h-6 w-6" />,
   },
   {

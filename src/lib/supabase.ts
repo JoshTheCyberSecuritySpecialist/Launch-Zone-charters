@@ -12,6 +12,32 @@ type BoatsRow = {
   half_day_rate: number;
   full_day_rate: number;
   is_active: boolean;
+  year: number | null;
+  manufacturer: string | null;
+  model: string | null;
+  length_feet: number | null;
+  engine_description: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type BoatCapacityProfilesRow = {
+  boat_id: string;
+  registration_number: string | null;
+  maximum_persons: number | null;
+  maximum_persons_weight_lbs: number | null;
+  maximum_total_load_lbs: number | null;
+  operator_weight_lbs: number | null;
+  standard_equipment_weight_lbs: number;
+  fuel_allowance_weight_lbs: number;
+  safety_buffer_lbs: number;
+  warning_threshold_percent: number;
+  capacity_plate_photo_path: string | null;
+  capacity_source: string | null;
+  capacity_verified: boolean;
+  capacity_verified_at: string | null;
+  capacity_verified_by: string | null;
+  config_version: number;
   created_at: string;
   updated_at: string;
 };
@@ -197,9 +223,30 @@ export type Database = {
     Tables: {
       boats: {
         Row: BoatsRow;
-        Insert: Omit<BoatsRow, 'id' | 'created_at' | 'updated_at'>;
+        Insert: Omit<BoatsRow, 'id' | 'created_at' | 'updated_at'> & {
+          year?: number | null;
+          manufacturer?: string | null;
+          model?: string | null;
+          length_feet?: number | null;
+          engine_description?: string | null;
+        };
         Update: Partial<Omit<BoatsRow, 'id' | 'created_at' | 'updated_at'>>;
         Relationships: [];
+      };
+      boat_capacity_profiles: {
+        Row: BoatCapacityProfilesRow;
+        Insert: Omit<BoatCapacityProfilesRow, 'created_at' | 'updated_at' | 'config_version'> & {
+          config_version?: number;
+        };
+        Update: Partial<Omit<BoatCapacityProfilesRow, 'boat_id' | 'created_at' | 'updated_at'>>;
+        Relationships: [
+          {
+            foreignKeyName: 'boat_capacity_profiles_boat_id_fkey';
+            columns: ['boat_id'];
+            referencedRelation: 'boats';
+            referencedColumns: ['id'];
+          },
+        ];
       };
       customers: {
         Row: CustomersRow;

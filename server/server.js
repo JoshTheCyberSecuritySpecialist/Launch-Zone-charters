@@ -27,6 +27,7 @@ const waiverPassengerService = require('./services/waiverPassengerService');
 const boatSafetyCapacity = require('./lib/boatSafetyCapacity');
 const waiverContent = require('./content/waiverContent');
 const bookingReliability = require('./services/bookingReliability');
+const captainBookingService = require('./services/captainBookingService');
 const bookingCommunications = require('./services/bookingCommunications');
 const adminBookingUpdate = require('./services/adminBookingUpdate');
 const bookingDateTimeRange = require('./lib/bookingDateTimeRange');
@@ -4602,6 +4603,98 @@ app.get('/api/captain/me', async (req, res) => {
   const verified = await verifyCaptainRequest(req, res);
   if (!verified) return;
   return res.json({ captain: sanitizeCaptainProfile(verified.captain) });
+});
+
+/**
+ * GET /api/captain/bookings?from=&to=&view=today|week|month|agenda
+ * Assigned captain_charter bookings only.
+ */
+app.get('/api/captain/bookings', async (req, res) => {
+  const verified = await verifyCaptainRequest(req, res);
+  if (!verified) return;
+  try {
+    const range = captainBookingService.resolveCaptainRange(req.query || {}, cleanText);
+    const bookings = await captainBookingService.listCaptainBookings(
+      supabase,
+      verified.captain.id,
+      range
+    );
+    return res.json({
+      view: range.view,
+      from: range.fromIso,
+      to: range.toIso,
+      bookings,
+    });
+  } catch (err) {
+    console.error('[api/captain/bookings]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not load captain bookings.' });
+  }
+});
+
+/**
+ * GET /api/captain/bookings/:id — redacted booking detail for assigned captain charter trips.
+ */
+app.get('/api/captain/bookings/:id', async (req, res) => {
+  const verified = await verifyCaptainRequest(req, res);
+  if (!verified) return;
+  try {
+    const id = cleanText(req.params.id, 80);
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid booking id.' });
+    const booking = await captainBookingService.loadCaptainBookingDetail(
+      supabase,
+      verified.captain.id,
+      id
+    );
+    if (!booking) return res.status(404).json({ error: 'Booking not found.' });
+    return res.json({ booking });
+  } catch (err) {
+    console.error('[api/captain/bookings/:id]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not load booking.' });
+  }
+});
+
+/**
+ * PATCH /api/captain/bookings/:id/progress — body: { action: arrived|start|complete }
+ * Updates captain_progress only; logs booking_activity_events.
+ */
+app.patch('/api/captain/bookings/:id/progress', async (req, res) => {
+  const verified = await verifyCaptainRequest(req, res);
+  if (!verified) return;
+  try {
+    const id = cleanText(req.params.id, 80);
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid booking id.' });
+    const action = cleanText(req.body?.action, 40);
+    if (!action) return res.status(422).json({ error: 'action is required (arrived, start, or complete).' });
+
+    const result = await captainBookingService.applyCaptainProgressUpdate(supabase, {
+      captainId: verified.captain.id,
+      captainAuthUserId: verified.user.id,
+      bookingId: id,
+      action,
+    });
+
+    await bookingReliability.insertActivity(supabase, {
+      booking_id: id,
+      event_type: `captain_${result.action}`,
+      actor_type: 'captain',
+      actor_id: result.actor_id,
+      message: result.message,
+      payload: {
+        previous_progress: result.previous_progress,
+        captain_progress: result.captain_progress,
+      },
+    });
+
+    return res.json({
+      ok: true,
+      booking_id: result.booking_id,
+      previous_progress: result.previous_progress,
+      captain_progress: result.captain_progress,
+    });
+  } catch (err) {
+    console.error('[api/captain/bookings/:id/progress]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not update trip progress.' });
+  }
 });
 
 /**

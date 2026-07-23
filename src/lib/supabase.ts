@@ -54,6 +54,8 @@ type CustomersRow = {
   updated_at: string;
 };
 
+export type CaptainProgress = 'not_started' | 'arrived' | 'in_progress' | 'completed';
+
 type BookingsRow = {
   id: string;
   customer_id: string;
@@ -75,12 +77,20 @@ type BookingsRow = {
   /** pending → deposit_paid after successful Stripe Checkout webhook */
   payment_status: string;
   status:
+    | 'hold'
     | 'pending'
     | 'pending_verification'
     | 'confirmed'
     | 'ready_for_departure'
     | 'cancelled'
     | 'completed';
+  booking_type: 'rental' | 'charter';
+  charter_type: string | null;
+  guest_count: number;
+  rental_location: string | null;
+  captain_id: string | null;
+  captain_progress: CaptainProgress;
+  emergency_contact_notes: string | null;
   is_night_tour: boolean;
   is_rocket_tour: boolean;
   special_requests: string | null;
@@ -135,6 +145,20 @@ type WaiversRow = {
 
 type AdminsRow = {
   id: string;
+};
+
+export type CaptainsRow = {
+  id: string;
+  auth_user_id: string | null;
+  full_name: string;
+  phone: string | null;
+  email: string | null;
+  photo_url: string | null;
+  active: boolean;
+  default_boat_id: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 type LaunchesRow = {
@@ -278,6 +302,27 @@ export type Database = {
             referencedRelation: 'boats';
             referencedColumns: ['id'];
           },
+          {
+            foreignKeyName: 'bookings_captain_id_fkey';
+            columns: ['captain_id'];
+            referencedRelation: 'captains';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
+      captains: {
+        Row: CaptainsRow;
+        Insert: Omit<CaptainsRow, 'id' | 'created_at' | 'updated_at'> & {
+          active?: boolean;
+        };
+        Update: Partial<Omit<CaptainsRow, 'id' | 'created_at' | 'updated_at'>>;
+        Relationships: [
+          {
+            foreignKeyName: 'captains_default_boat_id_fkey';
+            columns: ['default_boat_id'];
+            referencedRelation: 'boats';
+            referencedColumns: ['id'];
+          },
         ];
       };
       user_verifications: {
@@ -351,6 +396,18 @@ export type Database = {
       resolve_captains_log_slug: {
         Args: { p: string };
         Returns: CaptainsLogRow | null;
+      };
+      lz_current_captain_id: {
+        Args: Record<string, never>;
+        Returns: string | null;
+      };
+      lz_is_captain: {
+        Args: Record<string, never>;
+        Returns: boolean;
+      };
+      lz_is_captain_charter_booking: {
+        Args: { p_booking_id: string };
+        Returns: boolean;
       };
     };
   };

@@ -40,6 +40,12 @@ import AdminDisputes from './pages/AdminDisputes';
 import AdminLogin from './pages/AdminLogin';
 import AdminEntryGate from './components/admin/AdminEntryGate';
 import AdminDocumentHead from './components/admin/AdminDocumentHead';
+import CaptainLogin from './pages/CaptainLogin';
+import CaptainDashboard from './pages/CaptainDashboard';
+import CaptainSchedule from './pages/CaptainSchedule';
+import CaptainBookingDetail from './pages/CaptainBookingDetail';
+import CaptainDocumentHead from './components/captain/CaptainDocumentHead';
+import CaptainEntryGate from './components/captain/CaptainEntryGate';
 import CaptainsLog from './pages/CaptainsLog';
 import LogArticle from './pages/LogArticle';
 import BioluminescentTours from './pages/BioluminescentTours';
@@ -50,6 +56,7 @@ import { pageKeyFromPath, pathFromPageKey } from './navigation';
 import ScrollToTop from './components/ScrollToTop';
 import { SITE_APPLE_TOUCH_ICON_PATH, SITE_FAVICON_PATH } from './constants/branding';
 import { isAdminAreaPath } from './components/admin/adminNav';
+import { isCaptainAreaPath, isStaffPortalPath } from './lib/captainNav';
 
 const BioGuidePage = lazy(() => import('./pages/BioGuidePage'));
 
@@ -65,8 +72,8 @@ function AppLayout() {
     [navigate]
   );
 
-  // Admin area uses AdminShell; keep marketing chrome off /admin* and /admin-login
-  const showHeaderFooter = !isAdminAreaPath(location.pathname);
+  // Staff portals use their own shells; keep marketing chrome off admin/captain routes
+  const showHeaderFooter = !isStaffPortalPath(location.pathname);
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -77,7 +84,8 @@ function AppLayout() {
         <link rel="apple-touch-icon" sizes="180x180" href={SITE_APPLE_TOUCH_ICON_PATH} />
         <link rel="shortcut icon" href="/favicon.ico" />
       </Helmet>
-      {!showHeaderFooter ? <AdminDocumentHead /> : null}
+      {isAdminAreaPath(location.pathname) ? <AdminDocumentHead /> : null}
+      {isCaptainAreaPath(location.pathname) ? <CaptainDocumentHead /> : null}
       <ScrollToTop />
       {showHeaderFooter && <Header onNavigate={onNavigate} currentPage={currentPage} />}
       <main
@@ -126,6 +134,31 @@ function AppLayout() {
           <Route path="/terms" element={<Terms />} />
           <Route path="/refund-policy" element={<RefundPolicy />} />
           <Route path="/admin-login" element={<AdminLogin />} />
+          <Route path="/captain-login" element={<CaptainLogin />} />
+          <Route
+            path="/captain"
+            element={
+              <CaptainEntryGate redirectFrom="/captain">
+                <CaptainDashboard />
+              </CaptainEntryGate>
+            }
+          />
+          <Route
+            path="/captain/schedule"
+            element={
+              <CaptainEntryGate redirectFrom="/captain/schedule">
+                <CaptainSchedule />
+              </CaptainEntryGate>
+            }
+          />
+          <Route
+            path="/captain/booking/:id"
+            element={
+              <CaptainEntryGate redirectFrom="/captain/booking/:id">
+                <CaptainBookingDetail />
+              </CaptainEntryGate>
+            }
+          />
           <Route path="/admin" element={<AdminEntryGate />} />
           <Route path="/admin/more" element={<AdminMoreTools />} />
           <Route path="/admin/bookings" element={<AdminBookingsHub />} />

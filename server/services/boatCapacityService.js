@@ -9,7 +9,165 @@ const TRIP_TYPE_BOAT_TYPE = {
 const TRIP_TYPE_REGISTRATION = {
   pontoon_rental: 'FL0278PU',
   center_console_rental: 'FL3827TT',
+  captain_charter: 'FL3827TT',
 };
+
+const TRIP_TYPE_NAME_PATTERNS = {
+  pontoon_rental: ['pontoon', 'suncatcher', 'sun catcher', 'sea breeze', 'ocean vista'],
+  center_console_rental: ['key largo', 'center console', '3827'],
+  captain_charter: ['key largo', 'center console', 'captain', '3827'],
+};
+
+function normalizeRegistration(value) {
+  return String(value || '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
+}
+
+function unwrapBoatJoin(row) {
+  const boat = Array.isArray(row?.boats) ? row.boats[0] : row?.boats;
+  return boat && typeof boat === 'object' ? boat : null;
+}
+
+async function selectActiveBoatByType(supabase, boatType) {
+  const { data, error } = await supabase
+    .from('boats')
+    .select('id, name, type')
+    .eq('type', boatType)
+    .eq('is_active', true)
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    logCapacityFailure('boats', 'select_by_type', error);
+    return null;
+  }
+  return data?.id || null;
+}
+
+async function selectActiveBoatByNamePattern(supabase, patterns) {
+  for (const pattern of patterns || []) {
+    const safe = String(pattern || '').trim();
+    if (safe.length < 3) continue;
+    const { data, error } = await supabase
+      .from('boats')
+      .select('id, name')
+      .eq('is_active', true)
+      .ilike('name', `%${safe.replace(/[%_]/g, '')}%`)
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      logCapacityFailure('boats', 'select_by_name', error);
+      continue;
+    }
+    if (data?.id) return data.id;
+  }
+  return null;
+}
+
+async function resolveBoatIdByRegistration(supabase, registrationNumber) {
+  const target = normalizeRegistration(registrationNumber);
+  if (!target) return null;
+
+  const { data: profiles, error } = await supabase
+    .from('boat_capacity_profiles')
+    .select('boat_id, registration_number, boats(id, is_active, type, name)');
+
+  if (error) {
+    logCapacityFailure('boat_capacity_profiles', 'select_by_registration', error);
+  } else {
+    for (const row of profiles || []) {
+      const boat = unwrapBoatJoin(row);
+      if (!boat?.is_active) continue;
+      if (normalizeRegistration(row.registration_number) === target) {
+        return row.boat_id;
+      }
+    }
+  }
+
+  const { data: boats, error: boatErr } = await supabase
+    .from('boats')
+    .select('id, name, is_active')
+    .eq('is_active', true);
+
+  if (boatErr) {
+    logCapacityFailure('boats', 'select_for_registration_hint', boatErr);
+    return null;
+  }
+
+  for (const boat of boats || []) {
+    if (normalizeRegistration(boat.name).includes(target) || target.includes(normalizeRegistration(boat.name))) {
+      return boat.id;
+    }
+  }
+
+  return null;
+}
+
+async function resolveBoatIdForTripType(supabase, tripType, options = {}) {
+  const normalized = String(tripType || '').trim();
+  const registrationHint =
+    normalizeRegistration(options.registrationNumber) ||
+    TRIP_TYPE_REGISTRATION[normalized] ||
+    null;
+  const attempted = [];
+
+  if (registrationHint) {
+    attempted.push(`registration:${registrationHint}`);
+    const byRegistration = await resolveBoatIdByRegistration(supabase, registrationHint);
+    if (byRegistration) return byRegistration;
+  }
+
+  const boatType = TRIP_TYPE_BOAT_TYPE[normalized];
+  if (boatType) {
+    attempted.push(`type:${boatType}`);
+    const byType = await selectActiveBoatByType(supabase, boatType);
+    if (byType) return byType;
+  }
+
+  const namePatterns = TRIP_TYPE_NAME_PATTERNS[normalized] || [];
+  if (namePatterns.length) {
+    attempted.push(`name:${namePatterns.join('|')}`);
+    const byName = await selectActiveBoatByNamePattern(supabase, namePatterns);
+    if (byName) return byName;
+  }
+
+  if (normalized === 'captain_charter') {
+    attempted.push('fallback:premium');
+    const premium = await selectActiveBoatByType(supabase, 'premium');
+    if (premium) return premium;
+  }
+
+  if (normalized === 'pontoon_rental') {
+    attempted.push('fallback:standard');
+    const standard = await selectActiveBoatByType(supabase, 'standard');
+    if (standard) return standard;
+  }
+
+  attempted.push('fallback:any_active_boat');
+  const { data: anyBoat, error: anyErr } = await supabase
+    .from('boats')
+    .select('id')
+    .eq('is_active', true)
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (anyErr) logCapacityFailure('boats', 'select_any_active', anyErr);
+  if (anyBoat?.id) {
+    console.warn(
+      `[boat-capacity] resolveBoatIdForTripType used last-resort boat for tripType=${normalized} attempted=${attempted.join(',')}`
+    );
+    return anyBoat.id;
+  }
+
+  console.error(
+    `[boat-capacity] resolveBoatIdForTripType failed tripType=${normalized} registrationHint=${registrationHint || 'none'} attempted=${attempted.join(',')}`
+  );
+  return null;
+}
 
 function logCapacityFailure(table, operation, err) {
   const code = err?.code ? String(err.code) : 'unknown';
@@ -69,45 +227,6 @@ function tripContextFromTripType(tripType) {
     charterType: normalized === 'captain_charter' ? 'captain_charter' : null,
     captainIncluded: normalized === 'captain_charter',
   };
-}
-
-async function resolveBoatIdForTripType(supabase, tripType) {
-  const normalized = String(tripType || '').trim();
-  const registration = TRIP_TYPE_REGISTRATION[normalized];
-  if (registration) {
-    const { data: profiles, error } = await supabase
-      .from('boat_capacity_profiles')
-      .select('boat_id, registration_number, boats!inner(id, is_active, type)')
-      .eq('boats.is_active', true);
-
-    if (!error && Array.isArray(profiles)) {
-      const match = profiles.find((row) => {
-        const reg = String(row.registration_number || '')
-          .trim()
-          .toUpperCase();
-        return reg === registration.toUpperCase();
-      });
-      if (match?.boat_id) return match.boat_id;
-    }
-  }
-
-  const boatType = TRIP_TYPE_BOAT_TYPE[normalized];
-  if (!boatType) return null;
-
-  const { data, error } = await supabase
-    .from('boats')
-    .select('id')
-    .eq('type', boatType)
-    .eq('is_active', true)
-    .order('created_at', { ascending: true })
-    .limit(1)
-    .maybeSingle();
-
-  if (error) {
-    logCapacityFailure('boats', 'select_by_trip_type', error);
-    return null;
-  }
-  return data?.id || null;
 }
 
 async function replacePassengers(supabase, { bookingId, preTripSubmissionId, passengers }) {
@@ -213,7 +332,9 @@ async function runCapacityCore(supabase, {
   allowExceededPersist = false,
 }) {
   if (!boatId) {
-    const err = new Error('Could not determine boat for this trip.');
+    const err = new Error(
+      'We could not match your trip to a boat in our fleet. Please edit your trip details or call 803-542-1761 for help.'
+    );
     err.statusCode = 400;
     err.code = 'boat_assignment_pending';
     throw err;
@@ -319,6 +440,7 @@ async function runCapacityCheckForTripType(
   supabase,
   {
     tripType,
+    registrationNumber = null,
     preTripSubmissionId = null,
     passengers,
     expectedPassengerCount = null,
@@ -327,7 +449,7 @@ async function runCapacityCheckForTripType(
     persist = true,
   }
 ) {
-  const boatId = await resolveBoatIdForTripType(supabase, tripType);
+  const boatId = await resolveBoatIdForTripType(supabase, tripType, { registrationNumber });
   return runCapacityCore(supabase, {
     boatId,
     tripContext: tripContextFromTripType(tripType),

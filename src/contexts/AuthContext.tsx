@@ -7,9 +7,23 @@ import { adminDebugLog, describeError, fetchJsonWithTimeout, withTimeout } from 
 
 type SupabaseLogError = Parameters<typeof logSupabaseError>[1];
 
+export type CaptainProfile = {
+  id: string;
+  full_name: string;
+  phone: string | null;
+  email: string | null;
+  photo_url: string | null;
+  default_boat_id: string | null;
+};
+
+const CAPTAIN_PROFILE_SELECT =
+  'id, full_name, phone, email, photo_url, default_boat_id';
+
 export interface AuthContextType {
   user: User | null;
   isAdmin: boolean;
+  isCaptain: boolean;
+  captainProfile: CaptainProfile | null;
   loading: boolean;
   authError: string | null;
   retryAuth: () => void;
@@ -19,11 +33,25 @@ export interface AuthContextType {
 
 export const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+function normalizeCaptainProfile(row: Record<string, unknown> | null | undefined): CaptainProfile | null {
+  if (!row?.id || typeof row.id !== 'string') return null;
+  return {
+    id: row.id,
+    full_name: typeof row.full_name === 'string' ? row.full_name : 'Captain',
+    phone: typeof row.phone === 'string' ? row.phone : null,
+    email: typeof row.email === 'string' ? row.email : null,
+    photo_url: typeof row.photo_url === 'string' ? row.photo_url : null,
+    default_boat_id: typeof row.default_boat_id === 'string' ? row.default_boat_id : null,
+  };
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [initializing, setInitializing] = useState(true);
   const [verifying, setVerifying] = useState(false);
   const [user, setUser] = useState<User | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [isCaptain, setIsCaptain] = useState(false);
+  const [captainProfile, setCaptainProfile] = useState<CaptainProfile | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
   const [authAttempt, setAuthAttempt] = useState(0);
   const bootstrappedRef = useRef(false);
@@ -109,9 +137,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (tryApi) {
         console.warn('[Auth] admins Supabase queries failed; trying GET /api/admin/verify');
         try {
-          const j = await fetchJsonWithTimeout<{ isAdmin?: boolean; error?: string }>('auth:admin:api-verify', `${env.apiUrl}/api/admin/verify`, {
-            headers: { Authorization: `Bearer ${accessToken}` },
-          }, 12000);
+          const j = await fetchJsonWithTimeout<{ isAdmin?: boolean; error?: string }>(
+            'auth:admin:api-verify',
+            `${env.apiUrl}/api/admin/verify`,
+            {
+              headers: { Authorization: `Bearer ${accessToken}` },
+            },
+            12000
+          );
           if (typeof j?.isAdmin === 'boolean') {
             setIsAdmin(j.isAdmin);
             adminDebugLog('auth:admin:api-verify-complete', {
@@ -134,6 +167,126 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [env.apiUrl, env.apiUrlConfigured]
   );
 
+  const checkCaptainStatus = useCallback(
+    async (u: User | null, accessToken: string | null): Promise<boolean> => {
+      if (!u) {
+        setIsCaptain(false);
+        setCaptainProfile(null);
+        adminDebugLog('auth:captain:no-user');
+        return false;
+      }
+
+      adminDebugLog('auth:captain:verify-start', { userId: u.id, hasEmail: Boolean(u.email) });
+
+      let errAuth: SupabaseLogError = null;
+      let errEmail: SupabaseLogError = null;
+      let captainVerifyTimeoutError: string | null = null;
+      let byAuth: CaptainProfile | null = null;
+      let byEmail: CaptainProfile | null = null;
+
+      try {
+        const byAuthRes = await withTimeout(
+          'Captain verification by auth user id',
+          supabase
+            .from('captains')
+            .select(CAPTAIN_PROFILE_SELECT)
+            .eq('auth_user_id', u.id)
+            .eq('active', true)
+            .maybeSingle(),
+          12000
+        );
+        byAuth = normalizeCaptainProfile(byAuthRes.data as Record<string, unknown> | null);
+        errAuth = byAuthRes.error;
+      } catch (err) {
+        captainVerifyTimeoutError = describeError(err);
+        console.error('[AuthContext.checkCaptainStatus.byAuth]', captainVerifyTimeoutError);
+      }
+
+      logSupabaseError('AuthContext.checkCaptainStatus.byAuth', errAuth);
+
+      if (byAuth && !errAuth) {
+        setIsCaptain(true);
+        setCaptainProfile(byAuth);
+        adminDebugLog('auth:captain:verified', { match: 'auth_user_id', userId: u.id });
+        return true;
+      }
+
+      const email = u.email?.trim();
+      if (email) {
+        try {
+          const byEmailRes = await withTimeout(
+            'Captain verification by email',
+            supabase
+              .from('captains')
+              .select(CAPTAIN_PROFILE_SELECT)
+              .ilike('email', email)
+              .eq('active', true)
+              .maybeSingle(),
+            12000
+          );
+          byEmail = normalizeCaptainProfile(byEmailRes.data as Record<string, unknown> | null);
+          errEmail = byEmailRes.error;
+        } catch (err) {
+          captainVerifyTimeoutError = describeError(err);
+          console.error('[AuthContext.checkCaptainStatus.byEmail]', captainVerifyTimeoutError);
+        }
+        logSupabaseError('AuthContext.checkCaptainStatus.byEmail', errEmail);
+
+        if (byEmail && !errEmail) {
+          setIsCaptain(true);
+          setCaptainProfile(byEmail);
+          adminDebugLog('auth:captain:verified', { match: 'email', userId: u.id });
+          return true;
+        }
+      }
+
+      const queryErrored = Boolean(errAuth || errEmail || captainVerifyTimeoutError);
+      const tryApi =
+        queryErrored &&
+        Boolean(accessToken) &&
+        env.apiUrlConfigured &&
+        Boolean(env.apiUrl);
+
+      if (tryApi) {
+        console.warn('[Auth] captains Supabase queries failed; trying GET /api/captain/verify');
+        try {
+          const j = await fetchJsonWithTimeout<{
+            isCaptain?: boolean;
+            captain?: CaptainProfile | null;
+            error?: string;
+          }>(
+            'auth:captain:api-verify',
+            `${env.apiUrl}/api/captain/verify`,
+            {
+              headers: { Authorization: `Bearer ${accessToken}` },
+            },
+            12000
+          );
+          if (typeof j?.isCaptain === 'boolean') {
+            const profile = j.isCaptain ? normalizeCaptainProfile(j.captain) : null;
+            setIsCaptain(j.isCaptain);
+            setCaptainProfile(profile);
+            adminDebugLog('auth:captain:api-verify-complete', {
+              match: j.isCaptain ? 'api-verify' : 'api-verify-none',
+              userId: u.id,
+              ok: j.isCaptain,
+            });
+            return j.isCaptain;
+          }
+          console.error('[Auth] /api/captain/verify failed', j?.error);
+        } catch (e) {
+          console.error('[Auth] /api/captain/verify fetch error', e);
+        }
+      }
+
+      setIsCaptain(false);
+      setCaptainProfile(null);
+      adminDebugLog('auth:captain:not-authorized', { userId: u.id });
+      return false;
+    },
+    [env.apiUrl, env.apiUrlConfigured]
+  );
+
   const applySession = useCallback(
     async (session: Session | null, options?: { silent?: boolean }) => {
       if (!options?.silent) {
@@ -142,15 +295,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setAuthError(null);
       try {
         const u = session?.user ?? null;
+        const token = session?.access_token ?? null;
         adminDebugLog('auth:session:apply', { hasSession: Boolean(session), hasUser: Boolean(u), silent: options?.silent });
         setUser(u);
-        await checkAdminStatus(u, session?.access_token ?? null);
+        await Promise.all([checkAdminStatus(u, token), checkCaptainStatus(u, token)]);
         verifiedUserIdRef.current = u?.id ?? null;
       } catch (err) {
-        const message = describeError(err, 'Could not restore admin session.');
+        const message = describeError(err, 'Could not restore session.');
         console.error('[AuthContext.applySession]', message);
         setUser(null);
         setIsAdmin(false);
+        setIsCaptain(false);
+        setCaptainProfile(null);
         verifiedUserIdRef.current = null;
         setAuthError(message);
       } finally {
@@ -159,7 +315,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       }
     },
-    [checkAdminStatus]
+    [checkAdminStatus, checkCaptainStatus]
   );
 
   useEffect(() => {
@@ -182,11 +338,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           await applySession(session ?? null);
         }
       } catch (err) {
-        const message = describeError(err, 'Could not restore admin session.');
+        const message = describeError(err, 'Could not restore session.');
         console.error('[AuthContext.bootstrap]', message);
         if (!cancelled) {
           setUser(null);
           setIsAdmin(false);
+          setIsCaptain(false);
+          setCaptainProfile(null);
           setAuthError(message);
         }
       } finally {
@@ -228,14 +386,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (import.meta.env.DEV) {
-        console.log('[Auth] snapshot', {
+      console.log('[Auth] snapshot', {
         user: user ? { id: user.id, email: user.email } : null,
         isAdmin,
+        isCaptain,
+        captainProfile: captainProfile ? { id: captainProfile.id, full_name: captainProfile.full_name } : null,
         loading,
         authError,
       });
     }
-  }, [user, isAdmin, loading, authError]);
+  }, [user, isAdmin, isCaptain, captainProfile, loading, authError]);
 
   const signIn = useCallback(async (email: string, password: string) => {
     const { error } = await supabase.auth.signInWithPassword({ email, password });
@@ -249,6 +409,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (error) throw error;
     setUser(null);
     setIsAdmin(false);
+    setIsCaptain(false);
+    setCaptainProfile(null);
     setAuthError(null);
     verifiedUserIdRef.current = null;
     adminDebugLog('auth:sign-out');
@@ -262,7 +424,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ user, isAdmin, loading, authError, retryAuth, signIn, signOut }}
+      value={{
+        user,
+        isAdmin,
+        isCaptain,
+        captainProfile,
+        loading,
+        authError,
+        retryAuth,
+        signIn,
+        signOut,
+      }}
     >
       {children}
     </AuthContext.Provider>

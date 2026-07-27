@@ -1722,7 +1722,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
               >
                 Book with Groupon
               </Link>{' '}
-              — enter your voucher number and last name. No deposit required.
+              — enter your voucher number and last name. Requests are reviewed before confirmation; no deposit required.
             </p>
           </div>
 

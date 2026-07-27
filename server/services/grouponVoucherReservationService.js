@@ -217,20 +217,87 @@ async function releaseVoucherReservation(supabase, { voucherId, sessionToken, ac
   return Boolean(data?.id);
 }
 
-async function markVoucherBooked(supabase, { voucherId, sessionToken, bookingId, actorType = 'system', actorId = null }) {
+async function linkVoucherToPendingBooking(
+  supabase,
+  { voucherId, sessionToken, bookingId, actorType = 'system', actorId = null }
+) {
   const { data, error } = await supabase
     .from('groupon_vouchers')
     .update({
-      local_status: 'booked',
+      local_status: 'reserved',
       booking_id: bookingId,
       reserved_session_token: null,
       reserved_until: null,
     })
     .eq('id', voucherId)
     .eq('reserved_session_token', sessionToken)
-    .in('local_status', ['reserved', 'available'])
+    .eq('local_status', 'reserved')
+    .is('booking_id', null)
     .select('id')
     .maybeSingle();
+  if (error) throw new Error(error.message || 'Could not link voucher to pending booking.');
+  if (!data?.id) return false;
+  await recordVoucherEvent(supabase, {
+    voucherId: data.id,
+    eventType: 'pending_booking_linked',
+    actorType,
+    actorId,
+    message: 'Voucher linked to pending Groupon booking request awaiting admin approval.',
+    payload: { bookingId },
+  });
+  return true;
+}
+
+async function releaseVoucherPendingBooking(
+  supabase,
+  { voucherId, bookingId, actorType = 'admin', actorId = null, reason = 'Pending Groupon booking released.' }
+) {
+  const { data, error } = await supabase
+    .from('groupon_vouchers')
+    .update({
+      local_status: 'available',
+      booking_id: null,
+      reserved_session_token: null,
+      reserved_until: null,
+    })
+    .eq('id', voucherId)
+    .eq('local_status', 'reserved')
+    .eq('booking_id', bookingId)
+    .select('id')
+    .maybeSingle();
+  if (error) throw new Error(error.message || 'Could not release pending Groupon voucher.');
+  if (data?.id) {
+    await recordVoucherEvent(supabase, {
+      voucherId: data.id,
+      eventType: 'pending_booking_released',
+      actorType,
+      actorId,
+      message: reason,
+      payload: { bookingId },
+    });
+  }
+  return Boolean(data?.id);
+}
+
+async function markVoucherBooked(supabase, { voucherId, sessionToken, bookingId, actorType = 'system', actorId = null }) {
+  const updatePayload = {
+    local_status: 'booked',
+    booking_id: bookingId,
+    reserved_session_token: null,
+    reserved_until: null,
+  };
+
+  let query = supabase.from('groupon_vouchers').update(updatePayload).eq('id', voucherId);
+
+  if (sessionToken) {
+    query = query.eq('reserved_session_token', sessionToken);
+  } else if (bookingId) {
+    query = query.eq('booking_id', bookingId).eq('local_status', 'reserved');
+  } else {
+    return false;
+  }
+
+  const { data, error } = await query.in('local_status', ['reserved', 'available']).select('id').maybeSingle();
   if (error) throw new Error(error.message || 'Could not mark voucher booked.');
   if (!data?.id) return false;
   await recordVoucherEvent(supabase, {
@@ -250,6 +317,8 @@ module.exports = {
   verifyAndReserveVoucher,
   loadReservedVoucherByClientToken,
   releaseVoucherReservation,
+  releaseVoucherPendingBooking,
+  linkVoucherToPendingBooking,
   markVoucherBooked,
   findVoucherByHashWithMapping,
 };

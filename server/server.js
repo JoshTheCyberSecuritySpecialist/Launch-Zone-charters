@@ -59,6 +59,8 @@ const { mappingPayloadFromRequest } = require('./services/grouponDealMappingServ
 const { maskVoucherLastFour } = require('./services/grouponVoucherUtils');
 const { verifyAndReserveVoucher, loadReservedVoucherByClientToken } = require('./services/grouponVoucherReservationService');
 const { createGrouponBookingSafe } = require('./services/grouponBookingService');
+const { sendGrouponRequestReceivedNotifications } = require('./services/grouponRequestNotifications');
+const grouponApprovalService = require('./services/grouponApprovalService');
 const adminSupportService = require('./services/adminSupportService');
 const cron = require('node-cron');
 const { runMonitor } = require('./jobs/conditionMonitor');
@@ -3443,6 +3445,105 @@ app.post('/api/admin/bookings/:id/actions', async (req, res) => {
       return res.json({ ok: true, ...released });
     }
 
+    if (action === 'check_groupon_conflicts') {
+      const detail = await loadAdminBookingDetail(id);
+      if (!detail?.booking) return res.status(404).json({ error: 'Booking not found.' });
+      const result = await grouponApprovalService.checkGrouponApprovalConflicts(supabase, detail.booking);
+      return res.json(result);
+    }
+
+    if (action === 'approve_groupon') {
+      const overrideReason = cleanText(req.body?.overrideReason || req.body?.override_reason, 500) || null;
+      const confirmOverride = Boolean(req.body?.confirmOverride || req.body?.confirm_override);
+      if (overrideReason && !confirmOverride) {
+        return res.status(400).json({ error: 'Conflict override requires confirmOverride: true.' });
+      }
+      const manualBookingsEntered = Boolean(
+        req.body?.manualBookingsEntered || req.body?.manual_bookings_entered
+      );
+      if (!manualBookingsEntered) {
+        return res.status(400).json({
+          error: 'Confirm that phone and manual bookings have been entered for this date.',
+          requireManualBookingsCheck: true,
+        });
+      }
+      const result = await grouponApprovalService.approveGrouponBooking(
+        supabase,
+        {
+          sendConfirmation: ({ bookingId, email, source }) =>
+            sendBookingConfirmationInternal({ bookingId, email, source }),
+        },
+        {
+          bookingId: id,
+          adminUserId: adminUser.id,
+          overrideReason: confirmOverride ? overrideReason : null,
+        }
+      );
+      return res.json(result);
+    }
+
+    if (action === 'reject_groupon') {
+      const reasonCode = cleanText(req.body?.reasonCode || req.body?.reason_code, 80) || 'other';
+      const reasonText =
+        cleanText(req.body?.reason || req.body?.reasonText || req.body?.reason_text, 500) || '';
+      const result = await grouponApprovalService.rejectGrouponBooking(
+        supabase,
+        {
+          bookingId: id,
+          adminUserId: adminUser.id,
+          reasonCode,
+          reasonText,
+          notifyCustomer: req.body?.notifyCustomer !== false,
+        },
+        { resend, resendFrom }
+      );
+      return res.json(result);
+    }
+
+    if (action === 'propose_groupon_time') {
+      const startTime = cleanText(req.body?.startTime || req.body?.start_time, 80);
+      const endTime = cleanText(req.body?.endTime || req.body?.end_time, 80);
+      const boatId = cleanText(req.body?.boatId || req.body?.boat_id, 80) || null;
+      const captainId = cleanText(req.body?.captainId || req.body?.captain_id, 80) || null;
+      const customerMessage = cleanText(req.body?.customerMessage || req.body?.customer_message, 2000) || '';
+      const responseDeadline =
+        cleanText(req.body?.responseDeadline || req.body?.response_deadline, 80) || null;
+      const result = await grouponApprovalService.proposeGrouponAlternativeTime(
+        supabase,
+        { resend, resendFrom },
+        {
+          bookingId: id,
+          adminUserId: adminUser.id,
+          startTime,
+          endTime,
+          boatId,
+          captainId,
+          customerMessage,
+          responseDeadline,
+        }
+      );
+      return res.json(result);
+    }
+
+    if (action === 'groupon_proposal_response') {
+      const response = cleanText(req.body?.response, 40);
+      const note = cleanText(req.body?.note, 500) || null;
+      const result = await grouponApprovalService.recordGrouponProposalResponse(
+        supabase,
+        {
+          sendConfirmation: ({ bookingId, email, source }) =>
+            sendBookingConfirmationInternal({ bookingId, email, source }),
+        },
+        {
+          bookingId: id,
+          adminUserId: adminUser.id,
+          response,
+          note,
+        }
+      );
+      return res.json(result);
+    }
+
     const nextStatus = statusByAction[action];
     if (!nextStatus) return res.status(400).json({ error: 'Unknown action.' });
     const { error } = await supabase.from('bookings').update({ status: nextStatus }).eq('id', id);
@@ -3457,7 +3558,12 @@ app.post('/api/admin/bookings/:id/actions', async (req, res) => {
     return res.json({ ok: true, status: nextStatus });
   } catch (err) {
     console.error('[admin-booking-detail:action]', err);
-    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not run booking action.' });
+    return res.status(err.statusCode || 500).json({
+      error: err.message || 'Could not run booking action.',
+      conflicts: err.conflicts || undefined,
+      alternatives: err.alternatives || undefined,
+      requireManualBookingsCheck: err.requireManualBookingsCheck || undefined,
+    });
   }
 });
 
@@ -5550,6 +5656,20 @@ app.get('/api/admin/groupon-vouchers', async (req, res) => {
   }
 });
 
+app.get('/api/admin/groupon-requests', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const filter = cleanText(req.query.filter, 40) || 'pending_review';
+    const limit = Math.min(Math.max(Number(req.query.limit || 20), 1), 50);
+    const requests = await grouponApprovalService.listRecentGrouponRequests(supabase, { filter, limit });
+    return res.json({ requests });
+  } catch (err) {
+    console.error('[admin-groupon-requests:list]', err);
+    return res.status(500).json({ error: 'Could not load Groupon booking requests.' });
+  }
+});
+
 app.get('/api/admin/support/lookup', async (req, res) => {
   const adminUser = await verifyAdminRequest(req, res);
   if (!adminUser) return;
@@ -5732,14 +5852,20 @@ app.post('/api/public/groupon/book', async (req, res) => {
     if (!clientToken) {
       return res.status(400).json({ error: 'Booking session expired. Verify your voucher again.' });
     }
-    const result = await createGrouponBookingSafe(supabase, {}, {
+    const result = await createGrouponBookingSafe(supabase, { resend, resendFrom }, {
       clientToken,
       customer: req.body?.customer || {},
       booking: req.body?.booking || {},
       waiver: req.body?.waiver || {},
       legal: req.body?.legal || {},
       requestIp: ip,
-      sendConfirmation: ({ bookingId, email }) => sendBookingConfirmationInternal({ bookingId, email, source: 'groupon' }),
+      notifyRequest: async ({ bookingId, customerName, guestCount, startTime }) =>
+        sendGrouponRequestReceivedNotifications(supabase, { resend, resendFrom }, {
+          bookingId,
+          customerName,
+          guestCount,
+          startTime,
+        }),
     });
     return res.status(201).json({ booking: result });
   } catch (err) {
@@ -8089,6 +8215,41 @@ app.get('/api/admin/pre-trip-submissions/:id/suggestions', async (req, res) => {
     return res.json({ suggestions });
   } catch (err) {
     console.error('[admin/pre-trip-suggestions]', err);
+    return res.status(500).json({ error: 'Failed' });
+  }
+});
+
+/** Public read: safe summary for Groupon request-received page (UUID is the capability token). */
+app.get('/api/public/groupon-request-status', async (req, res) => {
+  try {
+    if (!supabaseConfigured) return res.status(503).json({ error: 'Server not configured' });
+    const bookingId = String(req.query.bookingId || '').trim();
+    if (!isBookingUuidParam(bookingId)) return res.status(400).json({ error: 'Invalid booking id' });
+    const { data, error } = await supabase
+      .from('bookings')
+      .select('id, status, start_time, end_time, guest_count, booking_source, customers(full_name, email, phone)')
+      .eq('id', bookingId)
+      .maybeSingle();
+    if (error) {
+      console.error('[groupon-request-status]', error.message);
+      return res.status(500).json({ error: 'Could not load booking request' });
+    }
+    if (!data || String(data.booking_source || '') !== 'groupon') {
+      return res.status(404).json({ error: 'Not found' });
+    }
+    const customer = Array.isArray(data.customers) ? data.customers[0] : data.customers;
+    return res.json({
+      bookingId: data.id,
+      status: data.status,
+      startTime: data.start_time,
+      endTime: data.end_time,
+      guestCount: data.guest_count,
+      customerName: customer?.full_name || null,
+      email: customer?.email || null,
+      phone: customer?.phone || null,
+    });
+  } catch (err) {
+    console.error('[groupon-request-status]', err);
     return res.status(500).json({ error: 'Failed' });
   }
 });

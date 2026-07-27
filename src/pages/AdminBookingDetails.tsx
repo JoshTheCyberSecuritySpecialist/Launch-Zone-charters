@@ -26,6 +26,7 @@ import {
   applyDurationToForm,
   buildPatchBody,
 } from '../lib/adminBookingFormState';
+import AdminGrouponReviewPanel from '../components/admin/AdminGrouponReviewPanel';
 import { fetchActiveCaptains, type AdminCaptainListItem } from '../lib/adminCaptains';
 
 type BoatRow = { id: string; name: string; type?: string | null };
@@ -118,6 +119,8 @@ const communicationButtons = [
   ['passenger_weight_issue', 'Send Weight / Passenger Notice'],
   ['separate_trip_explanation', 'Send Separate Trip Notice'],
   ['groupon_support', 'Send Groupon Support Message'],
+  ['groupon_request_rejected', 'Send Groupon Rejection Notice'],
+  ['groupon_alternative_proposed', 'Send Alternate Time Proposal'],
 ] as const;
 
 const customEmailTemplates = {
@@ -1079,6 +1082,20 @@ export default function AdminBookingDetails() {
         </>
       }
     >
+      <AdminGrouponReviewPanel
+        bookingId={id}
+        bookingStatus={String(form.status || booking.status || '')}
+        bookingSource={String(form.source || booking.booking_source || '')}
+        authedFetch={authedFetch}
+        onActionComplete={load}
+        boats={boats}
+        captains={captains}
+        currentBoatId={form.boatId || booking.boat_id}
+        currentCaptainId={form.captainId || booking.captain_id}
+        tripDate={form.date}
+        startTimeLocal={form.startTime}
+        endTimeLocal={form.endTime}
+      />
       <div className="admin-booking-details-page grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
         <section className="order-2 space-y-6 lg:order-1">
           <div className="hidden print:block">

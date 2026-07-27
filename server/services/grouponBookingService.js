@@ -1,5 +1,5 @@
 /**
- * Create confirmed bookings funded by imported Groupon vouchers (no Stripe checkout).
+ * Create Groupon booking requests (pending admin review; no Stripe checkout).
  */
 const { DateTime } = require('luxon');
 const availabilityService = require('./availabilityService');
@@ -8,9 +8,10 @@ const waiverContent = require('../content/waiverContent');
 const bookingReliability = require('./bookingReliability');
 const {
   loadReservedVoucherByClientToken,
-  markVoucherBooked,
+  linkVoucherToPendingBooking,
   releaseVoucherReservation,
 } = require('./grouponVoucherReservationService');
+const { sendGrouponRequestReceivedNotifications } = require('./grouponRequestNotifications');
 const { evaluateGrouponVoucherEligibility } = require('./grouponVoucherEligibilityService');
 
 const BIO_SHARED_PER_PERSON = 150;
@@ -81,6 +82,7 @@ async function createGrouponBooking(supabase, deps, input) {
     legal,
     requestIp = null,
     sendConfirmation,
+    notifyRequest,
   } = input;
 
   const session = await loadReservedVoucherByClientToken(supabase, clientToken);
@@ -278,15 +280,15 @@ async function createGrouponBooking(supabase, deps, input) {
     throw err;
   }
 
-  const booked = await markVoucherBooked(supabase, {
+  const linked = await linkVoucherToPendingBooking(supabase, {
     voucherId: voucher.id,
     sessionToken,
     bookingId: bookingRow.id,
     actorType: 'system',
   });
-  if (!booked) {
+  if (!linked) {
     await supabase.from('bookings').delete().eq('id', bookingRow.id);
-    const err = new Error('Could not finalize voucher link. Please try again.');
+    const err = new Error('Could not link voucher to this request. Please try again.');
     err.statusCode = 409;
     throw err;
   }
@@ -307,23 +309,32 @@ async function createGrouponBooking(supabase, deps, input) {
 
   await bookingReliability.insertActivity(supabase, {
     booking_id: bookingRow.id,
-    event_type: 'booking_created',
+    event_type: 'groupon_request_submitted',
     actor_type: 'customer',
-    message: 'Groupon voucher booking confirmed without Stripe deposit.',
+    message: 'Groupon booking request submitted — awaiting admin approval.',
     payload: {
       grouponVoucherId: voucher.id,
       voucherLastFour: voucher.voucher_last_four,
       grouponValue,
       amountDueToday: 0,
+      status: 'pending_verification',
     },
   });
 
-  if (typeof sendConfirmation === 'function') {
+  const notifyFn = typeof notifyRequest === 'function' ? notifyRequest : null;
+  if (notifyFn) {
     try {
-      await sendConfirmation({ bookingId: bookingRow.id, email: customerRow.email });
-    } catch (emailErr) {
-      console.error('[groupon-booking] confirmation email:', emailErr?.message || emailErr);
+      await notifyFn({
+        bookingId: bookingRow.id,
+        customerName: String(customer.full_name),
+        guestCount: coveredGuestCount,
+        startTime: startTime.toISOString(),
+      });
+    } catch (notifyErr) {
+      console.error('[groupon-booking] request notification:', notifyErr?.message || notifyErr);
     }
+  } else if (typeof sendConfirmation === 'function') {
+    console.warn('[groupon-booking] sendConfirmation is deprecated for Groupon submit; use notifyRequest.');
   }
 
   return {
@@ -332,8 +343,11 @@ async function createGrouponBooking(supabase, deps, input) {
     amountDueToday: 0,
     paymentMethod: 'groupon',
     bookingSource: 'groupon',
+    status: 'pending_verification',
     voucherMasked: eligibility.voucherMasked,
     coveredGuestCount,
+    startTime: startTime.toISOString(),
+    endTime: endTime.toISOString(),
   };
 }
 

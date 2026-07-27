@@ -246,6 +246,12 @@ function cardClass(booking: CalendarBooking) {
   if (booking.status === 'completed') return 'border-slate-200 bg-slate-200 text-slate-800';
   if (booking.status === 'hold') return 'border-orange-200 bg-orange-100 text-orange-950';
   if (
+    booking.booking_source === 'groupon' &&
+    (booking.status === 'pending_verification' || booking.status === 'pending')
+  ) {
+    return 'border-fuchsia-300 bg-fuchsia-100 text-fuchsia-950 ring-1 ring-fuchsia-300';
+  }
+  if (
     isCaptainLedCharter(booking) &&
     !booking.captain_id &&
     ['confirmed', 'ready_for_departure'].includes(booking.status)
@@ -255,6 +261,19 @@ function cardClass(booking: CalendarBooking) {
   if (booking.booking_type === 'charter') return 'border-purple-200 bg-purple-100 text-purple-950';
   if (booking.staff_created || booking.booking_source === 'admin') return 'border-green-200 bg-green-100 text-green-950';
   return 'border-blue-200 bg-blue-100 text-blue-950';
+}
+
+function calendarEventTitle(booking: CalendarBooking, compact = false) {
+  const guests = booking.guest_count || 1;
+  if (
+    booking.booking_source === 'groupon' &&
+    (booking.status === 'pending_verification' || booking.status === 'pending')
+  ) {
+    if (compact) return `${hhmmFromIso(booking.start_time)} PENDING GROUPON`;
+    return `PENDING GROUPON — ${booking.customer_name} — ${guests} guest${guests === 1 ? '' : 's'}`;
+  }
+  if (compact) return `${hhmmFromIso(booking.start_time)} ${booking.customer_name}`;
+  return booking.customer_name;
 }
 
 function captainAssignmentLine(booking: CalendarBooking) {
@@ -994,7 +1013,7 @@ export default function AdminCalendar() {
       >
         <MoreVertical className="h-3.5 w-3.5" />
       </button>
-      <div className={compact ? 'font-black' : 'text-sm font-black'}>{compact ? `${hhmmFromIso(booking.start_time)} ${booking.customer_name}` : booking.customer_name}</div>
+      <div className={compact ? 'font-black' : 'text-sm font-black'}>{calendarEventTitle(booking, compact)}</div>
       {!compact ? (
         <>
           <div>{booking.boat_name}</div>

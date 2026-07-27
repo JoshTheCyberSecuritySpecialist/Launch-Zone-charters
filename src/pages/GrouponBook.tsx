@@ -211,7 +211,7 @@ export default function GrouponBook() {
       setError(result.message);
       return;
     }
-    navigate(`/booking-success?bookingId=${encodeURIComponent(result.bookingId)}&groupon=1`);
+    navigate(`/booking/groupon/received?bookingId=${encodeURIComponent(result.bookingId)}`);
   }
 
   return (
@@ -222,7 +222,8 @@ export default function GrouponBook() {
           <div>
             <h1 className="text-3xl font-bold text-white">Book with your Groupon voucher</h1>
             <p className="mt-1 text-sm text-slate-300">
-              Verify your voucher, choose a time, and confirm — no deposit required when your voucher fully covers the trip.
+              Verify your voucher, choose a time, and submit your request — no deposit required when your voucher fully
+              covers the trip. Your date and time are not confirmed until Launch Zone Charters reviews availability.
               {session?.bookingType === 'rental'
                 ? ' Pontoon rentals require rental insurance before departure.'
                 : null}
@@ -427,7 +428,7 @@ export default function GrouponBook() {
               disabled={busy}
               className="inline-flex min-h-12 w-full items-center justify-center rounded-xl bg-[var(--lz-cta)] px-6 py-3 text-base font-bold text-slate-950 disabled:opacity-60"
             >
-              {busy ? <Loader2 className="h-5 w-5 animate-spin" /> : 'Confirm Groupon booking'}
+              {busy ? <Loader2 className="h-5 w-5 animate-spin" /> : 'Submit booking request'}
             </button>
           </form>
         ) : null}

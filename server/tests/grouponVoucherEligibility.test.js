@@ -75,6 +75,25 @@ test('evaluateGrouponVoucherEligibility rejects active reservation by another se
   assert.equal(result.reasonCode, 'reserved');
 });
 
+test('evaluateGrouponVoucherEligibility rejects voucher already linked to a booking', () => {
+  const result = evaluateGrouponVoucherEligibility(
+    { ...baseVoucher, booking_id: 'booking-123', local_status: 'reserved' },
+    mapping,
+    { lastName: 'Sample' }
+  );
+  assert.equal(result.eligible, false);
+  assert.equal(result.reasonCode, 'already_booked');
+});
+
+test('evaluateGrouponVoucherEligibility allows voucher linked to same pending booking during approval', () => {
+  const result = evaluateGrouponVoucherEligibility(
+    { ...baseVoucher, booking_id: 'booking-123', local_status: 'reserved' },
+    mapping,
+    { allowLinkedBookingId: 'booking-123', requestedGuestCount: 2 }
+  );
+  assert.equal(result.eligible, true);
+});
+
 test('groupon session token verifies and rejects tampering', () => {
   const issued = issueReservationSession({
     voucherId: '11111111-1111-1111-1111-111111111111',

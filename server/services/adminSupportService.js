@@ -5,7 +5,7 @@ const { DateTime } = require('luxon');
 const availabilityService = require('./availabilityService');
 const boatCapacityService = require('./boatCapacityService');
 const { maskVoucherLastFour } = require('./grouponVoucherUtils');
-const { releaseVoucherReservation } = require('./grouponVoucherReservationService');
+const { releaseVoucherReservation, releaseVoucherPendingBooking } = require('./grouponVoucherReservationService');
 
 function normalizePhoneDigits(raw) {
   return String(raw || '').replace(/\D/g, '');
@@ -510,7 +510,22 @@ async function adminReleaseVoucherReservation(supabase, { voucherId, adminUserId
     err.statusCode = 404;
     throw err;
   }
-  if (voucher.local_status !== 'reserved' || !voucher.reserved_session_token) {
+  if (voucher.local_status !== 'reserved') {
+    const err = new Error('This voucher does not have an active temporary reservation.');
+    err.statusCode = 409;
+    throw err;
+  }
+  if (voucher.booking_id && !voucher.reserved_session_token) {
+    const released = await releaseVoucherPendingBooking(supabase, {
+      voucherId: voucher.id,
+      bookingId: voucher.booking_id,
+      actorType: 'admin',
+      actorId: adminUserId,
+      reason: reason || 'Admin released pending Groupon booking hold.',
+    });
+    return { released };
+  }
+  if (!voucher.reserved_session_token) {
     const err = new Error('This voucher does not have an active temporary reservation.');
     err.statusCode = 409;
     throw err;

@@ -138,13 +138,17 @@ function evaluateGrouponVoucherEligibility(voucher, mapping, options = {}) {
     };
   }
 
-  if (voucher.booking_id && String(voucher.local_status) === 'booked') {
-    return {
-      eligible: false,
-      reasonCode: 'already_booked',
-      customerMessage: CUSTOMER_MESSAGES.already_booked,
-      adminDetail: 'Voucher already linked to a booking.',
-    };
+  if (voucher.booking_id) {
+    const linkedSame =
+      options.allowLinkedBookingId && String(voucher.booking_id) === String(options.allowLinkedBookingId);
+    if (!linkedSame) {
+      return {
+        eligible: false,
+        reasonCode: 'already_booked',
+        customerMessage: CUSTOMER_MESSAGES.already_booked,
+        adminDetail: 'Voucher already linked to a booking request or reservation.',
+      };
+    }
   }
 
   const activeSession = allowReservedSession || sessionToken;

@@ -16,6 +16,9 @@ const MESSAGE_TYPES = new Set([
   'passenger_weight_issue',
   'separate_trip_explanation',
   'groupon_support',
+  'groupon_request_received',
+  'groupon_request_rejected',
+  'groupon_alternative_proposed',
 ]);
 
 function escapeHtml(value) {
@@ -187,6 +190,38 @@ function templateFor(type, detail) {
         'Groupon refund requests must be handled through Groupon customer support when applicable.',
       ],
       sms: `Launch Zone Groupon support: Call 803-542-1761 about booking ${ctx.booking.id}. Have your voucher last four ready.`,
+    },
+    groupon_request_received: {
+      subject: 'Groupon booking request received — awaiting approval',
+      intro: `Hi ${ctx.name}, your Groupon booking request has been received.`,
+      extra: [
+        'Your requested date and time are not confirmed yet.',
+        'Launch Zone Charters will review boat, captain, capacity, and schedule availability.',
+        'You will receive confirmation or an alternate-time message after review.',
+        'Do not arrive until you receive a confirmed reservation.',
+        `Status: Pending review`,
+      ],
+      sms: `Launch Zone: Groupon request received for ${ctx.date} ${ctx.start}. Pending admin approval — not confirmed yet. Do not arrive until confirmed. Questions? 803-542-1761.`,
+    },
+    groupon_request_rejected: {
+      subject: 'Update on your Groupon booking request',
+      intro: `Hi ${ctx.name}, we reviewed your Groupon booking request and cannot confirm the requested time.`,
+      extra: [
+        'Your reservation is not confirmed.',
+        'If you purchased through Groupon, contact us at 803-542-1761 to discuss alternate dates or refund options through Groupon when applicable.',
+      ],
+      sms: `Launch Zone: Your Groupon request for ${ctx.date} ${ctx.start} could not be confirmed. Call 803-542-1761 to discuss options.`,
+    },
+    groupon_alternative_proposed: {
+      subject: 'Alternate time proposed for your Groupon booking request',
+      intro: `Hi ${ctx.name}, we reviewed your Groupon booking request and would like to offer a different departure time.`,
+      extra: [
+        `Proposed date: ${ctx.date}`,
+        `Proposed time: ${ctx.start} - ${ctx.end}`,
+        'Please contact us at 803-542-1761 to accept or decline this alternate time.',
+        'Your trip is not confirmed until you accept and we send final confirmation.',
+      ],
+      sms: `Launch Zone: Alternate Groupon time proposed — ${ctx.date} ${ctx.start}. Call 803-542-1761 to accept or decline. Not confirmed until you hear back.`,
     },
   };
 

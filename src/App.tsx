@@ -31,6 +31,7 @@ import AdminPromoCodes from './pages/AdminPromoCodes';
 import AdminGroupon from './pages/AdminGroupon';
 import AdminSupport from './pages/AdminSupport';
 import GrouponBook from './pages/GrouponBook';
+import GrouponRequestReceived from './pages/GrouponRequestReceived';
 import AdminCaptainsLog from './pages/AdminCaptainsLog';
 import AdminMoreTools from './pages/AdminMoreTools';
 import AdminBoats from './pages/AdminBoats';
@@ -110,6 +111,7 @@ function AppLayout() {
           <Route path="/boats" element={<Navigate to="/boat-rentals/daytona" replace />} />
           <Route path="/booking" element={<BookNow onNavigate={onNavigate} />} />
           <Route path="/booking/groupon" element={<GrouponBook />} />
+          <Route path="/booking/groupon/received" element={<GrouponRequestReceived onNavigate={onNavigate} />} />
           <Route path="/booking-received" element={<BookingReceived onNavigate={onNavigate} />} />
           <Route path="/booking-success" element={<BookingSuccess onNavigate={onNavigate} />} />
           <Route path="/success" element={<BookingSuccess onNavigate={onNavigate} />} />

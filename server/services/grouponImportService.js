@@ -203,6 +203,24 @@ async function recordVoucherEvent(supabase, { voucherId, eventType, actorType = 
   if (error) throw new Error(error.message || 'Could not record voucher event.');
 }
 
+function chunkArray(items, size) {
+  const chunks = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
+}
+
+async function mapWithConcurrency(items, concurrency, worker) {
+  const results = [];
+  for (let i = 0; i < items.length; i += concurrency) {
+    const slice = items.slice(i, i + concurrency);
+    const batch = await Promise.all(slice.map((item) => worker(item)));
+    results.push(...batch);
+  }
+  return results;
+}
+
 async function confirmImport({ supabase, batchId, previewRows, adminUserId }) {
   const counters = {
     inserted: 0,
@@ -213,6 +231,7 @@ async function confirmImport({ supabase, batchId, previewRows, adminUserId }) {
     unmapped: 0,
   };
   const errorRows = [];
+  const validRows = [];
 
   for (const row of previewRows) {
     if (!row.valid) {
@@ -225,17 +244,27 @@ async function confirmImport({ supabase, batchId, previewRows, adminUserId }) {
       counters.skipped += 1;
       continue;
     }
-
-    const incoming = voucherRecordFromImport(row.parsed, row.mapping || null, batchId);
+    validRows.push(row);
     if (!row.mapping) counters.unmapped += 1;
+  }
 
-    const { data: existing, error: lookupError } = await supabase
-      .from('groupon_vouchers')
-      .select('*')
-      .eq('voucher_hash', incoming.voucher_hash)
-      .maybeSingle();
-    if (lookupError) throw new Error(lookupError.message || 'Could not look up existing voucher.');
+  const existingByHash = new Map();
+  const hashes = validRows
+    .map((row) => row.voucherHash || (row.parsed?.data?.voucher_number ? hashVoucherNumber(row.parsed.data.voucher_number) : null))
+    .filter(Boolean);
 
+  for (const hashChunk of chunkArray(hashes, 100)) {
+    const { data, error } = await supabase.from('groupon_vouchers').select('*').in('voucher_hash', hashChunk);
+    if (error) throw new Error(error.message || 'Could not look up existing vouchers.');
+    for (const row of data || []) existingByHash.set(row.voucher_hash, row);
+  }
+
+  const inserts = [];
+  const updates = [];
+
+  for (const row of validRows) {
+    const incoming = voucherRecordFromImport(row.parsed, row.mapping || null, batchId);
+    const existing = existingByHash.get(incoming.voucher_hash);
     if (!existing) {
       const reviewFlags = deriveReviewFlags(null, incoming, row.mapping || null);
       const localStatus =
@@ -244,25 +273,13 @@ async function confirmImport({ supabase, batchId, previewRows, adminUserId }) {
           : incoming.expires_at && new Date(incoming.expires_at).getTime() < Date.now()
             ? 'expired'
             : 'available';
-
-      const { data: inserted, error: insertError } = await supabase
-        .from('groupon_vouchers')
-        .insert({
+      inserts.push({
+        row,
+        record: {
           ...incoming,
           local_status: localStatus,
           review_flags: reviewFlags,
-        })
-        .select('id')
-        .single();
-      if (insertError) throw new Error(insertError.message || 'Could not insert voucher.');
-      counters.inserted += 1;
-      await recordVoucherEvent(supabase, {
-        voucherId: inserted.id,
-        eventType: 'imported',
-        actorType: 'admin',
-        actorId: adminUserId,
-        message: 'Voucher imported from Groupon CSV.',
-        payload: { batchId, rowNumber: row.rowNumber },
+        },
       });
       continue;
     }
@@ -288,12 +305,9 @@ async function confirmImport({ supabase, batchId, previewRows, adminUserId }) {
       sell_price_cents: incoming.sell_price_cents,
       last_import_batch_id: batchId,
     };
-
     if (incoming.merchant_reference_id) update.merchant_reference_id = incoming.merchant_reference_id;
     if (row.mapping && !existing.mapping_id) update.mapping_id = row.mapping.id;
-
-    const reviewFlags = deriveReviewFlags(existing, { ...existing, ...update }, row.mapping || null);
-    update.review_flags = reviewFlags;
+    update.review_flags = deriveReviewFlags(existing, { ...existing, ...update }, row.mapping || null);
 
     const changed = sourceFieldsChanged(existing, update);
     if (!changed && existing.mapping_id) {
@@ -301,22 +315,56 @@ async function confirmImport({ supabase, batchId, previewRows, adminUserId }) {
       continue;
     }
 
-    const { data: updated, error: updateError } = await supabase
+    updates.push({ row, existing, update });
+  }
+
+  const eventRows = [];
+
+  for (const chunk of chunkArray(inserts, 50)) {
+    const { data, error } = await supabase
+      .from('groupon_vouchers')
+      .insert(chunk.map((item) => item.record))
+      .select('id, voucher_hash');
+    if (error) throw new Error(error.message || 'Could not insert vouchers.');
+    counters.inserted += (data || []).length;
+    for (const inserted of data || []) {
+      const source = chunk.find((item) => item.record.voucher_hash === inserted.voucher_hash);
+      if (!source) continue;
+      eventRows.push({
+        voucher_id: inserted.id,
+        event_type: 'imported',
+        actor_type: 'admin',
+        actor_id: adminUserId,
+        message: 'Voucher imported from Groupon CSV.',
+        payload: { batchId, rowNumber: source.row.rowNumber },
+      });
+    }
+  }
+
+  await mapWithConcurrency(updates, 10, async ({ row, existing, update }) => {
+    const { data: updated, error } = await supabase
       .from('groupon_vouchers')
       .update(update)
       .eq('id', existing.id)
       .select('id')
-      .single();
-    if (updateError) throw new Error(updateError.message || 'Could not update voucher.');
-    counters.updated += 1;
-    await recordVoucherEvent(supabase, {
-      voucherId: updated.id,
-      eventType: 'import_reconciled',
-      actorType: 'admin',
-      actorId: adminUserId,
-      message: 'Voucher updated from repeat Groupon CSV import.',
-      payload: { batchId, rowNumber: row.rowNumber, reviewFlags },
-    });
+      .maybeSingle();
+    if (error) throw new Error(error.message || 'Could not update voucher.');
+    if (updated?.id) {
+      counters.updated += 1;
+      eventRows.push({
+        voucher_id: updated.id,
+        event_type: 'import_reconciled',
+        actor_type: 'admin',
+        actor_id: adminUserId,
+        message: 'Voucher updated from repeat Groupon CSV import.',
+        payload: { batchId, rowNumber: row.rowNumber, reviewFlags: update.review_flags },
+      });
+    }
+  });
+
+  for (const chunk of chunkArray(eventRows, 100)) {
+    const { error } = await supabase.from('groupon_voucher_events').insert(chunk);
+    if (error) throw new Error(error.message || 'Could not record voucher import events.');
   }
 
   const summary = {

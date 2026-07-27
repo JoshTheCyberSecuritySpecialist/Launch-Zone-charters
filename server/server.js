@@ -5448,7 +5448,9 @@ app.post('/api/admin/groupon-imports/preview', async (req, res) => {
       importBatch: batch,
       headers: preview.headers,
       summary: preview.summary,
-      rows: storableRows.map(({ parsed: _parsed, voucherHash: _hash, ...rest }) => rest),
+      rows: storableRows.slice(0, 50).map(({ parsed: _parsed, voucherHash: _hash, ...rest }) => rest),
+      rowsReturned: Math.min(storableRows.length, 50),
+      totalRows: storableRows.length,
     });
   } catch (err) {
     console.error('[admin-groupon-imports:preview]', err);

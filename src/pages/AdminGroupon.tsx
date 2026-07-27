@@ -138,7 +138,7 @@ export default function AdminGroupon() {
   }, []);
 
   const apiRequest = useCallback(
-    async <T = Record<string, unknown>>(path: string, init: RequestInit = {}): Promise<T> => {
+    async <T = Record<string, unknown>>(path: string, init: RequestInit = {}, timeoutMs = 180000): Promise<T> => {
       if (!env.apiUrlConfigured || !env.apiUrl) {
         throw new Error('API server URL is not configured (set VITE_API_URL).');
       }
@@ -155,7 +155,7 @@ export default function AdminGroupon() {
             ...(init.headers || {}),
           },
         },
-        60000
+        timeoutMs
       );
     },
     [getAdminToken]
@@ -211,49 +211,33 @@ export default function AdminGroupon() {
     ];
   }, [previewSummary]);
 
-  async function handlePreview() {
-    if (!selectedFile) {
-      setNotice({ variant: 'error', text: 'Choose a Groupon CSV export first.' });
-      return;
-    }
-    setBusy(true);
-    setNotice(null);
-    try {
-      const csvText = await selectedFile.text();
-      const payload = await apiRequest<{
-        importBatch: ImportBatch;
-        summary: ImportSummary;
-        rows: PreviewRow[];
-        headers: string[];
-      }>('/api/admin/groupon-imports/preview', {
-        method: 'POST',
-        body: JSON.stringify({ csvText, filename: selectedFile.name }),
-      });
-      setPreviewBatchId(payload.importBatch.id);
-      setPreviewSummary(payload.summary);
-      setPreviewRows(payload.rows || []);
-      setPreviewHeaders(payload.headers || []);
-      setNotice({ variant: 'success', text: 'Import preview ready. Review rows, then confirm import.' });
-      await loadImports();
-    } catch (err) {
-      setNotice({
-        variant: 'error',
-        text: err instanceof Error ? err.message : 'Could not preview Groupon import.',
-      });
-    } finally {
-      setBusy(false);
-    }
+  async function recoverPendingPreviewBatch(filename?: string | null) {
+    const payload = await apiRequest<{ imports: ImportBatch[] }>('/api/admin/groupon-imports');
+    const pending = (payload.imports || []).find(
+      (row) =>
+        row.status === 'preview' &&
+        (!filename || row.filename === filename)
+    );
+    if (!pending?.id) return null;
+    setPreviewBatchId(pending.id);
+    const detail = await apiRequest<{ importBatch: ImportBatch & { summary?: { previewSummary?: ImportSummary } } }>(
+      `/api/admin/groupon-imports/${pending.id}`
+    );
+    const summary = detail.importBatch?.summary?.previewSummary;
+    if (summary) setPreviewSummary(summary);
+    return pending.id;
   }
 
-  async function handleConfirmImport() {
-    if (!previewBatchId) return;
+  async function handleConfirmImport(batchId = previewBatchId) {
+    if (!batchId) return;
     if (!window.confirm('Import these Groupon vouchers into production records?')) return;
     setBusy(true);
     setNotice(null);
     try {
       const payload = await apiRequest<{ summary: Record<string, number> }>(
-        `/api/admin/groupon-imports/${previewBatchId}/confirm`,
-        { method: 'POST', body: JSON.stringify({}) }
+        `/api/admin/groupon-imports/${batchId}/confirm`,
+        { method: 'POST', body: JSON.stringify({}) },
+        300000
       );
       setNotice({
         variant: 'success',
@@ -270,6 +254,68 @@ export default function AdminGroupon() {
         variant: 'error',
         text: err instanceof Error ? err.message : 'Could not confirm Groupon import.',
       });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handlePreview() {
+    if (!selectedFile) {
+      setNotice({ variant: 'error', text: 'Choose a Groupon CSV export first.' });
+      return;
+    }
+    setBusy(true);
+    setNotice(null);
+    try {
+      const csvText = await selectedFile.text();
+      const payload = await apiRequest<{
+        importBatch: ImportBatch;
+        summary: ImportSummary;
+        rows: PreviewRow[];
+        headers: string[];
+        rowsReturned?: number;
+        totalRows?: number;
+      }>(
+        '/api/admin/groupon-imports/preview',
+        {
+          method: 'POST',
+          body: JSON.stringify({ csvText, filename: selectedFile.name }),
+        },
+        180000
+      );
+      setPreviewBatchId(payload.importBatch.id);
+      setPreviewSummary(payload.summary);
+      setPreviewRows(payload.rows || []);
+      setPreviewHeaders(payload.headers || []);
+      const truncated =
+        typeof payload.totalRows === 'number' &&
+        typeof payload.rowsReturned === 'number' &&
+        payload.totalRows > payload.rowsReturned;
+      setNotice({
+        variant: 'success',
+        text: truncated
+          ? `Import preview ready (${payload.rowsReturned} of ${payload.totalRows} rows shown). Confirm import when ready.`
+          : 'Import preview ready. Review rows, then confirm import.',
+      });
+      await loadImports();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Could not preview Groupon import.';
+      if (/timed out/i.test(message)) {
+        try {
+          const recoveredId = await recoverPendingPreviewBatch(selectedFile.name);
+          if (recoveredId) {
+            setNotice({
+              variant: 'success',
+              text: 'Preview took longer than expected, but the server saved it. You can confirm import now.',
+            });
+            await loadImports();
+            return;
+          }
+        } catch {
+          // fall through to original error
+        }
+      }
+      setNotice({ variant: 'error', text: message });
     } finally {
       setBusy(false);
     }
@@ -357,11 +403,16 @@ export default function AdminGroupon() {
                 Preview import
               </button>
               {previewBatchId ? (
-                <button type="button" className={buttonSecondary} disabled={busy} onClick={() => void handleConfirmImport()}>
+                <button type="button" className={buttonPrimary} disabled={busy} onClick={() => void handleConfirmImport()}>
                   Confirm import
                 </button>
               ) : null}
             </div>
+            {previewBatchId ? (
+              <p className="mt-3 text-sm font-semibold text-emerald-800">
+                Preview batch ready. Confirm import to write vouchers to the database.
+              </p>
+            ) : null}
           </section>
 
           {previewStats ? (
@@ -475,22 +526,37 @@ export default function AdminGroupon() {
                               +{row.inserted_count} / ~{row.updated_count} / skip {row.skipped_count}
                             </td>
                             <td className="px-4 py-3">
-                              {row.error_count > 0 ? (
-                                <button
-                                  type="button"
-                                  className="font-semibold text-amber-800 underline"
-                                  onClick={() =>
-                                    void downloadErrorReport(row.id).catch(() =>
-                                      setNotice({ variant: 'error', text: 'Could not download error report.' })
-                                    )
-                                  }
-                                >
-                                  <Download className="mr-1 inline h-4 w-4" />
-                                  Errors
-                                </button>
-                              ) : (
-                                '—'
-                              )}
+                              <div className="flex flex-wrap gap-2">
+                                {row.status === 'preview' ? (
+                                  <button
+                                    type="button"
+                                    className="font-semibold text-emerald-800 underline"
+                                    disabled={busy}
+                                    onClick={() => {
+                                      setPreviewBatchId(row.id);
+                                      void handleConfirmImport(row.id);
+                                    }}
+                                  >
+                                    Confirm import
+                                  </button>
+                                ) : null}
+                                {row.error_count > 0 ? (
+                                  <button
+                                    type="button"
+                                    className="font-semibold text-amber-800 underline"
+                                    onClick={() =>
+                                      void downloadErrorReport(row.id).catch(() =>
+                                        setNotice({ variant: 'error', text: 'Could not download error report.' })
+                                      )
+                                    }
+                                  >
+                                    <Download className="mr-1 inline h-4 w-4" />
+                                    Errors
+                                  </button>
+                                ) : row.status === 'preview' ? null : (
+                                  '—'
+                                )}
+                              </div>
                             </td>
                           </tr>
                         ))}

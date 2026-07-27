@@ -46,6 +46,12 @@ export default function Footer({ onNavigate }: FooterProps) {
                   {label}
                 </button>
               ))}
+              <Link
+                to="/booking/groupon"
+                className="text-slate-400 transition-colors hover:text-amber-400"
+              >
+                Groupon
+              </Link>
             </nav>
           </div>
 
@@ -60,6 +66,11 @@ export default function Footer({ onNavigate }: FooterProps) {
                 >
                   Book Now
                 </button>
+              </li>
+              <li>
+                <Link to="/booking/groupon" className="transition-colors hover:text-amber-400">
+                  Redeem Groupon voucher
+                </Link>
               </li>
               <li>
                 <button

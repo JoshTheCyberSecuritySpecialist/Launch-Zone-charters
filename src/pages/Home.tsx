@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Helmet } from 'react-helmet-async';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { Anchor, Award, Calendar, Clock, Loader2, Shield, Star, Volume2, VolumeX } from 'lucide-react';
 import SmartImage from '../components/ui/SmartImage';
 import LaunchCountdown from '../components/LaunchCountdown';
@@ -284,6 +284,15 @@ export default function Home({ onNavigate }: HomeProps) {
                   See launch dates
                 </button>
               </div>
+              <p className="mt-4 text-sm text-cyan-100/90">
+                Have a Groupon voucher?{' '}
+                <Link
+                  to="/booking/groupon"
+                  className="font-semibold text-cyan-200 underline underline-offset-2"
+                >
+                  Book with Groupon
+                </Link>
+              </p>
             </div>
           </div>
         </div>

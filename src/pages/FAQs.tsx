@@ -55,6 +55,11 @@ const FAQ_GROUPS: FAQGroup[] = [
         answer:
           'We send email and SMS confirmations upon booking. You can also opt in to receive SMS alerts about rocket launches, weather updates, and other important notifications. All communication includes relevant details and contact information.',
       },
+      {
+        question: 'How do I redeem my Groupon voucher?',
+        answer:
+          'Book online at launchzonecharters.com/booking/groupon. Enter your Groupon voucher number and the last name on the voucher, then choose your date and time. Groupon voucher bookings are confirmed with $0 due today — no Stripe deposit. Do not use a promo code on the regular Book Now checkout; Groupon vouchers must be redeemed on the Groupon booking page.',
+      },
     ],
   },
   {

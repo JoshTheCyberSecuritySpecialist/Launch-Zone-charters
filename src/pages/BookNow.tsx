@@ -1713,6 +1713,19 @@ export default function BookNow({ onNavigate }: BookNowProps) {
             </p>
           </div>
 
+          <div className="lz-card-glass mb-6 rounded-[var(--lz-radius-card)] border border-cyan-400/25 bg-cyan-950/30 px-4 py-3 text-sm text-cyan-50">
+            <p>
+              Have a Groupon voucher?{' '}
+              <Link
+                to="/booking/groupon"
+                className="font-semibold text-cyan-200 underline underline-offset-2"
+              >
+                Book with Groupon
+              </Link>{' '}
+              — enter your voucher number and last name. No deposit required.
+            </p>
+          </div>
+
           {step > 0 && (
             <BookingFlowStepIndicator
               currentStep={step as 1 | 2 | 3}
@@ -2849,14 +2862,6 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                       </div>
                     </div>
                   )}
-
-                {bookingMode === 'rental' && (
-                  <div className="mb-4 rounded-[var(--lz-radius)] border border-cyan-400/25 bg-cyan-950/30 px-4 py-3 text-sm text-cyan-50">
-                    <p>
-                      Seen us on Groupon? Book direct and use your code at checkout for the same deal.
-                    </p>
-                  </div>
-                )}
 
                 <div className="mb-6 rounded-[var(--lz-radius)] border border-cyan-400/20 bg-slate-950/80 p-6 text-slate-100 shadow-[0_0_28px_rgba(0,207,255,0.08)]">
                   <h3 className="mb-4 text-lg font-bold uppercase tracking-wide text-white">Booking summary</h3>

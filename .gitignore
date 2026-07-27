@@ -29,3 +29,10 @@ server/.venv/
 
 # Supabase CLI linked project (after `npx supabase link`)
 .supabase/
+
+# Groupon production exports and private working copies (never commit live voucher data)
+docs/private/
+groupon-exports/
+VOUCHER_LIST_*.csv
+*groupon*production*.csv
+*groupon*export*.csv

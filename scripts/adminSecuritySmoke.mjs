@@ -32,6 +32,10 @@ const ADMIN_AUTH_GATED_ROUTES = [
   "app.get('/api/admin/pre-trip-submissions/:id/waiver-pdf'",
   "app.patch('/api/admin/pre-trip-submissions/:id'",
   "app.get('/api/admin/pre-trip-submissions/:id/suggestions'",
+  "app.get('/api/admin/groupon-deal-mappings'",
+  "app.post('/api/admin/groupon-imports/preview'",
+  "app.post('/api/admin/groupon-imports/:id/confirm'",
+  "app.get('/api/admin/groupon-vouchers'",
 ];
 
 /** Document proxy must resolve paths from DB — never accept raw storage paths from client. */

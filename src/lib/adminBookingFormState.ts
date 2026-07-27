@@ -29,6 +29,8 @@ export type AdminBookingFormState = {
   paymentStatus: string;
   promoCode: string;
   internalNotes: string;
+  captainId: string;
+  emergencyContactNotes: string;
   status: string;
   licenseStatus: string;
   insuranceStatus: string;
@@ -85,6 +87,8 @@ export function bookingToFormState(booking: Record<string, unknown>): AdminBooki
     paymentStatus: String(booking.payment_status || 'pending'),
     promoCode: String(booking.promo_code || ''),
     internalNotes: String(booking.staff_notes || booking.admin_notes || ''),
+    captainId: String(booking.captain_id || ''),
+    emergencyContactNotes: String(booking.emergency_contact_notes || ''),
     status: String(booking.status || 'pending'),
     licenseStatus: String(booking.license_status || 'pending'),
     insuranceStatus: String(booking.insurance_status || 'pending'),
@@ -131,6 +135,10 @@ export function buildPatchBody(form: AdminBookingFormState) {
       promo_code: form.promoCode,
       staff_notes: form.internalNotes,
       internal_notes: form.customerNotes,
+      captainId: form.captainId || null,
+      captain_id: form.captainId || null,
+      emergency_contact_notes: form.emergencyContactNotes,
+      emergencyContactNotes: form.emergencyContactNotes,
       status: form.status,
       license_status: form.licenseStatus,
       insurance_status: form.insuranceStatus,
@@ -156,6 +164,8 @@ export function scheduleChangedFromBooking(form: AdminBookingFormState, booking:
   if (storedEndMs != null && Math.abs(nextEndMs - storedEndMs) > minuteMs) return true;
   if (form.bookingType === 'captain_charter' && booking.booking_type !== 'charter') return true;
   if (form.bookingType === 'rental' && booking.booking_type === 'charter') return true;
+  if (form.captainId !== String(booking.captain_id || '')) return true;
+  if (form.emergencyContactNotes !== String(booking.emergency_contact_notes || '')) return true;
   return false;
 }
 

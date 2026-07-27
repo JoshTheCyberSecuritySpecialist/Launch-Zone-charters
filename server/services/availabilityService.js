@@ -15,6 +15,7 @@ const {
 const {
   evaluateSharedCharterCapacity,
 } = require('../lib/sharedCharterCapacity');
+const boatCapacityService = require('./boatCapacityService');
 
 const BUSINESS_TZ = String(process.env.BUSINESS_TIMEZONE || 'America/New_York').trim();
 const DEFAULT_OPEN_HOUR = Number(process.env.AVAILABILITY_OPEN_HOUR || 7);
@@ -31,6 +32,11 @@ const BIO_CHARTER_TIME_MESSAGE =
 const NON_BIO_LATE_NIGHT_MESSAGE =
   'Late-night times are only available for bioluminescence night tours.';
 
+const SLOT_TAKEN_USER_MESSAGE =
+  'This time slot was just booked. Please select another time.';
+const SLOT_TOO_SOON_USER_MESSAGE =
+  'This departure is too soon. Please choose a later time or call us for help.';
+
 const BLOCKING_BOOKING_STATUSES = new Set([
   'hold',
   'pending',
@@ -40,8 +46,48 @@ const BLOCKING_BOOKING_STATUSES = new Set([
   'completed',
 ]);
 
-const SLOT_TAKEN_USER_MESSAGE =
-  'This time slot was just booked. Please select another time.';
+function normalizeSlotRows(slots) {
+  return (slots || []).map((slot) => ({
+    startIso: slot.startIso || slot.start,
+    endIso: slot.endIso || slot.end,
+    label: slot.label,
+    startHHMM: slot.startHHMM,
+    available: slot.available !== false,
+  }));
+}
+
+function rentalTripTypeForLocation(location) {
+  const loc = String(location || 'port-orange').trim().toLowerCase();
+  return loc === 'titusville' ? 'center_console_rental' : 'pontoon_rental';
+}
+
+async function resolveRentalBoatForLocation(location) {
+  const tripType = rentalTripTypeForLocation(location);
+  return boatCapacityService.resolveBoatIdForTripType(supabase, tripType);
+}
+
+async function listRentalSlotsForLocation(location, dateStr, durationHours, openHour, closeHour, stepMinutes) {
+  const boatId = await resolveRentalBoatForLocation(location);
+  if (!boatId) {
+    return { boatId: null, location: location || 'port-orange', slots: [] };
+  }
+  const rawSlots = await listSlotsForDay(boatId, dateStr, durationHours, openHour, closeHour, stepMinutes);
+  return {
+    boatId,
+    location: location || 'port-orange',
+    slots: normalizeSlotRows(rawSlots),
+  };
+}
+
+function leadTimeUnavailableResult(location = null) {
+  return {
+    available: false,
+    reason: 'lead_time',
+    conflict: null,
+    message: SLOT_TOO_SOON_USER_MESSAGE,
+    location,
+  };
+}
 
 function bookingRowBlocksSlot(row) {
   if (!row || !BLOCKING_BOOKING_STATUSES.has(String(row.status || ''))) {
@@ -360,6 +406,9 @@ async function checkBookingSlotAvailability({
   }
 
   const slot = parseSlotRange(startTime, endTime);
+  if (!isStartTimeAllowed(slot.startIso)) {
+    return leadTimeUnavailableResult(location);
+  }
   const [bookings, blockedDates, adminBlocks] = await Promise.all([
     fetchBlockingBookings(boat, slot.startIso, slot.endIso),
     fetchBlockedDateRanges(boat, slot.startIso, slot.endIso),
@@ -409,8 +458,8 @@ async function assertBookingSlotAvailable(input) {
   const result = await checkBookingSlotAvailability(input);
   if (result.available) return result;
 
-  const err = new Error(SLOT_TAKEN_USER_MESSAGE);
-  err.statusCode = 409;
+  const err = new Error(result.message || SLOT_TAKEN_USER_MESSAGE);
+  err.statusCode = result.reason === 'lead_time' ? 409 : 409;
   err.code = result.reason || 'slot_unavailable';
   err.availability = result;
   throw err;
@@ -570,6 +619,14 @@ async function checkCharterSlotAvailability({
       message: windowCheck.message,
     };
   }
+  if (!isStartTimeAllowed(slot.startIso)) {
+    return {
+      available: false,
+      reason: 'lead_time',
+      conflict: null,
+      message: SLOT_TOO_SOON_USER_MESSAGE,
+    };
+  }
 
   const [bookings, externalBlocks] = await Promise.all([
     fetchBlockingCharters(slot.startIso, slot.endIso),
@@ -653,10 +710,11 @@ async function listCharterSlotsForDay(dateStr, charterType) {
         end: endDt.toUTC().toISO(),
         label: startDt.setZone(BUSINESS_TZ).toFormat('h:mm a'),
         startHHMM: startDt.setZone(BUSINESS_TZ).toFormat('HH:mm'),
+        available: true,
       });
     }
   }
-  return out;
+  return normalizeSlotRows(out);
 }
 
 async function listCharterDatesAvailability(fromDateStr, toDateStr, charterType) {
@@ -786,10 +844,11 @@ async function listSlotsForDay(boatId, dateStr, durationHours, openHour, closeHo
         end: endDt.toUTC().toISO(),
         label: startDt.setZone(BUSINESS_TZ).toFormat('h:mm a'),
         startHHMM: startDt.setZone(BUSINESS_TZ).toFormat('HH:mm'),
+        available: true,
       });
     }
   }
-  return out;
+  return normalizeSlotRows(out);
 }
 
 async function fetchActiveBoatIds() {
@@ -866,7 +925,13 @@ module.exports = {
   CAPTAIN_NIGHT_START_HOUR,
   CAPTAIN_NIGHT_END_HOUR,
   BLOCKING_BOOKING_STATUSES,
+  SLOT_TAKEN_USER_MESSAGE,
+  SLOT_TOO_SOON_USER_MESSAGE,
   defaultFromTo,
+  normalizeSlotRows,
+  resolveRentalBoatForLocation,
+  listRentalSlotsForLocation,
+  rentalTripTypeForLocation,
   assertCharterSlotAvailable,
   assertCharterSlotWindow,
   assertBookingSlotAvailable,

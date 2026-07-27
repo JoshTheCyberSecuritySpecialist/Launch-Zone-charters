@@ -10,6 +10,7 @@ import StatusBadge from '../components/admin/StatusBadge';
 import { humanizeLabel } from '../components/admin/adminDisplay';
 import { env } from '../config/env.js';
 import { adminCharterCapacityLines, isCaptainLedCharter } from '../lib/charterCapacity';
+import { fetchActiveCaptains, type AdminCaptainListItem } from '../lib/adminCaptains';
 
 type CalendarView = 'day' | 'week' | 'month';
 
@@ -22,6 +23,8 @@ type CalendarBooking = {
   customer_email?: string | null;
   boat_id: string | null;
   boat_name: string;
+  captain_id?: string | null;
+  captain_name?: string | null;
   start_time: string;
   end_time: string;
   duration_hours: number | string | null;
@@ -242,9 +245,22 @@ function cardClass(booking: CalendarBooking) {
   if (booking.status === 'cancelled') return 'border-red-200 bg-red-100 text-red-950';
   if (booking.status === 'completed') return 'border-slate-200 bg-slate-200 text-slate-800';
   if (booking.status === 'hold') return 'border-orange-200 bg-orange-100 text-orange-950';
+  if (
+    isCaptainLedCharter(booking) &&
+    !booking.captain_id &&
+    ['confirmed', 'ready_for_departure'].includes(booking.status)
+  ) {
+    return 'border-amber-400 bg-amber-100 text-amber-950 ring-1 ring-amber-300';
+  }
   if (booking.booking_type === 'charter') return 'border-purple-200 bg-purple-100 text-purple-950';
   if (booking.staff_created || booking.booking_source === 'admin') return 'border-green-200 bg-green-100 text-green-950';
   return 'border-blue-200 bg-blue-100 text-blue-950';
+}
+
+function captainAssignmentLine(booking: CalendarBooking) {
+  if (!isCaptainLedCharter(booking)) return null;
+  if (booking.captain_name) return `Captain: ${booking.captain_name}`;
+  return 'Captain: Unassigned';
 }
 
 function sourceLabel(booking: CalendarBooking) {
@@ -303,6 +319,7 @@ export default function AdminCalendar() {
   );
   const [anchor, setAnchor] = useState(() => new Date());
   const [boats, setBoats] = useState<BoatRow[]>([]);
+  const [captains, setCaptains] = useState<AdminCaptainListItem[]>([]);
   const [bookings, setBookings] = useState<CalendarBooking[]>([]);
   const [blockedDates, setBlockedDates] = useState<BlockedDate[]>([]);
   const [calendarItems, setCalendarItems] = useState<CalendarItem[]>([]);
@@ -327,6 +344,8 @@ export default function AdminCalendar() {
     status: '',
     source: '',
     search: '',
+    captainId: '',
+    unassignedCaptain: false,
     showBookings: true,
     showHolds: true,
     showBlocks: true,
@@ -364,6 +383,9 @@ export default function AdminCalendar() {
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error('Could not load boats.'))))
       .then((payload: { boats?: BoatRow[] }) => setBoats(Array.isArray(payload.boats) ? payload.boats : []))
       .catch((err) => setNotice(err instanceof Error ? err.message : 'Could not load boats.'));
+    void fetchActiveCaptains()
+      .then(setCaptains)
+      .catch(() => setCaptains([]));
   }, [isAdmin]);
 
   const loadBookings = useCallback(async () => {
@@ -381,6 +403,8 @@ export default function AdminCalendar() {
       if (filters.status) params.set('status', filters.status);
       if (filters.source) params.set('source', filters.source);
       if (filters.search.trim()) params.set('search', filters.search.trim());
+      if (filters.captainId) params.set('captainId', filters.captainId);
+      if (filters.unassignedCaptain) params.set('unassigned', '1');
       const itemParams = new URLSearchParams({
         from: range.from.toISOString(),
         to: range.to.toISOString(),
@@ -974,6 +998,7 @@ export default function AdminCalendar() {
       {!compact ? (
         <>
           <div>{booking.boat_name}</div>
+          <div>{captainAssignmentLine(booking)}</div>
           <div>{booking.rental_location || '-'}</div>
           <div>{timeLabel(booking.start_time, booking.end_time)}</div>
           <div>{durationHours(booking.start_time, booking.end_time)} hr · {booking.status.replace(/_/g, ' ')}</div>
@@ -1231,7 +1256,13 @@ export default function AdminCalendar() {
                 <option value="staff">Staff</option>
                 <option value="admin">Admin</option>
               </select>
-              <input value={filters.search} onChange={(e) => setFilters((f) => ({ ...f, search: e.target.value }))} placeholder="Search customer, phone, email, ID" className="rounded-lg border px-3 py-2" />
+              <select value={filters.captainId} onChange={(e) => setFilters((f) => ({ ...f, captainId: e.target.value, unassignedCaptain: false }))} className="rounded-lg border px-3 py-2">
+                <option value="">All captains</option>
+                {captains.map((captain) => (
+                  <option key={captain.id} value={captain.id}>{captain.full_name}</option>
+                ))}
+              </select>
+              <input value={filters.search} onChange={(e) => setFilters((f) => ({ ...f, search: e.target.value }))} placeholder="Search customer, phone, email, ID" className="rounded-lg border px-3 py-2 md:col-span-2" />
             </div>
           </div>
           <div className="mt-4 flex flex-wrap gap-3 border-t border-slate-200 pt-4">
@@ -1241,12 +1272,19 @@ export default function AdminCalendar() {
               ['showBlocks', 'Blocks'],
               ['showDuties', 'Duties'],
               ['showCompletedDuties', 'Completed duties'],
+              ['unassignedCaptain', 'Unassigned captain charters'],
             ].map(([key, label]) => (
               <label key={key} className="inline-flex items-center gap-2 rounded-lg bg-slate-100 px-4 py-3 text-base font-bold text-slate-900">
                 <input
                   type="checkbox"
                   checked={Boolean(filters[key as keyof typeof filters])}
-                  onChange={(event) => setFilters((prev) => ({ ...prev, [key]: event.target.checked }))}
+                  onChange={(event) =>
+                    setFilters((prev) => ({
+                      ...prev,
+                      [key]: event.target.checked,
+                      ...(key === 'unassignedCaptain' && event.target.checked ? { captainId: '' } : {}),
+                    }))
+                  }
                   className="h-5 w-5"
                 />
                 {label}
@@ -1487,6 +1525,10 @@ export default function AdminCalendar() {
                         <div className="font-black">{timeLabel(booking.start_time, booking.end_time)}</div>
                         <div>{booking.customer_name}</div>
                         <div>{booking.boat_name}</div>
+                        {(() => {
+                          const captainLine = captainAssignmentLine(booking);
+                          return captainLine ? <div>{captainLine}</div> : null;
+                        })()}
                         {charterCapacityBlock(booking, true)}
                       </button>
                     ))

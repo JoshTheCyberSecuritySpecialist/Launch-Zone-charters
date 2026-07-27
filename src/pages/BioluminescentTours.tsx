@@ -275,6 +275,12 @@ export default function BioluminescentTours({ onNavigate }: BioluminescentToursP
             >
               Book below. Live glow check and weekly outlook on this page.
             </p>
+            <p className="mt-3 text-sm text-cyan-100/90">
+              Have a Groupon voucher?{' '}
+              <Link to="/booking/groupon" className="font-semibold text-cyan-200 underline underline-offset-2">
+                Book with Groupon
+              </Link>
+            </p>
             <div className="mt-6 flex flex-col items-center gap-4 md:mt-7 md:gap-5">
               <div className="max-w-xl space-y-2">
                 <p className="text-pretty text-sm font-semibold leading-relaxed text-slate-200/95 sm:text-base">

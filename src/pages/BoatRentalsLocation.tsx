@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { wrapNavigateClick, wrapSyncClick } from '../lib/clickPerf';
 import { Helmet } from 'react-helmet-async';
 import type { LucideIcon } from 'lucide-react';
@@ -382,6 +383,18 @@ function BoatRentalsHeroContent({
       <p
         className={`lz-hero-fade lz-hero-fade--delay-3 mt-4 max-w-xl text-sm text-white/70 ${isDaytona ? '' : 'mx-auto text-center'}`}
       >
+        {isDaytona ? (
+          <>
+            Have a Groupon pontoon voucher?{' '}
+            <Link
+              to="/booking/groupon"
+              className="font-semibold text-cyan-300/95 underline decoration-cyan-500/35 underline-offset-[5px] transition hover:text-cyan-200"
+            >
+              Book with Groupon
+            </Link>
+            {' · '}
+          </>
+        ) : null}
         Need dates before you commit?{' '}
         <button
           type="button"

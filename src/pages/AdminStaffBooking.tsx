@@ -25,6 +25,7 @@ import {
   CAPTAIN_NIGHT_SCHEDULE_NOTE,
   previewCaptainCharterWindow,
 } from '../lib/captainNightWindow';
+import { fetchActiveCaptains, type AdminCaptainListItem } from '../lib/adminCaptains';
 
 type BookingType = 'rental' | 'captain_charter';
 type LocationValue = 'Port Orange' | 'Titusville';
@@ -111,6 +112,8 @@ const blankForm = () => {
     paymentMethod: '' as PaymentMethod,
     bookingSource: 'admin',
     staffNotes: '',
+    captainId: '',
+    emergencyContactNotes: '',
   };
 };
 
@@ -152,6 +155,7 @@ export default function AdminStaffBooking() {
   const [form, setForm] = useState(blankForm);
   const [boats, setBoats] = useState<BoatRow[]>([]);
   const [boatsLoading, setBoatsLoading] = useState(true);
+  const [captains, setCaptains] = useState<AdminCaptainListItem[]>([]);
   const [availability, setAvailability] = useState<AvailabilityState>({
     status: 'idle',
     message: 'Select a boat, date, time, and duration.',
@@ -298,6 +302,13 @@ export default function AdminStaffBooking() {
       setTodayLoading(false);
     }
   }, [authedFetch, isAdmin]);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    void fetchActiveCaptains()
+      .then(setCaptains)
+      .catch(() => setCaptains([]));
+  }, [isAdmin]);
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -552,6 +563,9 @@ export default function AdminStaffBooking() {
           payment_method: form.paymentMethod || null,
           booking_source: form.bookingSource,
           staff_notes: form.staffNotes,
+          captain_id: form.bookingType === 'captain_charter' && form.captainId ? form.captainId : null,
+          emergency_contact_notes:
+            form.bookingType === 'captain_charter' ? form.emergencyContactNotes : null,
         }),
       });
       const payload = (await res.json().catch(() => ({}))) as {
@@ -742,6 +756,7 @@ export default function AdminStaffBooking() {
                     setForm((p) => ({
                       ...p,
                       bookingType: nextType,
+                      captainId: nextType === 'rental' ? '' : p.captainId,
                       ...durationFieldsForNewBookingType(nextType),
                     }));
                   }}
@@ -848,6 +863,34 @@ export default function AdminStaffBooking() {
                     1–{CHARTER_MAX_PASSENGERS} passengers (plus captain).
                   </span>
                 </label>
+              ) : null}
+              {form.bookingType === 'captain_charter' ? (
+                <>
+                  <label className={labelClass}>
+                    Assigned captain
+                    <select
+                      className={inputClass}
+                      value={form.captainId}
+                      onChange={(e) => setForm((p) => ({ ...p, captainId: e.target.value }))}
+                    >
+                      <option value="">Unassigned</option>
+                      {captains.map((captain) => (
+                        <option key={captain.id} value={captain.id}>
+                          {captain.full_name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className={`${labelClass} sm:col-span-2`}>
+                    Emergency contact notes
+                    <textarea
+                      className={`${inputClass} min-h-[90px]`}
+                      placeholder="Dedicated emergency contact — not the customer phone"
+                      value={form.emergencyContactNotes}
+                      onChange={(e) => setForm((p) => ({ ...p, emergencyContactNotes: e.target.value }))}
+                    />
+                  </label>
+                </>
               ) : null}
               <label className={labelClass}>
                 Original Price

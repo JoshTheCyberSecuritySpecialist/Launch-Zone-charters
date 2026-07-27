@@ -53,6 +53,13 @@ const {
   normalizePromoCode,
   validatePromoCode,
 } = require('./services/promoService');
+const grouponImportService = require('./services/grouponImportService');
+const grouponDealMappingService = require('./services/grouponDealMappingService');
+const { mappingPayloadFromRequest } = require('./services/grouponDealMappingService');
+const { maskVoucherLastFour } = require('./services/grouponVoucherUtils');
+const { verifyAndReserveVoucher, loadReservedVoucherByClientToken } = require('./services/grouponVoucherReservationService');
+const { createGrouponBookingSafe } = require('./services/grouponBookingService');
+const adminSupportService = require('./services/adminSupportService');
 const cron = require('node-cron');
 const { runMonitor } = require('./jobs/conditionMonitor');
 
@@ -468,6 +475,28 @@ async function verifyCaptainRequest(req, res) {
     return null;
   }
   return { user: udat.user, captain };
+}
+
+async function resolveCaptainIdForAssignment(rawCaptainId) {
+  const text = String(rawCaptainId ?? '').trim();
+  if (!text || text === 'none' || text === 'null') return null;
+  if (!isBookingUuidParam(text)) {
+    const err = new Error('Invalid captain id.');
+    err.statusCode = 400;
+    throw err;
+  }
+  const { data: captain, error } = await supabase
+    .from('captains')
+    .select('id, active, full_name')
+    .eq('id', text)
+    .maybeSingle();
+  if (error) throw error;
+  if (!captain?.id || !captain.active) {
+    const err = new Error('Captain not found or inactive.');
+    err.statusCode = 400;
+    throw err;
+  }
+  return captain.id;
 }
 
 /**
@@ -1935,6 +1964,17 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
       : parseStaffMoney(body.amount_collected ?? body.amountCollected, paymentStatus === 'pending' ? 0 : finalPrice);
     const status = action === 'hold' ? 'hold' : 'confirmed';
     const captainIncluded = bookingType === 'captain_charter';
+    let captainId = null;
+    if (bookingType === 'captain_charter') {
+      const rawCaptain = body.captain_id || body.captainId;
+      if (rawCaptain) {
+        try {
+          captainId = await resolveCaptainIdForAssignment(rawCaptain);
+        } catch (captainErr) {
+          return res.status(captainErr.statusCode || 400).json({ error: captainErr.message || 'Invalid captain.' });
+        }
+      }
+    }
 
     const insert = {
       customer_id: customer.id,
@@ -1942,6 +1982,7 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
       booking_type: bookingType === 'captain_charter' ? 'charter' : 'rental',
       charter_type: bookingType === 'captain_charter' ? 'captain_charter' : null,
       charter_seating: bookingType === 'captain_charter' ? 'shared' : null,
+      captain_id: captainId,
       guest_count: passengerCount,
       rental_location: location || null,
       start_time: times.startIso,
@@ -1975,6 +2016,7 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
       hold_expires_at: action === 'hold' ? DateTime.now().plus({ hours: 2 }).toUTC().toISO() : null,
       staff_notes: cleanText(body.staff_notes || body.staffNotes, 1000) || null,
       admin_notes: cleanText(body.staff_notes || body.staffNotes, 1000) || null,
+      emergency_contact_notes: cleanText(body.emergency_contact_notes || body.emergencyContactNotes, 2000) || null,
       original_total: originalPrice,
       discount_amount: discount,
       final_total: finalPrice,
@@ -2020,6 +2062,7 @@ function calendarRangeFromQuery(query) {
 function normalizeCalendarBooking(row) {
   const customer = Array.isArray(row.customers) ? row.customers[0] : row.customers;
   const boat = Array.isArray(row.boats) ? row.boats[0] : row.boats;
+  const captain = Array.isArray(row.captains) ? row.captains[0] : row.captains;
   return {
     ...row,
     customer_name: customer?.full_name || row.name || 'Unknown customer',
@@ -2027,6 +2070,7 @@ function normalizeCalendarBooking(row) {
     customer_email: customer?.email || row.email || null,
     boat_name: boat?.name || 'Unassigned boat',
     boat_type: boat?.type || null,
+    captain_name: captain?.full_name || null,
   };
 }
 
@@ -2237,11 +2281,16 @@ app.get('/api/admin/calendar-bookings', async (req, res) => {
     const status = cleanText(req.query.status, 40);
     const source = cleanText(req.query.source, 40).toLowerCase();
     const search = cleanText(req.query.search, 160).toLowerCase();
+    const captainId = cleanText(req.query.captainId || req.query.captain_id, 80);
+    const unassignedCaptain =
+      req.query.unassigned === '1' ||
+      req.query.unassigned === 'true' ||
+      cleanText(req.query.unassigned, 10) === '1';
 
     let query = supabase
       .from('bookings')
       .select(
-        'id, customer_id, boat_id, start_time, end_time, duration_hours, status, payment_status, booking_source, staff_created, rental_location, booking_type, charter_type, guest_count, total_price, total_amount, staff_notes, admin_notes, customers(full_name, email, phone), boats(id, name, type)'
+        'id, customer_id, boat_id, captain_id, start_time, end_time, duration_hours, status, payment_status, booking_source, staff_created, rental_location, booking_type, charter_type, guest_count, total_price, total_amount, staff_notes, admin_notes, customers(full_name, email, phone), boats(id, name, type), captains(id, full_name)'
       )
       .lt('start_time', toIso)
       .gt('end_time', fromIso)
@@ -2252,6 +2301,13 @@ app.get('/api/admin/calendar-bookings', async (req, res) => {
     if (bookingType === 'rental') query = query.eq('booking_type', 'rental');
     if (bookingType === 'captain_charter') query = query.eq('booking_type', 'charter');
     if (status) query = query.eq('status', status);
+    if (captainId) query = query.eq('captain_id', captainId);
+    if (unassignedCaptain) {
+      query = query
+        .is('captain_id', null)
+        .eq('booking_type', 'charter')
+        .eq('charter_type', 'captain_charter');
+    }
     if (source === 'staff') query = query.eq('staff_created', true);
     if (source === 'website') query = query.not('booking_source', 'eq', 'admin');
     if (source === 'admin') query = query.eq('booking_source', 'admin');
@@ -2719,7 +2775,7 @@ async function loadAdminBookingDetail(id) {
   const { data: booking, error } = await supabase
     .from('bookings')
     .select(
-      '*, customers(id, full_name, email, phone, id_document_url, insurance_proof_url), boats(id, name, type, hourly_rate, half_day_rate, full_day_rate), waivers(id, electronic_signature, signature_date, ip_address, waiver_content, waiver_version, waiver_version_effective_at, accepted), user_verifications(*)'
+      '*, customers(id, full_name, email, phone, id_document_url, insurance_proof_url), boats(id, name, type, hourly_rate, half_day_rate, full_day_rate), captains(id, full_name, phone, email), waivers(id, electronic_signature, signature_date, ip_address, waiver_content, waiver_version, waiver_version_effective_at, accepted), user_verifications(*)'
     )
     .eq('id', id)
     .maybeSingle();
@@ -2792,6 +2848,7 @@ function bookingDetailUpdateFromBody(body) {
   setText('manual_discount_reason', ['manual_discount_reason', 'manualDiscountReason'], 500);
   setText('staff_notes', ['staff_notes', 'staffNotes'], 2000);
   setText('admin_notes', ['internal_notes', 'internalNotes'], 2000);
+  setText('emergency_contact_notes', ['emergency_contact_notes', 'emergencyContactNotes'], 2000);
   setMoney('base_price', ['base_price', 'originalPrice']);
   setMoney('discount_amount', ['discount_amount', 'discount']);
   setMoney('total_price', ['total_price', 'finalPrice']);
@@ -2814,6 +2871,22 @@ function bookingDetailUpdateFromBody(body) {
       out.charter_seating = 'shared';
     } else if (bookingType === 'rental') {
       out.charter_seating = null;
+      out.captain_id = null;
+      out.charter_type = null;
+    }
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(body, 'captain_id') ||
+    Object.prototype.hasOwnProperty.call(body, 'captainId')
+  ) {
+    const rawCaptain = body.captain_id ?? body.captainId;
+    if (rawCaptain === null || rawCaptain === '' || rawCaptain === false || rawCaptain === 'none') {
+      out.captain_id = null;
+    } else {
+      const captainText = cleanText(rawCaptain, 80);
+      if (captainText && isBookingUuidParam(captainText)) {
+        out.captain_id = captainText;
+      }
     }
   }
   const guestCount = Number(body.guest_count ?? body.passengerCount ?? body.passengers);
@@ -3040,6 +3113,23 @@ app.patch('/api/admin/bookings/:id', async (req, res) => {
 
     const update = bookingDetailUpdateFromBody(body.booking || body);
     const nextBookingType = update.booking_type || existing.booking_type;
+    const nextCharterType =
+      Object.prototype.hasOwnProperty.call(update, 'charter_type') ? update.charter_type : existing.charter_type;
+    const isCaptainCharterBooking =
+      nextBookingType === 'charter' && nextCharterType === 'captain_charter';
+
+    if (!isCaptainCharterBooking) {
+      update.captain_id = null;
+    } else if (Object.prototype.hasOwnProperty.call(update, 'captain_id')) {
+      try {
+        update.captain_id = update.captain_id
+          ? await resolveCaptainIdForAssignment(update.captain_id)
+          : null;
+      } catch (captainErr) {
+        return res.status(captainErr.statusCode || 400).json({ error: captainErr.message || 'Invalid captain.' });
+      }
+    }
+
     if (isCaptainLedCharter(nextBookingType)) {
       const guestCount = Object.prototype.hasOwnProperty.call(update, 'guest_count')
         ? update.guest_count
@@ -3274,6 +3364,83 @@ app.post('/api/admin/bookings/:id/actions', async (req, res) => {
       const { error: deleteError } = await supabase.from('bookings').delete().eq('id', id);
       if (deleteError) throw deleteError;
       return res.json({ ok: true, deleted: true });
+    }
+
+    if (action === 'no_show') {
+      const reason = cleanText(req.body?.reason, 500);
+      if (!reason) return res.status(400).json({ error: 'Reason is required to mark a no-show.' });
+      const { data: existing, error: existingError } = await supabase
+        .from('bookings')
+        .select('id, admin_notes')
+        .eq('id', id)
+        .maybeSingle();
+      if (existingError) throw existingError;
+      if (!existing?.id) return res.status(404).json({ error: 'Booking not found.' });
+      const noteLine = `[No-show ${new Date().toISOString()}] ${reason}`;
+      const adminNotes = [existing.admin_notes, noteLine].filter(Boolean).join('\n');
+      const { error } = await supabase.from('bookings').update({ admin_notes: adminNotes }).eq('id', id);
+      if (error) throw error;
+      await bookingReliability.insertActivity(supabase, {
+        booking_id: id,
+        event_type: 'no_show',
+        actor_type: 'admin',
+        actor_id: adminUser.id,
+        message: reason,
+        payload: { reason },
+      });
+      return res.json({ ok: true, action: 'no_show' });
+    }
+
+    if (action === 'mark_arrived') {
+      const reason = cleanText(req.body?.reason, 500) || 'Customer marked arrived by admin.';
+      const { data: existing, error: existingError } = await supabase
+        .from('bookings')
+        .select('id, status')
+        .eq('id', id)
+        .maybeSingle();
+      if (existingError) throw existingError;
+      if (!existing?.id) return res.status(404).json({ error: 'Booking not found.' });
+      const nextStatus = existing.status === 'confirmed' ? 'ready_for_departure' : existing.status;
+      const { error } = await supabase.from('bookings').update({ status: nextStatus }).eq('id', id);
+      if (error) throw error;
+      await bookingReliability.insertActivity(supabase, {
+        booking_id: id,
+        event_type: 'mark_arrived',
+        actor_type: 'admin',
+        actor_id: adminUser.id,
+        message: reason,
+        payload: { reason, status: nextStatus },
+      });
+      return res.json({ ok: true, action: 'mark_arrived', status: nextStatus });
+    }
+
+    if (action === 'release_groupon_reservation') {
+      const reason = cleanText(req.body?.reason, 500);
+      if (!reason) return res.status(400).json({ error: 'Reason is required to release a Groupon reservation.' });
+      const { data: existing, error: existingError } = await supabase
+        .from('bookings')
+        .select('id, groupon_voucher_id')
+        .eq('id', id)
+        .maybeSingle();
+      if (existingError) throw existingError;
+      const voucherId = cleanText(req.body?.voucherId || req.body?.voucher_id, 80) || existing?.groupon_voucher_id;
+      if (!voucherId) return res.status(400).json({ error: 'No Groupon voucher linked to this booking.' });
+      const released = await adminSupportService.adminReleaseVoucherReservation(supabase, {
+        voucherId,
+        adminUserId: adminUser.id,
+        reason,
+      });
+      if (existing?.id) {
+        await bookingReliability.insertActivity(supabase, {
+          booking_id: id,
+          event_type: 'release_groupon_reservation',
+          actor_type: 'admin',
+          actor_id: adminUser.id,
+          message: reason,
+          payload: { voucherId, released },
+        });
+      }
+      return res.json({ ok: true, ...released });
     }
 
     const nextStatus = statusByAction[action];
@@ -4765,9 +4932,14 @@ app.get('/api/availability/times', async (req, res) => {
       return res.status(503).json({ error: 'Server not configured' });
     }
     const boatId = String(req.query.boatId || '').trim();
+    const location = String(req.query.location || req.query.rentalLocation || '').trim();
+    let resolvedBoatId = boatId;
+    if (!resolvedBoatId && location) {
+      resolvedBoatId = String((await availabilityService.resolveRentalBoatForLocation(location)) || '');
+    }
     const date = String(req.query.date || '').trim();
-    if (!boatId) {
-      return res.status(400).json({ error: 'boatId is required' });
+    if (!resolvedBoatId) {
+      return res.status(400).json({ error: 'boatId or location is required' });
     }
     if (!date) {
       return res.status(400).json({ error: 'date is required (YYYY-MM-DD)' });
@@ -4781,7 +4953,7 @@ app.get('/api/availability/times', async (req, res) => {
     const closeHour = Number(req.query.closeHour ?? availabilityService.DEFAULT_CLOSE_HOUR);
 
     const slots = await availabilityService.listSlotsForDay(
-      boatId,
+      resolvedBoatId,
       date,
       durationHours,
       openHour,
@@ -4790,7 +4962,8 @@ app.get('/api/availability/times', async (req, res) => {
     );
 
     return res.json({
-      boatId,
+      boatId: resolvedBoatId,
+      location: location || null,
       date,
       timezone: availabilityService.BUSINESS_TZ,
       minLeadHours: availabilityService.MIN_LEAD_HOURS,
@@ -4856,6 +5029,7 @@ app.get('/api/availability/charter/times', async (req, res) => {
       charterType,
       timezone: availabilityService.BUSINESS_TZ,
       durationHours: 1,
+      minLeadHours: availabilityService.MIN_LEAD_HOURS,
       slots,
     });
   } catch (err) {
@@ -5110,6 +5284,473 @@ app.delete('/api/admin/promo-codes/:id', async (req, res) => {
   }
 });
 
+app.get('/api/admin/groupon-deal-mappings', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const { data, error } = await supabase
+      .from('groupon_deal_option_mappings')
+      .select('*')
+      .order('deal_name', { ascending: true })
+      .order('option_name', { ascending: true });
+    if (error) throw error;
+    return res.json({ mappings: data || [] });
+  } catch (err) {
+    console.error('[admin-groupon-mappings:list]', err);
+    return res.status(500).json({ error: 'Could not load Groupon deal mappings.' });
+  }
+});
+
+app.post('/api/admin/groupon-deal-mappings', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const { payload, errors } = mappingPayloadFromRequest(req.body || {});
+    if (errors.length) return res.status(400).json({ error: errors[0] });
+    const { data, error } = await supabase
+      .from('groupon_deal_option_mappings')
+      .insert(payload)
+      .select('*')
+      .single();
+    if (error) {
+      if (error.code === '23505') return res.status(409).json({ error: 'This deal option mapping already exists.' });
+      throw error;
+    }
+    return res.status(201).json({ mapping: data });
+  } catch (err) {
+    console.error('[admin-groupon-mappings:create]', err);
+    return res.status(500).json({ error: 'Could not create Groupon deal mapping.' });
+  }
+});
+
+app.patch('/api/admin/groupon-deal-mappings/:id', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const id = String(req.params.id || '').trim();
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid mapping id.' });
+    const { payload, errors } = mappingPayloadFromRequest(req.body || {}, { partial: true });
+    if (errors.length) return res.status(400).json({ error: errors[0] });
+    const update = { ...payload, updated_at: new Date().toISOString() };
+    const { data, error } = await supabase
+      .from('groupon_deal_option_mappings')
+      .update(update)
+      .eq('id', id)
+      .select('*')
+      .single();
+    if (error) throw error;
+    return res.json({ mapping: data });
+  } catch (err) {
+    console.error('[admin-groupon-mappings:update]', err);
+    return res.status(500).json({ error: 'Could not update Groupon deal mapping.' });
+  }
+});
+
+app.get('/api/admin/groupon-imports', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const { data, error } = await supabase
+      .from('groupon_import_batches')
+      .select(
+        'id, filename, uploaded_by, status, row_count, inserted_count, updated_count, skipped_count, error_count, duplicate_in_file_count, unmapped_count, created_at, confirmed_at'
+      )
+      .order('created_at', { ascending: false })
+      .limit(50);
+    if (error) throw error;
+    return res.json({ imports: data || [] });
+  } catch (err) {
+    console.error('[admin-groupon-imports:list]', err);
+    return res.status(500).json({ error: 'Could not load Groupon import history.' });
+  }
+});
+
+app.get('/api/admin/groupon-imports/:id', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const id = String(req.params.id || '').trim();
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid import id.' });
+    const { data, error } = await supabase
+      .from('groupon_import_batches')
+      .select('*')
+      .eq('id', id)
+      .single();
+    if (error || !data) return res.status(404).json({ error: 'Import batch not found.' });
+    return res.json({ importBatch: data });
+  } catch (err) {
+    console.error('[admin-groupon-imports:get]', err);
+    return res.status(500).json({ error: 'Could not load Groupon import batch.' });
+  }
+});
+
+app.post('/api/admin/groupon-imports/preview', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const csvText = String(req.body?.csvText || '');
+    const filename = String(req.body?.filename || 'groupon-export.csv').trim().slice(0, 255);
+    const mappings = await grouponDealMappingService.loadActiveMappings(supabase);
+    const preview = grouponImportService.previewImport({ csvText, mappings });
+    if (!preview.ok) {
+      return res.status(400).json({ error: preview.errors[0] || 'Could not parse CSV.', details: preview.errors, headers: preview.headers });
+    }
+
+    const storableRows = preview.rows.map((row) => ({
+      rowNumber: row.rowNumber,
+      voucherHash: row.voucherHash,
+      voucherMasked: row.voucherMasked,
+      ownerName: row.ownerName,
+      dealName: row.dealName,
+      optionName: row.optionName,
+      sourceStatus: row.sourceStatus,
+      redeemedFlag: row.redeemedFlag,
+      expiresAt: row.expiresAt,
+      refundedAt: row.refundedAt,
+      mapped: row.mapped,
+      mappingLabel: row.mappingLabel,
+      mappingId: row.mappingId,
+      category: row.category,
+      duplicateInFile: row.duplicateInFile,
+      errors: row.errors,
+      valid: row.valid,
+      parsed: row.parsed,
+      mapping: row.mapping
+        ? {
+            id: row.mapping.id,
+            service_label: row.mapping.service_label,
+            booking_type: row.mapping.booking_type,
+            charter_type: row.mapping.charter_type,
+            rental_type: row.mapping.rental_type,
+            covered_guest_count: row.mapping.covered_guest_count,
+          }
+        : null,
+    }));
+
+    const { data: batch, error: batchError } = await supabase
+      .from('groupon_import_batches')
+      .insert({
+        filename,
+        uploaded_by: adminUser.id,
+        status: 'preview',
+        row_count: preview.summary.totalRows,
+        summary: {
+          previewSummary: preview.summary,
+          headers: preview.headers,
+          rows: storableRows,
+        },
+      })
+      .select('*')
+      .single();
+    if (batchError) throw batchError;
+
+    return res.json({
+      importBatch: batch,
+      headers: preview.headers,
+      summary: preview.summary,
+      rows: storableRows.map(({ parsed: _parsed, voucherHash: _hash, ...rest }) => rest),
+    });
+  } catch (err) {
+    console.error('[admin-groupon-imports:preview]', err);
+    return res.status(500).json({ error: 'Could not preview Groupon import.' });
+  }
+});
+
+app.post('/api/admin/groupon-imports/:id/confirm', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const id = String(req.params.id || '').trim();
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid import id.' });
+    const { data: batch, error: batchError } = await supabase
+      .from('groupon_import_batches')
+      .select('*')
+      .eq('id', id)
+      .single();
+    if (batchError || !batch) return res.status(404).json({ error: 'Import batch not found.' });
+    if (batch.status !== 'preview') return res.status(409).json({ error: 'This import batch was already confirmed.' });
+
+    const previewRows = Array.isArray(batch.summary?.rows) ? batch.summary.rows : [];
+    const summary = await grouponImportService.confirmImport({
+      supabase,
+      batchId: id,
+      previewRows,
+      adminUserId: adminUser.id,
+    });
+
+    return res.json({ importBatchId: id, summary });
+  } catch (err) {
+    console.error('[admin-groupon-imports:confirm]', err);
+    return res.status(500).json({ error: 'Could not confirm Groupon import.' });
+  }
+});
+
+app.get('/api/admin/groupon-imports/:id/error-report', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const id = String(req.params.id || '').trim();
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid import id.' });
+    const { data: batch, error } = await supabase
+      .from('groupon_import_batches')
+      .select('summary')
+      .eq('id', id)
+      .single();
+    if (error || !batch) return res.status(404).json({ error: 'Import batch not found.' });
+    const errorRows = (Array.isArray(batch.summary?.rows) ? batch.summary.rows : [])
+      .filter((row) => !row.valid)
+      .map((row) => ({ rowNumber: row.rowNumber, errors: row.errors || [] }));
+    const csv = grouponImportService.buildErrorReportCsv(errorRows);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="groupon-import-errors-${id.slice(0, 8)}.csv"`);
+    return res.send(csv);
+  } catch (err) {
+    console.error('[admin-groupon-imports:error-report]', err);
+    return res.status(500).json({ error: 'Could not build error report.' });
+  }
+});
+
+app.get('/api/admin/groupon-vouchers', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    let query = supabase
+      .from('groupon_vouchers')
+      .select(
+        'id, voucher_last_four, owner_name, merchant_reference_id, purchased_at, expires_at, source_status, redeemed_flag, redeemed_at, refunded_at, deal_name, option_name, local_status, mapping_id, booking_id, review_flags, created_at, updated_at, groupon_deal_option_mappings(service_label, booking_type, charter_type, rental_type, covered_guest_count)'
+      )
+      .order('created_at', { ascending: false })
+      .limit(200);
+
+    const lastFour = String(req.query.lastFour || '').trim().toUpperCase();
+    const merchantRef = String(req.query.merchantReferenceId || '').trim();
+    const localStatus = String(req.query.localStatus || '').trim();
+    const sourceStatus = String(req.query.sourceStatus || '').trim();
+    const search = String(req.query.search || '').trim();
+
+    if (lastFour) query = query.eq('voucher_last_four', lastFour.slice(-4));
+    if (merchantRef) query = query.eq('merchant_reference_id', merchantRef);
+    if (localStatus) query = query.eq('local_status', localStatus);
+    if (sourceStatus) query = query.ilike('source_status', sourceStatus);
+    if (search) query = query.ilike('owner_name', `%${search}%`);
+
+    const { data, error } = await query;
+    if (error) throw error;
+
+    const vouchers = (data || []).map((row) => ({
+      ...row,
+      voucherMasked: maskVoucherLastFour(row.voucher_last_four),
+    }));
+    return res.json({ vouchers });
+  } catch (err) {
+    console.error('[admin-groupon-vouchers:list]', err);
+    return res.status(500).json({ error: 'Could not load Groupon vouchers.' });
+  }
+});
+
+app.get('/api/admin/support/lookup', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const query = cleanText(req.query.q || req.query.query, 200);
+    const lastFour = cleanText(req.query.lastFour || req.query.last_four, 8);
+    const merchantReferenceId = cleanText(req.query.merchantReferenceId || req.query.merchant_reference_id, 120);
+    if (!query && !lastFour && !merchantReferenceId) {
+      return res.status(400).json({ error: 'Enter a search term, voucher last four, or merchant reference id.' });
+    }
+    const results = await adminSupportService.searchSupportRecords(supabase, {
+      query,
+      lastFour,
+      merchantReferenceId,
+      limit: Math.min(Number(req.query.limit) || 25, 50),
+    });
+    return res.json({ results });
+  } catch (err) {
+    console.error('[admin-support:lookup]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Lookup failed.' });
+  }
+});
+
+app.get('/api/admin/support/records/:bookingId', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const bookingId = cleanText(req.params.bookingId, 80);
+    if (!isBookingUuidParam(bookingId)) return res.status(400).json({ error: 'Invalid booking id.' });
+    const record = await adminSupportService.buildConsolidatedSupportView(supabase, bookingId);
+    if (!record) return res.status(404).json({ error: 'Booking not found.' });
+    return res.json(record);
+  } catch (err) {
+    console.error('[admin-support:record]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not load support record.' });
+  }
+});
+
+app.get('/api/admin/support/exceptions', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const exceptions = await adminSupportService.listGrouponExceptions(supabase, {
+      limit: Math.min(Number(req.query.limit) || 100, 200),
+    });
+    return res.json({ exceptions });
+  } catch (err) {
+    console.error('[admin-support:exceptions]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not load exception queue.' });
+  }
+});
+
+app.get('/api/admin/support/nightly-ops', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const date = cleanText(req.query.date, 20);
+    const payload = await adminSupportService.listNightlyOperations(supabase, date || null);
+    return res.json(payload);
+  } catch (err) {
+    console.error('[admin-support:nightly-ops]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not load nightly operations.' });
+  }
+});
+
+app.get('/api/admin/support/bookings/:id/alternatives', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const id = cleanText(req.params.id, 80);
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid booking id.' });
+    const alternatives = await adminSupportService.listBookingAlternatives(supabase, id, {
+      limit: Math.min(Number(req.query.limit) || 6, 12),
+    });
+    return res.json({ alternatives });
+  } catch (err) {
+    console.error('[admin-support:alternatives]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not load alternatives.' });
+  }
+});
+
+app.post('/api/admin/groupon-vouchers/:id/release-reservation', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const voucherId = cleanText(req.params.id, 80);
+    if (!isBookingUuidParam(voucherId)) return res.status(400).json({ error: 'Invalid voucher id.' });
+    const reason = cleanText(req.body?.reason, 500);
+    if (!reason) return res.status(400).json({ error: 'Reason is required to release a reservation.' });
+    const released = await adminSupportService.adminReleaseVoucherReservation(supabase, {
+      voucherId,
+      adminUserId: adminUser.id,
+      reason,
+    });
+    return res.json({ ok: true, ...released });
+  } catch (err) {
+    console.error('[admin-groupon-vouchers:release]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not release reservation.' });
+  }
+});
+
+app.post('/api/public/groupon/verify', async (req, res) => {
+  try {
+    if (!supabaseConfigured) return res.status(503).json({ error: 'Server not configured' });
+    const ip = requestIpBestEffort(req);
+    if (!checkFindBookingRate(ip)) {
+      return res.status(429).json({ error: 'Too many attempts. Please wait a minute.' });
+    }
+    const voucherNumber = String(req.body?.voucherNumber || req.body?.voucher_number || '').trim();
+    const lastName = String(req.body?.lastName || req.body?.last_name || '').trim();
+    if (!voucherNumber || !lastName) {
+      return res.status(400).json({ error: 'Voucher number and last name are required.' });
+    }
+    const result = await verifyAndReserveVoucher(supabase, {
+      voucherNumber,
+      lastName,
+      requestIp: ip,
+    });
+    if (!result.ok) {
+      return res.status(400).json({ error: result.customerMessage || 'We could not verify that voucher.' });
+    }
+    return res.json({
+      clientToken: result.clientToken,
+      reservationExpiresAt: result.reservationExpiresAt,
+      voucherMasked: result.voucherMasked,
+      serviceLabel: result.serviceLabel,
+      coveredGuestCount: result.coveredGuestCount,
+      bookingType: result.bookingType,
+      charterType: result.charterType,
+      rentalType: result.rentalType,
+      rentalLocation: result.rentalLocation,
+      rentalBoatId: result.rentalBoatId || null,
+      dealName: result.dealName,
+      optionName: result.optionName,
+      expiresAt: result.expiresAt,
+    });
+  } catch (err) {
+    console.error('[public-groupon:verify]', err);
+    return res.status(500).json({ error: 'We could not verify that voucher. Check the voucher number and last name.' });
+  }
+});
+
+app.get('/api/public/groupon/session', async (req, res) => {
+  try {
+    if (!supabaseConfigured) return res.status(503).json({ error: 'Server not configured' });
+    const clientToken = String(req.query.token || req.query.clientToken || '').trim();
+    if (!clientToken) return res.status(400).json({ error: 'Session token is required.' });
+    const session = await loadReservedVoucherByClientToken(supabase, clientToken);
+    if (!session.ok) {
+      return res.status(400).json({ error: session.customerMessage || 'This booking session expired. Verify your voucher again.' });
+    }
+    return res.json({
+      reservationExpiresAt: session.expiresAt,
+      voucherMasked: session.eligibility.voucherMasked,
+      serviceLabel: session.mapping?.service_label || null,
+      coveredGuestCount: session.eligibility.coveredGuestCount,
+      bookingType: session.mapping?.booking_type || null,
+      charterType: session.mapping?.charter_type || null,
+      rentalType: session.mapping?.rental_type || null,
+      rentalLocation: session.mapping?.rental_location || null,
+      rentalBoatId: session.rentalBoatId || null,
+      dealName: session.voucher.deal_name || null,
+      optionName: session.voucher.option_name || null,
+      expiresAt: session.voucher.expires_at || null,
+    });
+  } catch (err) {
+    console.error('[public-groupon:session]', err);
+    return res.status(500).json({ error: 'Could not load Groupon booking session.' });
+  }
+});
+
+app.post('/api/public/groupon/book', async (req, res) => {
+  try {
+    if (!supabaseConfigured) return res.status(503).json({ error: 'Server not configured' });
+    const ip = requestIpBestEffort(req);
+    if (!checkFindBookingRate(ip)) {
+      return res.status(429).json({ error: 'Too many attempts. Please wait a minute.' });
+    }
+    const clientToken = String(req.body?.clientToken || req.body?.client_token || '').trim();
+    if (!clientToken) {
+      return res.status(400).json({ error: 'Booking session expired. Verify your voucher again.' });
+    }
+    const result = await createGrouponBookingSafe(supabase, {}, {
+      clientToken,
+      customer: req.body?.customer || {},
+      booking: req.body?.booking || {},
+      waiver: req.body?.waiver || {},
+      legal: req.body?.legal || {},
+      requestIp: ip,
+      sendConfirmation: ({ bookingId, email }) => sendBookingConfirmationInternal({ bookingId, email, source: 'groupon' }),
+    });
+    return res.status(201).json({ booking: result });
+  } catch (err) {
+    console.error('[public-groupon:book]', err);
+    const status = err.statusCode || 500;
+    const message =
+      status >= 500
+        ? 'We could not complete your Groupon booking. Please try again or call 803-542-1761.'
+        : err.message || 'Could not complete Groupon booking.';
+    return res.status(status).json({ error: message });
+  }
+});
+
 app.post('/api/promo/validate', async (req, res) => {
   try {
     if (!supabaseConfigured) {
@@ -5189,6 +5830,15 @@ app.post('/api/create-checkout-session', async (req, res) => {
     if (!damageFeeAcknowledged) {
       return res.status(400).json({
         error: 'Damage fee acknowledgment is required to continue.',
+      });
+    }
+
+    const claimedGrouponSource = String(
+      booking.bookingSource || booking.booking_source || payload.groupon || ''
+    ).toLowerCase();
+    if (claimedGrouponSource === 'groupon' || Boolean(payload.isGroupon || booking.isGroupon)) {
+      return res.status(400).json({
+        error: 'Groupon voucher bookings must use the Groupon booking page. Deposit checkout cannot be bypassed here.',
       });
     }
 

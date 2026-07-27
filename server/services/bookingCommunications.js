@@ -11,6 +11,11 @@ const MESSAGE_TYPES = new Set([
   'day_before_reminder',
   'ready_for_departure',
   'cancelled_booking',
+  'weather_delay',
+  'arrival_instructions',
+  'passenger_weight_issue',
+  'separate_trip_explanation',
+  'groupon_support',
 ]);
 
 function escapeHtml(value) {
@@ -145,6 +150,43 @@ function templateFor(type, detail) {
       intro: `Hi ${ctx.name}, your Launch Zone Charters booking has been cancelled.`,
       extra: ['If you have questions or need to rebook, please contact us.'],
       sms: `Launch Zone: Your booking for ${ctx.date} ${ctx.start} has been cancelled. Contact us with questions or to rebook.`,
+    },
+    weather_delay: {
+      subject: 'Weather update for your Launch Zone Charters trip',
+      intro: `Hi ${ctx.name}, we are monitoring weather for your upcoming trip and may adjust departure timing for safety.`,
+      extra: ['We will contact you if your departure time changes. You can also call 803-542-1761 for the latest update.'],
+      sms: `Launch Zone: Weather update for your ${ctx.date} trip. We will contact you if departure time changes. Call 803-542-1761.`,
+    },
+    arrival_instructions: {
+      subject: 'Arrival instructions for your Launch Zone Charters trip',
+      intro: `Hi ${ctx.name}, here are arrival instructions for your upcoming trip.`,
+      extra: [
+        'Please arrive 15 minutes early.',
+        'Bring a valid ID and any required waiver or insurance documents.',
+        `Location: ${ctx.location}`,
+      ],
+      sms: `Launch Zone: Arrive 15 min early for ${ctx.date} ${ctx.start}. Location: ${ctx.location}. Docs: ${ctx.docsUrl}`,
+    },
+    passenger_weight_issue: {
+      subject: 'Passenger or weight information needed for your trip',
+      intro: `Hi ${ctx.name}, we need updated passenger or weight details before your trip for safety compliance.`,
+      extra: ['Please contact us or update your waiver/passenger information as soon as possible.'],
+      sms: `Launch Zone: We need updated passenger/weight info before your ${ctx.date} trip. Call 803-542-1761.`,
+    },
+    separate_trip_explanation: {
+      subject: 'Important update about your Launch Zone Charters booking',
+      intro: `Hi ${ctx.name}, we need to discuss a separate-trip arrangement for your booking.`,
+      extra: ['Please contact us at 803-542-1761 so we can review the best option for your group.'],
+      sms: `Launch Zone: Please call 803-542-1761 about a separate-trip arrangement for your ${ctx.date} booking.`,
+    },
+    groupon_support: {
+      subject: 'Groupon voucher support for your Launch Zone Charters booking',
+      intro: `Hi ${ctx.name}, we are following up about your Groupon voucher booking.`,
+      extra: [
+        'If you need help with voucher verification, rescheduling, or refund questions, contact us and reference your booking ID.',
+        'Groupon refund requests must be handled through Groupon customer support when applicable.',
+      ],
+      sms: `Launch Zone Groupon support: Call 803-542-1761 about booking ${ctx.booking.id}. Have your voucher last four ready.`,
     },
   };
 

@@ -9,6 +9,9 @@ import {
   ShoppingBag,
   Tag,
   Anchor,
+  UserRound,
+  Ticket,
+  Headphones,
 } from 'lucide-react';
 import { useAuth } from '../contexts/useAuth';
 import FullPageLoader from '../components/FullPageLoader';
@@ -48,6 +51,18 @@ const TOOLS = [
     icon: <Tag className="h-6 w-6" />,
   },
   {
+    to: '/admin/groupon',
+    title: 'Groupon Vouchers',
+    description: 'Import Groupon CSV reports and manage deal mappings.',
+    icon: <Ticket className="h-6 w-6" />,
+  },
+  {
+    to: '/admin/support',
+    title: 'Customer Support',
+    description: 'Lookup bookings, Groupon exceptions, and nightly operations.',
+    icon: <Headphones className="h-6 w-6" />,
+  },
+  {
     to: '/admin/captains-log',
     title: "Captain's Log",
     description: 'Articles and alert tools.',
@@ -58,6 +73,12 @@ const TOOLS = [
     title: 'Boats',
     description: 'Fleet listings and USCG capacity plate settings.',
     icon: <Anchor className="h-6 w-6" />,
+  },
+  {
+    to: '/admin/captains',
+    title: 'Captains',
+    description: 'Crew portal access and charter assignments.',
+    icon: <UserRound className="h-6 w-6" />,
   },
   {
     to: '/admin/bookings',

@@ -26,6 +26,7 @@ import {
   applyDurationToForm,
   buildPatchBody,
 } from '../lib/adminBookingFormState';
+import { fetchActiveCaptains, type AdminCaptainListItem } from '../lib/adminCaptains';
 
 type BoatRow = { id: string; name: string; type?: string | null };
 type TimelineEvent = {
@@ -112,6 +113,11 @@ const communicationButtons = [
   ['missing_documents', 'Send Document Reminder'],
   ['day_before_reminder', 'Send Day-Before Reminder'],
   ['cancelled_booking', 'Send Cancellation Notice'],
+  ['weather_delay', 'Send Weather Update'],
+  ['arrival_instructions', 'Send Arrival Instructions'],
+  ['passenger_weight_issue', 'Send Weight / Passenger Notice'],
+  ['separate_trip_explanation', 'Send Separate Trip Notice'],
+  ['groupon_support', 'Send Groupon Support Message'],
 ] as const;
 
 const customEmailTemplates = {
@@ -198,6 +204,7 @@ export default function AdminBookingDetails() {
   const { user, isAdmin, loading: authLoading } = useAuth();
   const [detail, setDetail] = useState<DetailPayload | null>(null);
   const [boats, setBoats] = useState<BoatRow[]>([]);
+  const [captains, setCaptains] = useState<AdminCaptainListItem[]>([]);
   const [form, setForm] = useState<Record<string, any>>({});
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -232,6 +239,10 @@ export default function AdminBookingDetails() {
   const availabilityCheckSeq = useRef(0);
 
   const booking = detail?.booking;
+  const needsCaptainAssignment =
+    form.bookingType === 'captain_charter' &&
+    !form.captainId &&
+    ['confirmed', 'ready_for_departure'].includes(String(form.status || ''));
 
   const getAdminToken = useCallback(async () => {
     const { data } = await withTimeout('Admin session lookup', supabase.auth.getSession(), 12000);
@@ -286,6 +297,30 @@ export default function AdminBookingDetails() {
       };
       setDetail(bookingPayload);
       setBoats(Array.isArray(boatsPayload.boats) ? boatsPayload.boats : []);
+      try {
+        const captainRows = await fetchActiveCaptains();
+        const assigned = b.captains as { id?: string; full_name?: string } | null | undefined;
+        if (assigned?.id && !captainRows.some((row) => row.id === assigned.id)) {
+          setCaptains([
+            ...captainRows,
+            {
+              id: assigned.id,
+              full_name: assigned.full_name || 'Assigned captain',
+              phone: null,
+              email: null,
+              active: false,
+              default_boat_id: null,
+              auth_user_id: null,
+              photo_url: null,
+              notes: null,
+            },
+          ]);
+        } else {
+          setCaptains(captainRows);
+        }
+      } catch {
+        setCaptains([]);
+      }
       if (emailConfigRes.ok) setEmailConfig(emailConfigPayload);
       setBookingDispute(disputePayload.dispute || null);
       setDisputeNotes(Array.isArray(disputePayload.notes) ? disputePayload.notes : []);
@@ -327,6 +362,8 @@ export default function AdminBookingDetails() {
         paymentMethod: b.payment_method || '',
         paymentStatus: b.payment_status || 'pending',
         internalNotes: b.staff_notes || b.admin_notes || '',
+        captainId: b.captain_id || '',
+        emergencyContactNotes: b.emergency_contact_notes || '',
         status: b.status || 'pending',
       });
       const customerEmail = String(b.customers?.email || b.email || '').trim().toLowerCase();
@@ -563,6 +600,9 @@ export default function AdminBookingDetails() {
   const setField = (key: string, value: string) => {
     setForm((prev) => {
       let next = { ...prev, [key]: value };
+      if (key === 'bookingType' && value === 'rental') {
+        next.captainId = '';
+      }
       if (key === 'duration' && prev.date && prev.startTime && Number(value) > 0) {
         next = applyDurationToForm(prev as AdminBookingFormState, Number(value));
         next = { ...next, duration: value };
@@ -642,6 +682,9 @@ export default function AdminBookingDetails() {
     ready: 'Booking marked ready for departure.',
     complete: 'Booking marked completed.',
     send_confirmation: 'Confirmation email sent.',
+    no_show: 'No-show recorded.',
+    mark_arrived: 'Customer marked arrived.',
+    release_groupon_reservation: 'Groupon reservation released.',
   };
 
   const runAction = async (action: string) => {
@@ -1095,6 +1138,14 @@ export default function AdminBookingDetails() {
             </div>
           ) : null}
 
+          {needsCaptainAssignment ? (
+            <div className="admin-booking-no-print rounded-xl border-2 border-orange-300 bg-orange-50 p-5">
+              <p className="text-lg font-bold text-orange-950">
+                This confirmed captain charter has no assigned captain. Assign one below so it appears in the captain portal.
+              </p>
+            </div>
+          ) : null}
+
           <div className="lg:hidden">{noticeBanner}</div>
 
           <div className="grid gap-6 xl:grid-cols-2">
@@ -1122,6 +1173,30 @@ export default function AdminBookingDetails() {
                 <label className={labelClass}>Boat<select className={inputClass} value={form.boatId || ''} onChange={(e) => setField('boatId', e.target.value)}><option value="">Select boat</option>{boats.map((boat) => <option key={boat.id} value={boat.id}>{boat.name}</option>)}</select></label>
                 <label className={labelClass}>Location<input className={inputClass} value={form.location || ''} onChange={(e) => setField('location', e.target.value)} /></label>
                 <label className={labelClass}>Booking Type<select className={inputClass} value={form.bookingType || 'rental'} onChange={(e) => setField('bookingType', e.target.value)}><option value="rental">Rental</option><option value="captain_charter">Captain Charter</option></select></label>
+                {form.bookingType === 'captain_charter' ? (
+                  <>
+                    <label className={labelClass}>
+                      Assigned captain
+                      <select className={inputClass} value={form.captainId || ''} onChange={(e) => setField('captainId', e.target.value)}>
+                        <option value="">Unassigned</option>
+                        {captains.map((captain) => (
+                          <option key={captain.id} value={captain.id}>
+                            {captain.full_name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className={`${labelClass} sm:col-span-2`}>
+                      Emergency contact notes
+                      <textarea
+                        className={`${inputClass} min-h-[90px]`}
+                        placeholder="Dedicated emergency contact — not the customer phone"
+                        value={form.emergencyContactNotes || ''}
+                        onChange={(e) => setField('emergencyContactNotes', e.target.value)}
+                      />
+                    </label>
+                  </>
+                ) : null}
                 <label className={labelClass}>Date<input className={inputClass} type="date" value={form.date || ''} onChange={(e) => setField('date', e.target.value)} /></label>
                 <label className={labelClass}>Start Time<input className={inputClass} type="time" value={form.startTime || ''} onChange={(e) => setField('startTime', e.target.value)} /></label>
                 <label className={labelClass}>End Time<input className={inputClass} type="time" value={form.endTime || ''} onChange={(e) => setField('endTime', e.target.value)} /></label>

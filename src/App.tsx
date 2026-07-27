@@ -28,9 +28,13 @@ import AdminMessages from './pages/AdminMessages';
 import AdminPreTrip from './pages/AdminPreTrip';
 import AdminPreTripDetail from './pages/AdminPreTripDetail';
 import AdminPromoCodes from './pages/AdminPromoCodes';
+import AdminGroupon from './pages/AdminGroupon';
+import AdminSupport from './pages/AdminSupport';
+import GrouponBook from './pages/GrouponBook';
 import AdminCaptainsLog from './pages/AdminCaptainsLog';
 import AdminMoreTools from './pages/AdminMoreTools';
 import AdminBoats from './pages/AdminBoats';
+import AdminCaptains from './pages/AdminCaptains';
 import AdminStaffBooking from './pages/AdminStaffBooking';
 import AdminCalendar from './pages/AdminCalendar';
 import AdminBookingDetails from './pages/AdminBookingDetails';
@@ -105,6 +109,7 @@ function AppLayout() {
           <Route path="/boat-rentals-daytona-beach" element={<Navigate to="/boat-rentals/daytona" replace />} />
           <Route path="/boats" element={<Navigate to="/boat-rentals/daytona" replace />} />
           <Route path="/booking" element={<BookNow onNavigate={onNavigate} />} />
+          <Route path="/booking/groupon" element={<GrouponBook />} />
           <Route path="/booking-received" element={<BookingReceived onNavigate={onNavigate} />} />
           <Route path="/booking-success" element={<BookingSuccess onNavigate={onNavigate} />} />
           <Route path="/success" element={<BookingSuccess onNavigate={onNavigate} />} />
@@ -172,11 +177,14 @@ function AppLayout() {
           <Route path="/admin/pre-trip" element={<AdminPreTrip />} />
           <Route path="/admin/pre-trip/:id" element={<AdminPreTripDetail />} />
           <Route path="/admin/promo-codes" element={<AdminPromoCodes />} />
+          <Route path="/admin/groupon" element={<AdminGroupon />} />
+          <Route path="/admin/support" element={<AdminSupport />} />
           <Route path="/admin/captains-log" element={<AdminCaptainsLog />} />
           <Route path="/admin/outbox" element={<AdminOutbox />} />
           <Route path="/admin/disputes" element={<AdminDisputes />} />
           <Route path="/admin/shop-orders" element={<AdminShopOrders />} />
           <Route path="/admin/boats" element={<AdminBoats onNavigate={onNavigate} />} />
+          <Route path="/admin/captains" element={<AdminCaptains />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>

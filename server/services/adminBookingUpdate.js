@@ -72,6 +72,8 @@ const FIELD_LABELS = {
   base_price: 'Original price',
   staff_notes: 'Internal admin notes',
   admin_notes: 'Customer-visible notes',
+  captain_id: 'Assigned captain',
+  emergency_contact_notes: 'Emergency contact notes',
   license_status: 'License verification',
   insurance_status: 'Insurance status',
   waiver_signed: 'Waiver signed',

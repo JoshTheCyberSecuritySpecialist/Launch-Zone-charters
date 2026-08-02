@@ -69,6 +69,15 @@ function detailContext(detail) {
     passengers: booking.guest_count || booking.passenger_count || 1,
     paymentStatus: String(booking.payment_status || 'pending').replace(/_/g, ' '),
     remainingBalance: money(booking.balance_due),
+    bioPackageLine: booking.pricing_package_name
+      ? `${booking.pricing_package_name} — ${booking.package_guest_count || booking.guest_count || 1} guests — ${money(
+          booking.final_amount_cents != null
+            ? Number(booking.final_amount_cents) / 100
+            : booking.final_total ?? booking.total_price
+        )} paid`
+      : booking.charter_type === 'bio' && !booking.pricing_package_id
+        ? 'Legacy bioluminescence pricing'
+        : null,
     holdExpires: booking.hold_expires_at ? `${dateLabel(booking.hold_expires_at)} at ${timeLabel(booking.hold_expires_at)}` : '',
     docsUrl,
     waiverUrl: docsUrl,
@@ -77,15 +86,19 @@ function detailContext(detail) {
 }
 
 function baseTripLines(ctx) {
-  return [
+  const lines = [
     `Date: ${ctx.date}`,
     `Time: ${ctx.start} - ${ctx.end}`,
     `Boat: ${ctx.boatName}`,
     `Location: ${ctx.location}`,
     `Passengers: ${ctx.passengers}`,
-    `Payment status: ${ctx.paymentStatus}`,
-    `Remaining balance: ${ctx.remainingBalance}`,
   ];
+  if (ctx.bioPackageLine) {
+    lines.push(`Package: ${ctx.bioPackageLine}`);
+  }
+  lines.push(`Payment status: ${ctx.paymentStatus}`);
+  lines.push(`Remaining balance: ${ctx.remainingBalance}`);
+  return lines;
 }
 
 function templateFor(type, detail) {

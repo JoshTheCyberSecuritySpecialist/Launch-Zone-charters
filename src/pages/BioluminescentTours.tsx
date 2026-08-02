@@ -15,6 +15,13 @@ import ObservationBottlePromo from '../components/ObservationBottlePromo';
 import SubscribeAlerts from '../components/SubscribeAlerts';
 import Logo from '../components/ui/Logo';
 import { beginAsyncInteraction, wrapRouterNavigate, wrapSyncClick } from '../lib/clickPerf';
+import { CHARTER_GUEST_LIMIT_LABEL, EXPERIENCE_BIO } from '../lib/experienceCatalog';
+import BioluminescencePackageCards from '../components/booking/BioluminescencePackageCards';
+import {
+  BIO_PACKAGE_PRICING_DISCLAIMER,
+  bioBookingUrl,
+  type BioPackageId,
+} from '../lib/bioluminescencePackages';
 
 const BIO_HERO_IMAGE =
   '/images/bioluminescent-boat-tour-titusville-florida-glowing-water-night-kayak-indian-river-lagoon-adventure-launch-zone-charters.png';
@@ -145,8 +152,15 @@ export default function BioluminescentTours({ onNavigate }: BioluminescentToursP
         'bio_tours',
         'book_charter_bio',
         navigate,
-        '/booking?bookingMode=charter&charterType=bio'
+        '/bioluminescent-tours#packages'
       ),
+    [navigate]
+  );
+
+  const navigateBioPackageBooking = useCallback(
+    (packageId: BioPackageId) => {
+      navigate(bioBookingUrl(packageId));
+    },
     [navigate]
   );
 
@@ -260,40 +274,40 @@ export default function BioluminescentTours({ onNavigate }: BioluminescentToursP
 
         <div className="lz-hero-content relative border-t border-white/5 bg-lz-bg">
           <div className="lz-hero-fade lz-hero-fade--delay-2 mx-auto w-full max-w-2xl px-4 py-8 text-center sm:px-6 md:py-10 lg:px-8">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-cyan-200/90">
+              Captain-led experience · Night tour
+            </p>
             <h1 className="font-display text-balance text-xl font-bold tracking-tight text-white sm:text-2xl md:text-[1.65rem] md:leading-snug">
-              Bioluminescent night tours and boat rentals on the Indian River Lagoon
+              Bioluminescence Night Tours in Titusville
             </h1>
             <p
-              className="mt-3 text-pretty text-sm font-medium leading-snug tracking-wide text-white sm:text-base"
+              className="mt-3 text-pretty text-sm font-semibold leading-snug tracking-wide text-cyan-100 sm:text-base"
               style={{ textShadow: BIO_HERO_LINE_SHADOW }}
             >
-              Captain-led evenings when the lagoon glows, plus rental and charter options on the Space Coast
+              Direct booking from $40
             </p>
             <p
               className="mt-2 text-xs font-normal leading-relaxed text-white/85 sm:text-[0.8125rem]"
               style={{ textShadow: '0 1px 8px rgba(0,0,0,0.65), 0 0 1px rgba(0,0,0,0.9)' }}
             >
-              Book below. Live glow check and weekly outlook on this page.
-            </p>
-            <p className="mt-3 text-sm text-cyan-100/90">
-              Have a Groupon voucher?{' '}
-              <Link to="/booking/groupon" className="font-semibold text-cyan-200 underline underline-offset-2">
-                Book with Groupon
-              </Link>
+              Choose a package for one, two, or four guests. Captain and fuel included. {CHARTER_GUEST_LIMIT_LABEL}.
             </p>
             <div className="mt-6 flex flex-col items-center gap-4 md:mt-7 md:gap-5">
               <div className="max-w-xl space-y-2">
                 <p className="text-pretty text-sm font-semibold leading-relaxed text-slate-200/95 sm:text-base">
                   Reserve your evening ride, then scroll to see if tonight&apos;s conditions score a glow night.
                 </p>
+                <p className="text-pretty text-xs leading-relaxed text-slate-400 sm:text-sm">
+                  Captain-led tour — this is not a self-drive boat rental.
+                </p>
               </div>
               <div className="flex w-full max-w-lg flex-col gap-3 sm:flex-row sm:justify-center sm:gap-4">
                 <button
                   type="button"
                   onClick={navigateBookBioCharter}
-                  className="btn-primary order-1 w-full sm:order-none sm:min-w-0 sm:flex-1 sm:max-w-[min(100%,280px)]"
+                  className="btn-primary order-1 w-full min-h-[44px] sm:order-none sm:min-w-0 sm:flex-1 sm:max-w-[min(100%,280px)]"
                 >
-                  Book Your Night Ride
+                  {EXPERIENCE_BIO.bookCta}
                 </button>
                 <button
                   type="button"
@@ -307,6 +321,28 @@ export default function BioluminescentTours({ onNavigate }: BioluminescentToursP
                 Licensed &amp; Insured • Titusville, FL • Indian River Lagoon
               </p>
             </div>
+          </div>
+        </div>
+      </section>
+
+      <section
+        id="packages"
+        className="border-t border-cyan-500/15 bg-lz-bg py-12 md:py-16"
+        aria-labelledby="bio-packages-heading"
+      >
+        <div className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
+          <h2 id="bio-packages-heading" className="font-display text-center text-2xl font-bold text-white md:text-3xl">
+            Choose Your Bioluminescence Package
+          </h2>
+          <p className="mx-auto mt-3 max-w-2xl text-center text-sm text-slate-400 md:text-base">
+            Same package pricing available when you book directly. {BIO_PACKAGE_PRICING_DISCLAIMER}
+          </p>
+          <ul className="mx-auto mt-4 max-w-xl list-inside list-disc text-left text-sm text-slate-400 md:text-center md:list-none md:space-y-1">
+            <li>Book in one step · live availability · instant confirmation</li>
+            <li>Direct customer support · no separate voucher purchase</li>
+          </ul>
+          <div className="mt-8">
+            <BioluminescencePackageCards onSelect={navigateBioPackageBooking} />
           </div>
         </div>
       </section>
@@ -665,7 +701,7 @@ export default function BioluminescentTours({ onNavigate }: BioluminescentToursP
                         onClick={navigateBookBioCharter}
                         className="lz-btn-primary mt-4 w-full !py-2.5 text-sm sm:w-auto"
                       >
-                        Book an Evening Charter
+                        Book Bioluminescence Tour
                       </button>
                     </>
                   )}
@@ -790,7 +826,7 @@ export default function BioluminescentTours({ onNavigate }: BioluminescentToursP
             },
             {
               title: 'Details',
-              items: ['Up to 6 passengers', 'Night tours only', 'Smooth, comfortable ride'],
+              items: [CHARTER_GUEST_LIMIT_LABEL, 'Night tours only', 'Smooth, comfortable ride'],
             },
           ].map((block) => (
             <div
@@ -831,7 +867,7 @@ export default function BioluminescentTours({ onNavigate }: BioluminescentToursP
               onClick={navigateBookBioCharter}
               className="btn-primary w-full sm:w-auto"
             >
-              Book Now
+              {EXPERIENCE_BIO.bookCta}
             </button>
             <a
               href="tel:8035421761"
@@ -841,6 +877,13 @@ export default function BioluminescentTours({ onNavigate }: BioluminescentToursP
               803-542-1761
             </a>
           </div>
+          <p className="mx-auto mt-8 max-w-md text-center text-sm text-slate-400">
+            Already purchased a Groupon voucher?{' '}
+            <Link to="/booking/groupon" className="font-semibold text-cyan-300 underline underline-offset-2">
+              Redeem it here
+            </Link>
+            .
+          </p>
         </div>
       </section>
     </div>

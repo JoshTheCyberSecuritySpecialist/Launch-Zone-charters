@@ -27,6 +27,7 @@ import {
   buildPatchBody,
 } from '../lib/adminBookingFormState';
 import AdminGrouponReviewPanel from '../components/admin/AdminGrouponReviewPanel';
+import { BIO_LEGACY_PRICING_LABEL } from '../lib/bioluminescencePackages';
 import { fetchActiveCaptains, type AdminCaptainListItem } from '../lib/adminCaptains';
 
 type BoatRow = { id: string; name: string; type?: string | null };
@@ -1096,6 +1097,41 @@ export default function AdminBookingDetails() {
         startTimeLocal={form.startTime}
         endTimeLocal={form.endTime}
       />
+      {booking.charter_type === 'bio' ? (
+        <div className="rounded-xl border border-cyan-500/25 bg-slate-900/80 p-4 text-sm text-slate-200">
+          <p className="font-semibold text-cyan-100">Bioluminescence pricing</p>
+          {booking.pricing_package_id ? (
+            <ul className="mt-2 space-y-1 text-slate-300">
+              <li>Package ID: {String(booking.pricing_package_id)}</li>
+              <li>Name: {String(booking.pricing_package_name || '—')}</li>
+              <li>Guests: {String(booking.package_guest_count ?? booking.guest_count ?? '—')}</li>
+              <li>
+                Standard value:{' '}
+                {booking.standard_value_cents != null
+                  ? `$${(Number(booking.standard_value_cents) / 100).toFixed(2)}`
+                  : '—'}
+              </li>
+              <li>
+                Package price:{' '}
+                {booking.package_price_cents != null
+                  ? `$${(Number(booking.package_price_cents) / 100).toFixed(2)}`
+                  : '—'}
+              </li>
+              <li>
+                Savings:{' '}
+                {booking.discount_amount_cents != null
+                  ? `$${(Number(booking.discount_amount_cents) / 100).toFixed(2)}`
+                  : '—'}
+              </li>
+              <li>Final amount: {form.finalPrice}</li>
+              <li>Source: {form.source || 'website'}</li>
+              <li>Payment: {form.paymentStatus}</li>
+            </ul>
+          ) : (
+            <p className="mt-2 text-slate-400">{BIO_LEGACY_PRICING_LABEL}</p>
+          )}
+        </div>
+      ) : null}
       <div className="admin-booking-details-page grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
         <section className="order-2 space-y-6 lg:order-1">
           <div className="hidden print:block">

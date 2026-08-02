@@ -104,7 +104,7 @@ const FAQ_GROUPS: FAQGroup[] = [
     {
       question: 'What are rocket launch tours?',
         answer:
-          'Rocket launch tours are special rentals scheduled around SpaceX and NASA launches from Cape Canaveral. We position the boat for optimal viewing of the launch. Please note that launch timing is never guaranteed, and launches may be delayed or scrubbed. In such cases, your tour proceeds as a regular sightseeing cruise, and no refunds are provided for launch delays or cancellations.',
+          'Rocket launch charters are captain-led trips scheduled around SpaceX and NASA launches from Cape Canaveral. A licensed captain runs the boat while you view from the water. This is not a self-drive rental. Please note that launch timing is never guaranteed, and launches may be delayed or scrubbed. In such cases, your trip may proceed as a sightseeing cruise, and no refunds are provided for launch delays or cancellations per our policies.',
     },
     {
       question: 'How do you determine the best days for rocket launch viewing?',

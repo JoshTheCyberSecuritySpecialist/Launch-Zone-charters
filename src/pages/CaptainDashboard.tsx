@@ -1,8 +1,9 @@
 import { DateTime } from 'luxon';
 import { LogOut } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../contexts/useAuth';
 import CaptainShell from '../components/captain/CaptainShell';
+import CaptainMarineConditionsPanel from '../components/captain/CaptainMarineConditionsPanel';
 import CaptainTripCard from '../components/captain/CaptainTripCard';
 import Spinner from '../components/Spinner';
 import type { CaptainListBooking } from '../lib/captainApi';
@@ -46,6 +47,14 @@ export default function CaptainDashboard() {
     void load();
   };
 
+  const weatherLocation = useMemo(() => {
+    if (bookings.length === 0) return null;
+    const upcoming = [...bookings].sort(
+      (a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime()
+    );
+    return upcoming[0]?.rental_location || null;
+  }, [bookings]);
+
   return (
     <CaptainShell
       title={captainProfile?.full_name || 'Captain'}
@@ -76,6 +85,12 @@ export default function CaptainDashboard() {
           </p>
         </div>
       </section>
+
+      {weatherLocation ? (
+        <div className="mb-5">
+          <CaptainMarineConditionsPanel rentalLocation={weatherLocation} compact />
+        </div>
+      ) : null}
 
       {error ? (
         <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-base text-red-800" role="alert">

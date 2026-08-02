@@ -8,13 +8,14 @@ interface FooterProps {
 }
 
 const footerMiniLinks = [
-  { label: 'Book', path: 'book' as const },
-  { label: 'Daytona Boat Rentals', path: 'fleet-daytona' as const },
-  { label: 'Titusville Boat Rentals', path: 'fleet-titusville' as const },
-  { label: 'Pricing', path: 'pricing' as const },
-  { label: 'Launches', path: 'launches' as const },
-  { label: 'Bio Guide', path: 'bioluminescence' as const },
-  { label: 'Bio Tours', path: 'bioluminescent-tours' as const },
+  { label: 'View Experiences', path: 'experiences' as const },
+  { label: 'Bioluminescence Tours', path: 'bioluminescent-tours' as const },
+  { label: 'Rocket Launch Charters', path: 'launches' as const },
+  { label: 'Sunset & Wildlife', path: 'sunset-wildlife' as const },
+  { label: 'Daytona Rentals', path: 'fleet-daytona' as const },
+  { label: 'Titusville Rentals', path: 'fleet-titusville' as const },
+  { label: 'Rental Pricing', path: 'pricing' as const },
+  { label: 'Bioluminescence Guide', path: 'bioluminescence' as const },
   { label: 'Observation Bottle', path: 'observation-bottle' as const },
   { label: "Captain's Log", path: 'captains-log' as const },
   { label: 'About', path: 'about' as const },
@@ -50,53 +51,30 @@ export default function Footer({ onNavigate }: FooterProps) {
                 to="/booking/groupon"
                 className="text-slate-400 transition-colors hover:text-amber-400"
               >
-                Groupon
+                Redeem Groupon Voucher
               </Link>
             </nav>
           </div>
 
           <div>
-            <h3 className="mb-4 font-semibold text-white">Quick Links</h3>
+            <h3 className="mb-4 font-semibold text-white">Experiences</h3>
             <ul className="space-y-2 text-sm">
               <li>
                 <button
                   type="button"
-                  onClick={wrapNavigateClick('footer', 'book', onNavigate)}
+                  onClick={wrapNavigateClick('footer', 'experiences', onNavigate)}
                   className="transition-colors hover:text-amber-400"
                 >
-                  Book Now
-                </button>
-              </li>
-              <li>
-                <Link to="/booking/groupon" className="transition-colors hover:text-amber-400">
-                  Redeem Groupon voucher
-                </Link>
-              </li>
-              <li>
-                <button
-                  type="button"
-                  onClick={wrapNavigateClick('footer', 'fleet-daytona', onNavigate)}
-                  className="transition-colors hover:text-amber-400"
-                >
-                  Daytona Boat Rentals
+                  View Experiences
                 </button>
               </li>
               <li>
                 <button
                   type="button"
-                  onClick={wrapNavigateClick('footer', 'fleet-titusville', onNavigate)}
+                  onClick={wrapNavigateClick('footer', 'bioluminescent-tours', onNavigate)}
                   className="transition-colors hover:text-amber-400"
                 >
-                  Titusville Boat Rentals
-                </button>
-              </li>
-              <li>
-                <button
-                  type="button"
-                  onClick={wrapNavigateClick('footer', 'pricing', onNavigate)}
-                  className="transition-colors hover:text-amber-400"
-                >
-                  Pricing
+                  Bioluminescence Tours
                 </button>
               </li>
               <li>
@@ -105,31 +83,63 @@ export default function Footer({ onNavigate }: FooterProps) {
                   onClick={wrapNavigateClick('footer', 'launches', onNavigate)}
                   className="transition-colors hover:text-amber-400"
                 >
-                  Rocket Launches
+                  Rocket Launch Charters
                 </button>
               </li>
               <li>
                 <button
                   type="button"
-                  onClick={wrapNavigateClick('footer', 'observation-bottle', onNavigate)}
+                  onClick={wrapNavigateClick('footer', 'sunset-wildlife', onNavigate)}
                   className="transition-colors hover:text-amber-400"
                 >
-                  Observation Bottle
+                  Sunset and Wildlife Cruise
                 </button>
               </li>
             </ul>
           </div>
 
           <div>
-            <h3 className="mb-4 font-semibold text-white">Legal</h3>
+            <h3 className="mb-4 font-semibold text-white">Rentals &amp; legal</h3>
             <ul className="space-y-2 text-sm">
+              <li>
+                <button
+                  type="button"
+                  onClick={wrapNavigateClick('footer', 'fleet-daytona', onNavigate)}
+                  className="transition-colors hover:text-amber-400"
+                >
+                  Daytona and Port Orange Rentals
+                </button>
+              </li>
+              <li>
+                <button
+                  type="button"
+                  onClick={wrapNavigateClick('footer', 'fleet-titusville', onNavigate)}
+                  className="transition-colors hover:text-amber-400"
+                >
+                  Titusville Rentals
+                </button>
+              </li>
+              <li>
+                <button
+                  type="button"
+                  onClick={wrapNavigateClick('footer', 'pricing', onNavigate)}
+                  className="transition-colors hover:text-amber-400"
+                >
+                  Rental Pricing
+                </button>
+              </li>
+              <li>
+                <Link to="/booking/groupon" className="transition-colors hover:text-amber-400">
+                  Redeem Groupon Voucher
+                </Link>
+              </li>
               <li>
                 <button
                   type="button"
                   onClick={wrapNavigateClick('footer', 'terms', onNavigate)}
                   className="transition-colors hover:text-amber-400"
                 >
-                  Terms & Conditions
+                  Terms &amp; Conditions
                 </button>
               </li>
               <li>

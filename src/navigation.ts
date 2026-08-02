@@ -25,7 +25,9 @@ const ROUTES = {
   verify: '/verify',
   bioluminescenceGuide: '/bioluminescence',
   bioluminescentTours: '/bioluminescent-tours',
+  experiences: '/experiences',
   observationBottle: '/shop/observation-bottle',
+  grouponRedeem: '/booking/groupon',
   shopOrderSuccess: '/shop/order-success',
   adminShopOrders: '/admin/shop-orders',
   adminDisputes: '/admin/disputes',
@@ -35,6 +37,7 @@ const ROUTES = {
 } as const;
 
 /** Deep links: charter flow with preset experience (matches BookNow searchParams). */
+const BOOKING_BIO_CHARTER = `${ROUTES.booking}?bookingMode=charter&charterType=bio`;
 const BOOKING_ROCKET_CHARTER = `${ROUTES.booking}?bookingMode=charter&charterType=rocket_launch`;
 const BOOKING_SUNSET_CHARTER = `${ROUTES.booking}?bookingMode=charter&charterType=sunset`;
 
@@ -45,11 +48,13 @@ const BOOKING_RENTAL_TITUSVILLE = `${ROUTES.booking}?bookingMode=rental&location
 const PAGE_TO_PATH: Record<string, string> = {
   home: ROUTES.home,
   book: ROUTES.booking,
+  experiences: ROUTES.experiences,
+  'book-bio': BOOKING_BIO_CHARTER,
   'book-rental-daytona': BOOKING_RENTAL_DAYTONA,
   'book-rental-titusville': BOOKING_RENTAL_TITUSVILLE,
   'book-rocket': BOOKING_ROCKET_CHARTER,
-  /** Sunset / Private Charters nav entry — skip booking-type step, preset sunset charter. */
   'book-sunset': BOOKING_SUNSET_CHARTER,
+  'groupon-redeem': ROUTES.grouponRedeem,
   /** @deprecated Use fleet-daytona; resolves to Daytona rentals for backward compatibility. */
   fleet: ROUTES.boatRentalsDaytona,
   'fleet-daytona': ROUTES.boatRentalsDaytona,
@@ -75,6 +80,7 @@ const PAGE_TO_PATH: Record<string, string> = {
   verify: ROUTES.verify,
   bioluminescence: ROUTES.bioluminescenceGuide,
   'bioluminescent-tours': ROUTES.bioluminescentTours,
+  'sunset-wildlife': `${ROUTES.experiences}#sunset-wildlife`,
   'observation-bottle': ROUTES.observationBottle,
   'shop-order-success': ROUTES.shopOrderSuccess,
   'admin-shop-orders': ROUTES.adminShopOrders,
@@ -100,6 +106,11 @@ export function pageKeyFromPath(pathname: string): string {
   if (path.startsWith('/log/')) return 'log-article';
   if (path === '/insurance-required') return 'insurance-required';
   if (path === '/waivers-insurance') return 'waivers-insurance';
+  if (path === ROUTES.experiences) return 'experiences';
+  if (path === ROUTES.grouponRedeem) return 'groupon-redeem';
+  if (path === ROUTES.bioluminescentTours) return 'bioluminescent-tours';
+  if (path === ROUTES.launches) return 'launches';
+  if (path === ROUTES.pricing) return 'pricing';
   if (path === '/admin' || path.startsWith('/admin/')) return 'admin';
   if (path === '/boats' || path === '/boat-rentals-daytona-beach') return 'fleet-daytona';
   return PATH_TO_PAGE[path] ?? 'home';

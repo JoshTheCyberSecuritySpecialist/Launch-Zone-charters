@@ -24,6 +24,7 @@ import {
   pickBestLaunchIndex,
 } from '../lib/launchTimeCategory';
 import { beginAsyncInteraction, wrapNavigateClick } from '../lib/clickPerf';
+import { EXPERIENCE_ROCKET } from '../lib/experienceCatalog';
 import {
   pickBestLaunchByScore,
   scoreLaunches,
@@ -704,7 +705,7 @@ export default function Launches({ onNavigate }: LaunchesProps) {
                             isBestPick || nightHighlight ? 'shadow-[0_0_24px_rgba(251,191,36,0.12)]' : ''
                           }`}
                         >
-                          Book launch tour
+                          {EXPERIENCE_ROCKET.bookCta}
                         </button>
                         <a
                           href={ROCKET_AVAILABILITY_PATH}
@@ -790,10 +791,11 @@ export default function Launches({ onNavigate }: LaunchesProps) {
               id="why-book-launches-heading"
               className="font-display text-balance text-3xl font-bold tracking-tight text-white md:text-[2rem]"
             >
-              Why book a rocket launch tour?
+              Why book a rocket launch charter?
             </h2>
             <p className="mt-3 text-pretty text-lg text-slate-400 md:text-xl">
-              Space history from the water — unobstructed, unhurried, and hosted by a licensed crew
+              Captain-led charter from the water — not a self-drive rental. Launches can scrub or delay; occurrence
+              is never guaranteed.
             </p>
           </div>
 

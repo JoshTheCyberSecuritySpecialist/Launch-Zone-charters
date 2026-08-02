@@ -1,6 +1,57 @@
 const assert = require('assert');
 const captainBookingService = require('../services/captainBookingService');
 
+const SENSITIVE_BOOKING_FIELDS = [
+  'admin_notes',
+  'staff_notes',
+  'stripe_payment_id',
+  'stripe_payment_intent_id',
+  'stripe_customer_id',
+  'promo_code',
+  'discount_amount',
+  'total_price',
+  'total_amount',
+  'base_price',
+  'original_total',
+  'final_total',
+  'deposit_paid',
+  'amount_collected',
+  'balance_due',
+  'payment_method',
+  'manual_discount_reason',
+  'booking_source',
+  'captain_id',
+];
+
+function sampleBookingRow(overrides = {}) {
+  return {
+    id: '11111111-1111-4111-8111-111111111111',
+    start_time: '2026-07-23T21:00:00.000Z',
+    end_time: '2026-07-24T01:00:00.000Z',
+    status: 'confirmed',
+    captain_progress: 'not_started',
+    guest_count: 4,
+    rental_location: 'Titusville',
+    charter_type: 'captain_charter',
+    booking_type: 'charter',
+    special_requests: 'Birthday',
+    staff_notes: 'VIP — comp drinks',
+    emergency_contact_notes: 'Jane Doe (spouse) 555-0100',
+    waiver_signed: true,
+    license_status: 'verified',
+    insurance_status: 'verified',
+    payment_status: 'paid',
+    admin_notes: 'Internal only',
+    stripe_payment_id: 'pi_secret',
+    promo_code: 'SAVE10',
+    total_price: 500,
+    customers: { full_name: 'Alex Guest', phone: '555-0200', email: 'guest@example.com' },
+    boats: { id: '22222222-2222-4222-8222-222222222222', name: 'Sea Breeze', type: 'premium' },
+    captains: { id: '33333333-3333-4333-8333-333333333333', full_name: 'Captain Pat' },
+    ...overrides,
+  };
+}
+
 function run() {
   assert.strictEqual(captainBookingService.paymentDisplayStatus({ payment_status: 'paid' }), 'Ready');
   assert.strictEqual(
@@ -32,27 +83,7 @@ function run() {
   });
 
   const sanitized = captainBookingService.sanitizeBookingDetail(
-    {
-      id: '11111111-1111-4111-8111-111111111111',
-      start_time: '2026-07-23T21:00:00.000Z',
-      end_time: '2026-07-24T01:00:00.000Z',
-      status: 'confirmed',
-      captain_progress: 'not_started',
-      guest_count: 4,
-      rental_location: 'Titusville',
-      charter_type: 'captain_charter',
-      booking_type: 'charter',
-      special_requests: 'Birthday',
-      staff_notes: null,
-      emergency_contact_notes: 'Jane Doe (spouse) 555-0100',
-      waiver_signed: true,
-      license_status: 'verified',
-      insurance_status: 'verified',
-      payment_status: 'paid',
-      customers: { full_name: 'Alex Guest', phone: '555-0200', email: 'guest@example.com' },
-      boats: { id: '22222222-2222-4222-8222-222222222222', name: 'Sea Breeze', type: 'premium' },
-      captains: { id: '33333333-3333-4333-8333-333333333333', full_name: 'Captain Pat' },
-    },
+    sampleBookingRow(),
     [{ passenger_number: 1, passenger_name: 'Alex Guest', passenger_type: 'adult', mobility_assistance_required: false, mobility_notes: null }],
     'within_operating_range'
   );
@@ -64,6 +95,29 @@ function run() {
   assert.strictEqual(sanitized.verification_summary.payment_display, 'Ready');
   assert.ok(!Object.prototype.hasOwnProperty.call(sanitized, 'admin_notes'));
   assert.ok(!Object.prototype.hasOwnProperty.call(sanitized, 'stripe_payment_id'));
+  assert.strictEqual(sanitized.trip_notes.staff_notes, 'VIP — comp drinks');
+  assert.ok(!Object.prototype.hasOwnProperty.call(sanitized, 'promo_code'));
+
+  for (const key of SENSITIVE_BOOKING_FIELDS) {
+    assert.ok(!Object.prototype.hasOwnProperty.call(sanitized, key), `detail leaked ${key}`);
+  }
+
+  const listRow = captainBookingService.sanitizeListBooking(sampleBookingRow());
+  assert.strictEqual(listRow.customer_name, 'Alex Guest');
+  assert.strictEqual(listRow.charter_type, 'captain_charter');
+  assert.strictEqual(listRow.has_notes, true);
+  for (const key of SENSITIVE_BOOKING_FIELDS) {
+    assert.ok(!Object.prototype.hasOwnProperty.call(listRow, key), `list leaked ${key}`);
+  }
+  assert.ok(!Object.prototype.hasOwnProperty.call(listRow, 'emergency_contact_notes'));
+  assert.ok(!Object.prototype.hasOwnProperty.call(listRow, 'special_requests'));
+
+  const charterSummary = captainBookingService.buildVerificationSummary(
+    sampleBookingRow({ booking_type: 'charter', license_status: 'pending' }),
+    'within_operating_range'
+  );
+  assert.ok(charterSummary.items.some((item) => item.key === 'waiver'));
+  assert.ok(!charterSummary.items.some((item) => item.key === 'license'));
 
   console.log('captainBookingService.test: all assertions passed');
 }

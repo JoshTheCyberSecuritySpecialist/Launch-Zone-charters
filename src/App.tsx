@@ -54,6 +54,7 @@ import CaptainEntryGate from './components/captain/CaptainEntryGate';
 import CaptainsLog from './pages/CaptainsLog';
 import LogArticle from './pages/LogArticle';
 import BioluminescentTours from './pages/BioluminescentTours';
+import ExperiencesHub from './pages/ExperiencesHub';
 import ObservationBottle from './pages/ObservationBottle';
 import ShopOrderSuccess from './pages/ShopOrderSuccess';
 import AdminShopOrders from './pages/AdminShopOrders';
@@ -129,6 +130,7 @@ function AppLayout() {
               </Suspense>
             }
           />
+          <Route path="/experiences" element={<ExperiencesHub onNavigate={onNavigate} />} />
           <Route path="/bioluminescent-tours" element={<BioluminescentTours onNavigate={onNavigate} />} />
           <Route path="/shop/observation-bottle" element={<ObservationBottle onNavigate={onNavigate} />} />
           <Route path="/shop/order-success" element={<ShopOrderSuccess onNavigate={onNavigate} />} />

@@ -2,6 +2,7 @@ import { ArrowLeft, MapPin, Phone } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import CaptainShell from '../components/captain/CaptainShell';
+import CaptainMarineConditionsPanel from '../components/captain/CaptainMarineConditionsPanel';
 import CaptainVerificationSummary from '../components/captain/CaptainVerificationSummary';
 import Spinner from '../components/Spinner';
 import StatusBadge from '../components/admin/StatusBadge';
@@ -206,6 +207,10 @@ export default function CaptainBookingDetail() {
           </a>
         </div>
       </section>
+
+      <div className="mb-4">
+        <CaptainMarineConditionsPanel rentalLocation={booking.rental_location} />
+      </div>
 
       {booking.passengers.length > 0 ? (
         <section className="mb-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">

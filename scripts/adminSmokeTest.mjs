@@ -30,6 +30,7 @@ const REGISTERED_ADMIN_ROUTES = [
   '/admin/disputes',
   '/admin/shop-orders',
   '/admin/boats',
+  '/admin/captains',
 ];
 
 /** Critical admin APIs used by the portal. */

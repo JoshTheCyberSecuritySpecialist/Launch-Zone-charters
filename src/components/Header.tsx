@@ -21,39 +21,46 @@ type MenuSection = { title: string; items: DrawerEntry[] };
  */
 const MENU_SECTIONS: MenuSection[] = [
   {
-    title: 'Rent a Boat (self-drive)',
+    title: 'Experiences',
     items: [
-      { kind: 'link', name: 'Daytona Beach', path: 'fleet-daytona' },
-      { kind: 'link', name: 'Titusville', path: 'fleet-titusville' },
+      { kind: 'link', name: 'Bioluminescence Tours', path: 'bioluminescent-tours' },
+      { kind: 'link', name: 'Rocket Launch Charters', path: 'launches' },
+      { kind: 'link', name: 'Sunset and Wildlife Cruise', path: 'sunset-wildlife' },
+      { kind: 'link', name: 'View All Experiences', path: 'experiences' },
     ],
   },
   {
-    title: 'Charter Experiences (captain included)',
+    title: 'Rent a Boat',
     items: [
-      { kind: 'link', name: 'Rocket Launch Charters', path: 'launches' },
-      { kind: 'link', name: 'Bioluminescent Tours', path: 'bioluminescent-tours' },
-      { kind: 'link', name: 'Sunset / Private Charters', path: 'book-sunset' },
+      { kind: 'link', name: 'Daytona and Port Orange Rentals', path: 'fleet-daytona' },
+      { kind: 'link', name: 'Titusville Rentals', path: 'fleet-titusville' },
+      { kind: 'link', name: 'Rental Pricing', path: 'pricing' },
     ],
+  },
+  {
+    title: 'Plan Your Trip',
+    items: [
+      { kind: 'link', name: 'Marine Conditions', path: 'conditions' },
+      { kind: 'link', name: 'Bioluminescence Guide', path: 'bioluminescence' },
+      { kind: 'link', name: 'Rocket Launch Schedule', path: 'launches' },
+      { kind: 'link', name: 'FAQs', path: 'faqs' },
+      { kind: 'link', name: 'Contact', path: 'contact' },
+    ],
+  },
+  {
+    title: 'Groupon',
+    items: [{ kind: 'link', name: 'Redeem Groupon Voucher', path: 'groupon-redeem' }],
   },
   {
     title: 'Before your trip',
     items: [{ kind: 'link', name: 'Waivers & Insurance', path: 'waivers-insurance' }],
   },
   {
-    title: 'Information',
-    items: [
-      { kind: 'link', name: 'Marine Conditions', path: 'conditions' },
-      { kind: 'link', name: 'Bioluminescence Guide', path: 'bioluminescence' },
-      { kind: 'link', name: 'Observation Bottle', path: 'observation-bottle' },
-      { kind: 'link', name: "Captain's Log", path: 'captains-log' },
-      { kind: 'link', name: 'FAQs', path: 'faqs' },
-    ],
-  },
-  {
     title: 'Company',
     items: [
       { kind: 'link', name: 'About', path: 'about' },
-      { kind: 'link', name: 'Contact', path: 'contact' },
+      { kind: 'link', name: "Captain's Log", path: 'captains-log' },
+      { kind: 'link', name: 'Observation Bottle', path: 'observation-bottle' },
     ],
   },
   {
@@ -309,17 +316,17 @@ export default function Header({ onNavigate, currentPage }: HeaderProps) {
             <div className="lz-header-right lz-header-right--compact m-0">
               <button
                 type="button"
-                onClick={() => handleNavigation('waivers-insurance')}
-                className="hidden shrink-0 whitespace-nowrap rounded-lz border border-white/15 bg-white/[0.06] px-3 py-2 text-xs font-semibold text-white/90 backdrop-blur-md transition hover:border-cyan-400/40 hover:text-white md:inline-flex"
+                onClick={() => handleNavigation('fleet-daytona')}
+                className="hidden shrink-0 whitespace-nowrap rounded-lz border border-white/15 bg-white/[0.06] px-2.5 py-2 text-[11px] font-semibold text-white/90 backdrop-blur-md transition hover:border-amber-400/40 hover:text-white sm:inline-flex md:px-3 md:text-xs"
               >
-                Waivers &amp; Insurance
+                Rent a Boat
               </button>
               <button
                 type="button"
-                onClick={() => handleNavigation('book')}
-                className="lz-btn-nav-cta lz-btn-nav-cta--toolbar shrink-0 whitespace-nowrap sm:whitespace-normal"
+                onClick={() => handleNavigation('experiences')}
+                className="lz-btn-nav-cta lz-btn-nav-cta--toolbar shrink-0 whitespace-nowrap text-[11px] sm:text-xs sm:whitespace-normal"
               >
-                Book Now
+                Book an Experience
               </button>
               <button
                 type="button"

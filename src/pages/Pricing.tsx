@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Helmet } from 'react-helmet-async';
+import { Link } from 'react-router-dom';
 import { Check, Info, Plus } from 'lucide-react';
 import SmartImage from '../components/ui/SmartImage';
 import { PRICING } from '../config/pricing';
@@ -10,6 +11,7 @@ import {
 } from '../content/securityDeposit';
 import { supabase } from '../lib/supabase';
 import { wrapNavigateClick, wrapSyncClick } from '../lib/clickPerf';
+import { bioBookingUrl } from '../lib/bioluminescencePackages';
 
 interface PricingProps {
   onNavigate: (page: string) => void;
@@ -159,6 +161,76 @@ export default function Pricing({ onNavigate }: PricingProps) {
             every <span className="text-slate-200">center console boat rental</span> package and competitive{' '}
             <span className="text-slate-200">Florida boat pricing</span>.
           </p>
+        </div>
+      </section>
+
+      <section className="lz-home-section border-t border-cyan-500/10" aria-labelledby="captain-led-pricing-heading">
+        <div className="lz-home-inner">
+          <h2 id="captain-led-pricing-heading" className="mb-2 text-center font-display text-2xl font-bold text-white md:text-3xl">
+            Captain-Led Experiences
+          </h2>
+          <p className="mx-auto mb-8 max-w-2xl text-center text-sm text-slate-400 md:text-base">
+            Rocket launch and sunset charters use per-guest ticket pricing. Bioluminescence uses fixed packages below.
+          </p>
+          <div className="grid gap-6 md:grid-cols-2">
+            <article className="lz-card-glass border border-white/10 p-6 md:p-8">
+              <h3 className="text-xl font-bold text-white">Bioluminescence package pricing</h3>
+              <p className="mt-2 text-sm text-slate-400">Captain and fuel included · night tour on the Indian River Lagoon</p>
+              <ul className="mt-4 space-y-3 text-sm text-slate-200">
+                <li className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3">
+                  <span>1 guest</span>
+                  <span className="text-lg font-bold text-lz-cta">$40</span>
+                </li>
+                <li className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3">
+                  <span>2 guests</span>
+                  <span className="text-lg font-bold text-lz-cta">$78</span>
+                </li>
+                <li className="flex flex-wrap items-center justify-between gap-2 pb-1">
+                  <span>4 guests</span>
+                  <span className="text-lg font-bold text-lz-cta">$150</span>
+                </li>
+              </ul>
+              <div className="mt-6 flex flex-col gap-2">
+                <Link to={bioBookingUrl('bio_solo')} className="lz-btn-secondary justify-center text-center text-sm">
+                  Book solo — $40
+                </Link>
+                <Link to={bioBookingUrl('bio_two')} className="lz-btn-secondary justify-center text-center text-sm">
+                  Book for two — $78
+                </Link>
+                <Link to={bioBookingUrl('bio_four')} className="lz-btn-primary justify-center text-center text-sm">
+                  Book for four — $150
+                </Link>
+              </div>
+            </article>
+            <article className="lz-card-glass border border-white/10 p-6 md:p-8">
+              <h3 className="text-xl font-bold text-white">Rocket launch &amp; sunset charters</h3>
+              <p className="mt-2 text-sm text-slate-400">Per-guest ticket pricing · captain and fuel included</p>
+              <ul className="mt-4 space-y-3 text-sm text-slate-200">
+                <li className="flex justify-between border-b border-white/10 pb-3">
+                  <span>Rocket launch charter</span>
+                  <span className="font-bold text-lz-cta">$85 / guest</span>
+                </li>
+                <li className="flex justify-between pb-1">
+                  <span>Sunset &amp; wildlife cruise</span>
+                  <span className="font-bold text-lz-cta">$75 / guest</span>
+                </li>
+              </ul>
+              <div className="mt-6 flex flex-col gap-2">
+                <Link
+                  to="/booking?bookingMode=charter&charterType=rocket_launch"
+                  className="lz-btn-secondary justify-center text-center text-sm"
+                >
+                  Book rocket charter
+                </Link>
+                <Link
+                  to="/booking?bookingMode=charter&charterType=sunset"
+                  className="lz-btn-secondary justify-center text-center text-sm"
+                >
+                  Book sunset cruise
+                </Link>
+              </div>
+            </article>
+          </div>
         </div>
       </section>
 
@@ -423,15 +495,11 @@ export default function Pricing({ onNavigate }: PricingProps) {
             Choose your boat, pick your time, and get ready for an unforgettable experience.
           </p>
             <div className="flex flex-col justify-center gap-4 sm:flex-row sm:items-center sm:justify-center">
-              <button type="button" onClick={wrapNavigateClick('pricing', 'book', onNavigate)} className="lz-btn-primary">
-                Book now
+              <button type="button" onClick={wrapNavigateClick('pricing', 'fleet-daytona', onNavigate)} className="lz-btn-secondary">
+                Rent a Boat
               </button>
-              <button
-                type="button"
-                onClick={wrapNavigateClick('pricing', 'fleet-daytona', onNavigate)}
-                className="lz-btn-secondary"
-              >
-                View rentals
+              <button type="button" onClick={wrapNavigateClick('pricing', 'experiences', onNavigate)} className="lz-btn-secondary">
+                View Experiences
               </button>
             </div>
           </div>

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Helmet } from 'react-helmet-async';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { Anchor, Award, Calendar, Clock, Loader2, Shield, Star, Volume2, VolumeX } from 'lucide-react';
 import SmartImage from '../components/ui/SmartImage';
 import LaunchCountdown from '../components/LaunchCountdown';
@@ -9,6 +9,13 @@ import { formatBestViewingWindow, getLaunchConfidence } from '../lib/launchForma
 import { getBookingWindow } from '../lib/launchBookingWindow';
 import { env } from '../config/env.js';
 import { wrapNavigateClick, wrapRouterNavigate } from '../lib/clickPerf';
+import {
+  EXPERIENCE_BIO,
+  EXPERIENCE_RENTAL,
+  EXPERIENCE_ROCKET,
+  EXPERIENCE_SUNSET,
+  type ExperienceCatalogEntry,
+} from '../lib/experienceCatalog';
 
 const DEFAULT_SITE_ORIGIN = 'https://launchzonecharters.com';
 
@@ -41,6 +48,39 @@ type LaunchPreviewRow = {
   window_start?: string | null;
   status?: { name?: string } | string;
 };
+
+function HomeExperienceCard({
+  entry,
+  pageKey,
+  onNavigate,
+}: {
+  entry: ExperienceCatalogEntry;
+  pageKey: string;
+  onNavigate: (page: string) => void;
+}) {
+  const kindLabel = entry.kind === 'captain-led' ? 'Captain-led' : 'Self-drive rental';
+  const location =
+    entry.id === 'rental' ? EXPERIENCE_RENTAL.locationLabel : entry.locationLabel;
+
+  return (
+    <article className="lz-card-glass flex h-full flex-col p-5 text-left md:p-6">
+      <p className="text-2xl" aria-hidden>
+        {entry.icon}
+      </p>
+      <p className="mt-2 text-[10px] font-semibold uppercase tracking-wide text-cyan-200/90">{kindLabel}</p>
+      <h3 className="mt-2 font-display text-lg font-bold text-white">{entry.publicName}</h3>
+      <p className="mt-1 text-xs font-medium text-slate-400">{location}</p>
+      <p className="mt-3 flex-1 text-sm leading-relaxed text-slate-300">{entry.tagline}</p>
+      <button
+        type="button"
+        onClick={wrapNavigateClick('home', pageKey, onNavigate)}
+        className="lz-btn-secondary mt-5 w-full min-h-[44px] justify-center"
+      >
+        {entry.exploreCta}
+      </button>
+    </article>
+  );
+}
 
 export default function Home({ onNavigate }: HomeProps) {
   const navigate = useNavigate();
@@ -264,17 +304,17 @@ export default function Home({ onNavigate }: HomeProps) {
               <div className="hero-buttons">
                 <button
                   type="button"
-                  onClick={wrapNavigateClick('home', 'book', onNavigate)}
+                  onClick={wrapNavigateClick('home', 'experiences', onNavigate)}
                   className="lz-btn-primary w-full min-h-[48px] sm:w-auto"
                 >
-                  Book now
+                  Book an Experience
                 </button>
                 <button
                   type="button"
                   onClick={wrapNavigateClick('home', 'fleet-daytona', onNavigate)}
                   className="lz-btn-secondary lz-btn-secondary-hero w-full min-h-[48px] sm:w-auto"
                 >
-                  View rentals
+                  Rent a Boat
                 </button>
                 <button
                   type="button"
@@ -284,16 +324,35 @@ export default function Home({ onNavigate }: HomeProps) {
                   See launch dates
                 </button>
               </div>
-              <p className="mt-4 text-sm text-cyan-100/90">
-                Have a Groupon voucher?{' '}
-                <Link
-                  to="/booking/groupon"
-                  className="font-semibold text-cyan-200 underline underline-offset-2"
-                >
-                  Book with Groupon
-                </Link>
-              </p>
             </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="lz-home-section border-t border-white/5" aria-labelledby="choose-experience-heading">
+        <div className="lz-home-inner">
+          <div className="lz-home-section__head text-center">
+            <h2
+              id="choose-experience-heading"
+              className="font-display text-2xl font-bold uppercase tracking-[0.12em] text-white md:text-3xl"
+            >
+              Choose Your Experience
+            </h2>
+            <p className="mx-auto mt-3 max-w-2xl text-base text-slate-300 md:text-lg">
+              Captain-led charters and self-drive rentals use different booking paths, pricing, and requirements.
+            </p>
+          </div>
+          <div className="mt-10 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+            {(
+              [
+                { entry: EXPERIENCE_BIO, pageKey: 'bioluminescent-tours' as const },
+                { entry: EXPERIENCE_ROCKET, pageKey: 'launches' as const },
+                { entry: EXPERIENCE_SUNSET, pageKey: 'sunset-wildlife' as const },
+                { entry: EXPERIENCE_RENTAL, pageKey: 'fleet-daytona' as const },
+              ] as const
+            ).map(({ entry, pageKey }) => (
+              <HomeExperienceCard key={entry.id} entry={entry} pageKey={pageKey} onNavigate={onNavigate} />
+            ))}
           </div>
         </div>
       </section>
@@ -630,8 +689,12 @@ export default function Home({ onNavigate }: HomeProps) {
               walk you through ramps, timing, and what to bring.
             </p>
             <div className="flex flex-col justify-center gap-4 sm:flex-row sm:items-center sm:justify-center">
-              <button type="button" onClick={wrapNavigateClick('home', 'book', onNavigate)} className="lz-btn-primary">
-                Book now
+              <button
+                type="button"
+                onClick={wrapNavigateClick('home', 'experiences', onNavigate)}
+                className="lz-btn-primary"
+              >
+                View experiences
               </button>
               <button
                 type="button"

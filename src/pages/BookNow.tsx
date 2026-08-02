@@ -29,6 +29,10 @@ import SafeImage from '../components/SafeImage';
 import { getBoatPlaceholderImage } from '../lib/boatPlaceholders';
 import { env } from '../config/env.js';
 import {
+  bookingPageTitleFromSearchParams,
+  hasProductBookingContext,
+} from '../lib/experienceCatalog';
+import {
   CHARTER_MAX_PASSENGERS,
   CHARTER_MIN_PASSENGERS,
   validateCharterPassengerCount,
@@ -47,6 +51,13 @@ import {
 } from '../lib/calendarInsights';
 import type { RentalLocation } from '../lib/grouponPromo';
 import WaiverBlock, { waiverFormComplete } from '../components/booking/WaiverBlock';
+import BioluminescencePackageCards from '../components/booking/BioluminescencePackageCards';
+import {
+  BIO_PACKAGE_PRICING_DISCLAIMER,
+  getBioPackageDisplay,
+  isDirectBioPackagePricingEnabled,
+  type BioPackageId,
+} from '../lib/bioluminescencePackages';
 
 interface BookNowProps {
   onNavigate: (page: string) => void;
@@ -183,7 +194,7 @@ type CharterVariant = 'private' | 'shared';
 
 export default function BookNow({ onNavigate }: BookNowProps) {
   const location = useLocation();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const bookingIdFromUrl = (searchParams.get('bookingId') || '').trim();
   const resumeTokenFromUrl = (searchParams.get('resume') || '').trim();
   const [bookingMode, setBookingMode] = useState<BookingMode>('rental');
@@ -210,6 +221,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     /** When set, start_time at checkout uses this ISO instant (server availability slot). */
     slotStartIso: '',
   });
+  const [bioPackageId, setBioPackageId] = useState<BioPackageId | null>(null);
   const [waiverData, setWaiverData] = useState({
     agreed: false,
     signature: '',
@@ -478,6 +490,12 @@ export default function BookNow({ onNavigate }: BookNowProps) {
         next.charterType = 'night_bio';
         next.time = '20:00';
         next.hours = 1;
+        const packageParam = searchParams.get('package');
+        const pkgFromUrl = packageParam ? getBioPackageDisplay(packageParam) : null;
+        if (pkgFromUrl) {
+          setBioPackageId(pkgFromUrl.id);
+          next.passengerCount = pkgFromUrl.guestCount;
+        }
       }
       if (charterType === 'sunset' || charterType === 'sunset_cruise') {
         setBookingMode('charter');
@@ -611,16 +629,40 @@ export default function BookNow({ onNavigate }: BookNowProps) {
   const SUNSET_SHARED_PER_PERSON = 75;
 
   const isBioCharter = bookingMode === 'charter' && bookingData.charterType === 'night_bio';
+  const isBioPackageFlow = isBioCharter && isDirectBioPackagePricingEnabled();
+  const selectedBioPackage = isBioPackageFlow ? getBioPackageDisplay(bioPackageId) : null;
   const isRocketCharter = bookingMode === 'charter' && bookingData.charterType === 'rocket_launch';
   const isSunsetCharter = bookingMode === 'charter' && bookingData.charterType === 'sunset_cruise';
   /** Charters use a ticket-style checkout and skip rental add-ons. */
   const charterUsesPrivateSharedStep = false;
   const isSharedTour = false;
   const sharedTourPerPerson = (() => {
-    if (bookingData.charterType === 'night_bio') return BIO_SHARED_PER_PERSON;
+    if (bookingData.charterType === 'night_bio') {
+      return selectedBioPackage ? selectedBioPackage.perGuestUsd : BIO_SHARED_PER_PERSON;
+    }
     if (bookingData.charterType === 'rocket_launch') return ROCKET_SHARED_PER_PERSON;
     return SUNSET_SHARED_PER_PERSON;
   })();
+
+  const handleSelectBioPackage = useCallback(
+    (id: BioPackageId) => {
+      const pkg = getBioPackageDisplay(id);
+      if (!pkg) return;
+      setBioPackageId(id);
+      setBookingData((prev) => ({ ...prev, passengerCount: pkg.guestCount }));
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.set('bookingMode', 'charter');
+          next.set('charterType', 'bio');
+          next.set('package', id);
+          return next;
+        },
+        { replace: true }
+      );
+    },
+    [setSearchParams]
+  );
   const sharedTourOverLimit =
     bookingMode === 'charter' &&
     (bookingData.passengerCount < CHARTER_MIN_PASSENGERS || bookingData.passengerCount > CHARTER_MAX_PASSENGERS);
@@ -978,7 +1020,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
   const CHARTER_EXPERIENCE_LABEL: Record<CharterType, string> = {
     rocket_launch: 'Rocket launch charter',
     night_bio: 'Bioluminescence night charter',
-    sunset_cruise: 'Sunset cruise',
+    sunset_cruise: 'Sunset and Wildlife Cruise',
   };
 
   const CHARTER_INCLUSIONS_LINE = 'Captain & fuel included · No security deposit';
@@ -998,7 +1040,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
       : bookingData.charterType === 'night_bio'
         ? 'Bioluminescence Tour'
         : bookingData.charterType === 'sunset_cruise'
-          ? 'Sunset Cruise'
+          ? 'Sunset and Wildlife Cruise'
           : 'Charter';
 
   function calendarCellsFor(monthStart: Date) {
@@ -1068,6 +1110,21 @@ export default function BookNow({ onNavigate }: BookNowProps) {
   };
 
   const calculateCharterPricing = () => {
+    if (isBioPackageFlow && selectedBioPackage) {
+      const total = selectedBioPackage.directPriceUsd;
+      return {
+        basePrice: total,
+        captainFee: 0,
+        deposit: 0,
+        weekendSurcharge: 0,
+        rocketLaunchSurcharge: 0,
+        bioTourSurcharge: 0,
+        sunsetExperienceSurcharge: 0,
+        nightExperienceSurcharge: 0,
+        peakSeasonSurcharge: 0,
+        total,
+      };
+    }
     const guests = Math.min(CHARTER_MAX_PASSENGERS, Math.max(CHARTER_MIN_PASSENGERS, Number(bookingData.passengerCount) || 1));
     const ticketPrice = sharedTourPerPerson;
     const total = Number((guests * ticketPrice).toFixed(2));
@@ -1109,20 +1166,25 @@ export default function BookNow({ onNavigate }: BookNowProps) {
   const rentalInsuranceMissing = bookingMode === 'rental' && !insurancePreviewUrl;
   const charterNeedsBoatSelection = false;
   const charterPd =
-    isSharedTour
+    isBioPackageFlow && selectedBioPackage
       ? {
-          primary: `$${sharedTourPerPerson} per person`,
-          sub: `Full charter total: $${pricing.total.toFixed(2)}`,
+          primary: `${selectedBioPackage.cardTitle} — $${selectedBioPackage.directPriceUsd.toFixed(2)}`,
+          sub: `${selectedBioPackage.guestCount} guest${selectedBioPackage.guestCount === 1 ? '' : 's'} · $${selectedBioPackage.perGuestUsd} per guest`,
         }
-      : charterNeedsBoatSelection
+      : isSharedTour
         ? {
-            primary: 'Starting rates available',
-            sub: 'Select a boat to see final total before checkout',
+            primary: `$${sharedTourPerPerson} per person`,
+            sub: `Full charter total: $${pricing.total.toFixed(2)}`,
           }
-      : {
-          primary: `Full charter total: $${pricing.total.toFixed(2)}`,
-          sub: 'Per boat',
-        };
+        : charterNeedsBoatSelection
+          ? {
+              primary: 'Starting rates available',
+              sub: 'Select a boat to see final total before checkout',
+            }
+          : {
+              primary: `$${sharedTourPerPerson} per person`,
+              sub: `Estimated total for selected guests: $${pricing.total.toFixed(2)}`,
+            };
   const charterTimeOptions = isBioCharter ? BIO_NIGHT_CHARTER_TIMES : DEFAULT_CHARTER_TIMES;
   const selectedStartDateTime = buildSelectedStartDateTime({
     slotStartIso: bookingData.slotStartIso,
@@ -1279,6 +1341,16 @@ export default function BookNow({ onNavigate }: BookNowProps) {
         return;
       }
     }
+    if (isBioPackageFlow && !bioPackageId) {
+      setCheckoutError('Choose a bioluminescence package to continue.');
+      checkoutPerf.end('aborted_bio_package');
+      return;
+    }
+    if (isBioPackageFlow && normalizedPromoInput) {
+      setCheckoutError('Promo codes cannot be applied to bioluminescence package bookings.');
+      checkoutPerf.end('aborted_bio_promo');
+      return;
+    }
     if (!bookingData.date || !bookingData.fullName || !bookingData.email || !bookingData.phone) {
       alert('Please complete your contact information and trip date.');
       checkoutPerf.end('aborted_form_incomplete');
@@ -1399,6 +1471,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                 bookingMode === 'charter'
                   ? Math.min(CHARTER_MAX_PASSENGERS, Math.max(CHARTER_MIN_PASSENGERS, Number(bookingData.passengerCount) || 1))
                   : 1,
+              pricingPackageId: isBioPackageFlow && bioPackageId ? bioPackageId : null,
               special_requests:
                 bookingMode === 'charter'
                   ? `${bookingData.charterRequestOnly ? '[REQUEST_ONLY] ' : ''}${bookingData.specialRequests || ''}`.trim()
@@ -1654,6 +1727,14 @@ export default function BookNow({ onNavigate }: BookNowProps) {
 
   const bookingModeFromUrl = searchParams.get('bookingMode');
   const showNeutralChooser = step === 0 && bookingModeFromUrl === null;
+  const productBookingTitle = useMemo(
+    () => bookingPageTitleFromSearchParams(searchParams),
+    [searchParams]
+  );
+  const directProductBooking = hasProductBookingContext(searchParams);
+  const pageHeroTitle =
+    productBookingTitle ??
+    (showNeutralChooser ? 'What would you like to book?' : 'Book your adventure');
 
   return (
     <div
@@ -1669,18 +1750,20 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                 ? 'Book a captain-led charter'
                 : 'Reserve your self-drive rental'}
           </p>
-          <h1 className="lz-page-hero-heading font-display text-white">Book your adventure</h1>
+          <h1 className="lz-page-hero-heading font-display text-white">{pageHeroTitle}</h1>
           <p className="mx-auto mt-4 max-w-2xl text-base leading-relaxed text-slate-300 md:text-lg">
             {showNeutralChooser
               ? 'Choose a captain-led charter or a self-drive rental, then pick your boat and schedule. Charters and rentals use different pricing and requirements — your selections below set the right path.'
               : bookingMode === 'charter'
-                ? 'Choose your charter experience, date, time, and passengers, then check out. Captain & fuel included; no security deposit.'
+                ? 'Choose date, time, and passengers, then check out. Captain & fuel included; no security deposit.'
                 : 'Pick your boat and schedule, add options, then check out with Stripe: today you pay 50% of your reservation total (which includes the refundable $300 security deposit). After checkout we verify compliance details and approvals.'}
           </p>
-          <p className="mx-auto mt-3 max-w-2xl text-xs leading-snug text-slate-500 md:text-sm">
-            <Sparkles className="mr-1 inline-block h-3.5 w-3.5 text-cyan-400/80" aria-hidden />
-            Rocket-launch and weekend dates are popular — book early when you can.
-          </p>
+          {!directProductBooking ? (
+            <p className="mx-auto mt-3 max-w-2xl text-xs leading-snug text-slate-500 md:text-sm">
+              <Sparkles className="mr-1 inline-block h-3.5 w-3.5 text-cyan-400/80" aria-hidden />
+              Rocket-launch and weekend dates are popular — book early when you can.
+            </p>
+          ) : null}
         </div>
       </section>
 
@@ -1713,18 +1796,27 @@ export default function BookNow({ onNavigate }: BookNowProps) {
             </p>
           </div>
 
-          <div className="lz-card-glass mb-6 rounded-[var(--lz-radius-card)] border border-cyan-400/25 bg-cyan-950/30 px-4 py-3 text-sm text-cyan-50">
-            <p>
-              Have a Groupon voucher?{' '}
-              <Link
-                to="/booking/groupon"
-                className="font-semibold text-cyan-200 underline underline-offset-2"
-              >
-                Book with Groupon
-              </Link>{' '}
-              — enter your voucher number and last name. Requests are reviewed before confirmation; no deposit required.
+          {showNeutralChooser ? (
+            <div className="lz-card-glass mb-6 rounded-[var(--lz-radius-card)] border border-cyan-400/25 bg-cyan-950/30 px-4 py-3 text-sm text-cyan-50">
+              <p>
+                Have a Groupon voucher?{' '}
+                <Link
+                  to="/booking/groupon"
+                  className="font-semibold text-cyan-200 underline underline-offset-2"
+                >
+                  Redeem Groupon voucher
+                </Link>{' '}
+                — separate from direct checkout below.
+              </p>
+            </div>
+          ) : directProductBooking ? (
+            <p className="mb-6 text-center text-xs text-slate-500">
+              Groupon voucher?{' '}
+              <Link to="/booking/groupon" className="font-semibold text-cyan-400 underline underline-offset-2">
+                Redeem here
+              </Link>
             </p>
-          </div>
+          ) : null}
 
           {step > 0 && (
             <BookingFlowStepIndicator
@@ -2176,6 +2268,62 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                           </div>
                         )}
                       </div>
+                      {isBioPackageFlow ? (
+                        <div className="space-y-4">
+                          <div>
+                            <h3 className={bookingSectionTitle}>Choose your package</h3>
+                            <p className="mt-2 text-sm text-slate-400">
+                              {BIO_PACKAGE_PRICING_DISCLAIMER}
+                            </p>
+                          </div>
+                          {!selectedBioPackage ? (
+                            <BioluminescencePackageCards
+                              selectedPackageId={bioPackageId}
+                              onSelect={handleSelectBioPackage}
+                            />
+                          ) : (
+                            <div className={`${bookingCard} border-cyan-400/25`}>
+                              <p className="text-xs font-semibold uppercase tracking-wide text-cyan-200/90">
+                                Selected package
+                              </p>
+                              <p className="mt-2 text-lg font-bold text-white">{selectedBioPackage.cardTitle}</p>
+                              <p className="mt-1 text-sm text-slate-300">
+                                {selectedBioPackage.guestCount} guest
+                                {selectedBioPackage.guestCount === 1 ? '' : 's'} · $
+                                {selectedBioPackage.directPriceUsd.toFixed(2)} total · $
+                                {selectedBioPackage.perGuestUsd} per guest
+                              </p>
+                              <button
+                                type="button"
+                                className="mt-4 text-sm font-semibold text-cyan-300 underline underline-offset-2"
+                                onClick={() => {
+                                  setBioPackageId(null);
+                                  setSearchParams(
+                                    (prev) => {
+                                      const next = new URLSearchParams(prev);
+                                      next.delete('package');
+                                      return next;
+                                    },
+                                    { replace: true }
+                                  );
+                                }}
+                              >
+                                Change package
+                              </button>
+                            </div>
+                          )}
+                          <p className="text-sm text-slate-400">
+                            Need to book for five guests?{' '}
+                            <a
+                              href="tel:8035421761"
+                              className="font-semibold text-cyan-300 underline underline-offset-2"
+                            >
+                              Contact our booking team
+                            </a>
+                            .
+                          </p>
+                        </div>
+                      ) : (
                       <div>
                         <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-400">
                           Select number of passengers
@@ -2198,6 +2346,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                           ${sharedTourPerPerson.toFixed(2)} per ticket · up to {CHARTER_MAX_PASSENGERS} passengers.
                         </p>
                       </div>
+                      )}
                     </div>
                   </>
                 ) : (
@@ -2453,6 +2602,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                       (bookingData.time || bookingData.slotStartIso) &&
                       bookingData.passengerCount >= 1 &&
                       bookingData.passengerCount <= CHARTER_MAX_PASSENGERS &&
+                      (!isBioPackageFlow || Boolean(bioPackageId)) &&
                       !dateMarkedUnavailable &&
                       !noSlotsForDay;
                     const canContinueRental = bookingMode === 'rental' && selectedBoat && bookingData.date && !scheduleContinueBlocked;
@@ -2466,6 +2616,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                         (!bookingData.time && !bookingData.slotStartIso) ||
                         bookingData.passengerCount < 1 ||
                         bookingData.passengerCount > CHARTER_MAX_PASSENGERS ||
+                        (isBioPackageFlow && !bioPackageId) ||
                         dateMarkedUnavailable ||
                         noSlotsForDay ||
                         availTimesLoading
@@ -2486,7 +2637,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                 <p className="mt-2 text-sm text-slate-400">
                   {bookingMode === 'charter'
                     ? bookingData.charterType === 'night_bio'
-                      ? 'Your total and inclusions are set. Choose private (one total) or shared ($75 per person) below.'
+                      ? `Your total and inclusions are set. Per-person rate applies; choose private or shared seating below when available.`
                       : bookingData.charterType === 'rocket_launch'
                         ? `Your total and inclusions are set. Choose private (one total) or shared ($${ROCKET_SHARED_PER_PERSON} per person) below.`
                         : bookingData.charterType === 'sunset_cruise'
@@ -2924,6 +3075,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                         <span>Included</span>
                       </div>
                     )}
+                    {!isBioPackageFlow ? (
                     <div className="rounded-lg border border-white/10 bg-slate-950/60 p-3">
                       <label htmlFor="promo-code" className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-300">
                         Promo code
@@ -2959,6 +3111,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                         </p>
                       )}
                     </div>
+                    ) : null}
                     {appliedPromo && (
                       <>
                         <div className="my-3 border-t border-white/10"></div>

@@ -39,6 +39,7 @@ const disputeExportService = require('./services/disputeExportService');
 const adminDocumentAccessService = require('./services/adminDocumentAccessService');
 const waiverPdfService = require('./services/waiverPdfService');
 const { getBioConditions } = require('./services/bioluminescenceService');
+const bioPackagePricing = require('./services/bioluminescencePackagePricing');
 const { getRocketConditions } = require('./services/rocketService');
 const { getLaunchSchedulePreview } = require('./services/rocketScheduleService');
 const { getWeeklyForecast } = require('./services/weeklyForecastService');
@@ -143,6 +144,8 @@ function computeExpectedBookingTotals({
   passengerCount,
   date,
   boat,
+  pricingPackageId,
+  bookingSource,
 }) {
   const hours = Math.max(0, Number(durationHours) || 0);
   const captainFee = captainIncluded ? CAPTAIN_HOURLY * hours : 0;
@@ -151,6 +154,16 @@ function computeExpectedBookingTotals({
   const fullDay = Number(boat?.full_day_rate || 0);
 
   if (bookingMode === 'charter') {
+    const bioResolved = bioPackagePricing.resolveCharterBioPricing({
+      charterType,
+      pricingPackageId,
+      passengerCount,
+      bookingSource,
+    });
+    if (bioResolved.kind === 'package' && bioResolved.totals) {
+      return bioResolved.totals;
+    }
+
     const charterDurationHours = 1;
     const guests = clampCharterPassengerCount(passengerCount);
     const ticketPrice =
@@ -953,10 +966,30 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
   const charterType = typeof booking.charterType === 'string' ? booking.charterType.trim().toLowerCase() : '';
   const charterVariant =
     typeof booking.charterVariant === 'string' ? booking.charterVariant.trim().toLowerCase() : '';
+  const pricingPackageId = bioPackagePricing.extractPricingPackageId(booking);
+  const bookingSource = String(booking.bookingSource || booking.booking_source || 'website')
+    .trim()
+    .toLowerCase();
   const passengerCountRaw = Number(booking.passengerCount);
   let passengerCount = Number.isFinite(passengerCountRaw) ? Math.max(1, Math.round(passengerCountRaw)) : NaN;
   const isCharterBooking = bookingMode === 'charter';
   if (isCharterBooking) {
+    if (bioPackagePricing.normalizeBioCharterType(charterType) === 'bio') {
+      const bioCheck = bioPackagePricing.validateDirectBioPackageCheckout({
+        charterType,
+        pricingPackageId,
+        passengerCountFromClient: passengerCount,
+        bookingSource,
+      });
+      if (!bioCheck.ok) {
+        const err = new Error(bioCheck.error);
+        err.statusCode = 400;
+        throw err;
+      }
+      if (bioCheck.passengerCount) {
+        passengerCount = bioCheck.passengerCount;
+      }
+    }
     const validation = validateCharterPassengerCount(passengerCount);
     if (!validation.valid) {
       const err = new Error(validation.error);
@@ -1004,7 +1037,18 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
     passengerCount,
     date: booking.start_time,
     boat: boatRow,
+    pricingPackageId,
+    bookingSource,
   });
+
+  if (
+    pricingPackageId &&
+    (booking.promoCode || booking.promo_code || booking.discountAmount || booking.discount_amount)
+  ) {
+    const err = new Error('Promo codes cannot be applied to bioluminescence package bookings.');
+    err.statusCode = 400;
+    throw err;
+  }
 
   const promoApplied = await applyPromoToExpectedTotals(expected, {
     supabaseAdmin: supabase,
@@ -1092,6 +1136,9 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
     discount_amount: promoFields?.discount_amount ?? 0,
     original_total: promoFields?.original_total ?? expected.totalPrice,
     final_total: promoFields?.final_total ?? expected.totalPrice,
+    ...(expected.bioPackage
+      ? bioPackagePricing.bioPackageBookingFields(expected.bioPackage)
+      : {}),
   };
 
   try {
@@ -6007,8 +6054,30 @@ app.post('/api/create-checkout-session', async (req, res) => {
       });
     }
 
+    const pricingPackageId = bioPackagePricing.extractPricingPackageId(booking);
+    const bookingSource = String(booking.bookingSource || booking.booking_source || 'website')
+      .trim()
+      .toLowerCase();
+
+    const passengerCountRaw = Number(
+      booking.passengerCount ?? booking.passenger_count ?? booking.guest_count
+    );
     let passengerCount = Number.isFinite(passengerCountRaw) ? Math.max(1, Math.round(passengerCountRaw)) : NaN;
     if (isCharterBooking) {
+      if (bioPackagePricing.normalizeBioCharterType(charterType) === 'bio') {
+        const bioCheck = bioPackagePricing.validateDirectBioPackageCheckout({
+          charterType,
+          pricingPackageId,
+          passengerCountFromClient: passengerCount,
+          bookingSource,
+        });
+        if (!bioCheck.ok) {
+          return res.status(400).json({ error: bioCheck.error });
+        }
+        if (bioCheck.passengerCount) {
+          passengerCount = bioCheck.passengerCount;
+        }
+      }
       const validation = validateCharterPassengerCount(passengerCount);
       if (!validation.valid) {
         return res.status(400).json({ error: validation.error });
@@ -6016,6 +6085,15 @@ app.post('/api/create-checkout-session', async (req, res) => {
       passengerCount = validation.count;
     } else {
       passengerCount = 1;
+    }
+
+    if (
+      pricingPackageId &&
+      (booking.promoCode || booking.promo_code || booking.discountAmount || booking.discount_amount)
+    ) {
+      return res.status(400).json({
+        error: 'Promo codes cannot be applied to bioluminescence package bookings.',
+      });
     }
 
     // Server-authoritative pricing: compute expected totals server-side.
@@ -6045,6 +6123,8 @@ app.post('/api/create-checkout-session', async (req, res) => {
       passengerCount,
       date: booking.start_time,
       boat: boatRow,
+      pricingPackageId,
+      bookingSource,
     });
 
     const promoApplied = await applyPromoToExpectedTotals(expected, {
@@ -6177,12 +6257,15 @@ app.post('/api/create-checkout-session', async (req, res) => {
 
     const checkoutBookingMode = String(booking.bookingMode || '').trim().toLowerCase();
     const checkoutCharterVariant = String(booking.charterVariant || '').trim().toLowerCase();
-    const lineItemName =
+    let lineItemName =
       checkoutBookingMode === 'charter'
         ? checkoutCharterVariant === 'shared'
           ? 'Shared Charter Seat'
           : 'Private Charter Booking'
         : 'Boat Rental Deposit';
+    if (expected.bioPackage) {
+      lineItemName = bioPackagePricing.stripeLineItemNameForBioPackage(expected.bioPackage);
+    }
 
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
@@ -6225,6 +6308,8 @@ app.post('/api/create-checkout-session', async (req, res) => {
       discountAmount: promoFields?.discount_amount ?? null,
       originalTotal: promoFields?.original_total ?? expected.totalPrice,
       finalTotal: promoFields?.final_total ?? expected.totalPrice,
+      pricingPackageId: expected.bioPackage?.id || pricingPackageId || null,
+      passengerCount: isCharterBooking ? passengerCount : booking.passengerCount,
     };
 
     const captainFeeStored =
@@ -6273,6 +6358,9 @@ app.post('/api/create-checkout-session', async (req, res) => {
       discount_amount: promoFields?.discount_amount ?? 0,
       original_total: promoFields?.original_total ?? expected.totalPrice,
       final_total: promoFields?.final_total ?? expected.totalPrice,
+      ...(expected.bioPackage
+        ? bioPackagePricing.bioPackageBookingFields(expected.bioPackage)
+        : {}),
     };
 
     const { error: holdErr } = await supabase.from('bookings').insert(holdInsert);

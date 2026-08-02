@@ -1,0 +1,149 @@
+const {
+  getBioluminescencePackage,
+  isDirectBioPackagePricingEnabled,
+} = require('../config/bioluminescencePackages');
+
+function roundMoney(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return 0;
+  return Math.round(n * 100) / 100;
+}
+
+function normalizeBioCharterType(charterType) {
+  const t = String(charterType || '').trim().toLowerCase();
+  if (t === 'bio' || t === 'night_bio') return 'bio';
+  return t;
+}
+
+function extractPricingPackageId(booking) {
+  if (!booking || typeof booking !== 'object') return '';
+  return String(
+    booking.pricingPackageId ||
+      booking.pricing_package_id ||
+      booking.packageId ||
+      booking.package ||
+      ''
+  ).trim();
+}
+
+function validateDirectBioPackageCheckout({
+  charterType,
+  pricingPackageId,
+  passengerCountFromClient,
+  bookingSource,
+}) {
+  if (!isDirectBioPackagePricingEnabled()) {
+    return { ok: true, useLegacy: true };
+  }
+  if (normalizeBioCharterType(charterType) !== 'bio') {
+    return { ok: true, useLegacy: false };
+  }
+  const source = String(bookingSource || '').trim().toLowerCase();
+  if (source === 'groupon') {
+    return { ok: true, skipPackage: true };
+  }
+
+  const packageId = String(pricingPackageId || '').trim();
+  if (!packageId) {
+    return {
+      ok: false,
+      error:
+        'Select a bioluminescence package (solo, two guests, or four guests) to continue.',
+    };
+  }
+
+  let pkg;
+  try {
+    pkg = getBioluminescencePackage(packageId);
+  } catch (e) {
+    return { ok: false, error: e.message || 'Invalid bioluminescence package.' };
+  }
+
+  const clientCountRaw = Number(passengerCountFromClient);
+  if (Number.isFinite(clientCountRaw)) {
+    const clientCount = Math.max(1, Math.round(clientCountRaw));
+    if (clientCount !== pkg.guestCount) {
+      return {
+        ok: false,
+        error: `Guest count must match the selected package (${pkg.guestCount} guests).`,
+      };
+    }
+  }
+
+  return { ok: true, package: pkg, passengerCount: pkg.guestCount };
+}
+
+function bioPackageExpectedTotals(pkg) {
+  const totalPrice = roundMoney(pkg.priceCents / 100);
+  const ticketPrice = roundMoney(totalPrice / pkg.guestCount);
+  return {
+    mode: 'charter',
+    basePrice: totalPrice,
+    ticketPrice,
+    guestCount: pkg.guestCount,
+    durationHours: 1,
+    totalPrice,
+    amountDueToday: totalPrice,
+    bioPackage: pkg,
+  };
+}
+
+function resolveCharterBioPricing({
+  charterType,
+  pricingPackageId,
+  passengerCount,
+  bookingSource,
+}) {
+  const validated = validateDirectBioPackageCheckout({
+    charterType,
+    pricingPackageId,
+    passengerCountFromClient: passengerCount,
+    bookingSource,
+  });
+  if (!validated.ok) {
+    return { kind: 'error', error: validated.error };
+  }
+  if (validated.useLegacy || validated.skipPackage) {
+    return { kind: 'legacy' };
+  }
+  if (!validated.package) {
+    return { kind: 'legacy' };
+  }
+  return {
+    kind: 'package',
+    package: validated.package,
+    passengerCount: validated.passengerCount,
+    totals: bioPackageExpectedTotals(validated.package),
+  };
+}
+
+function bioPackageBookingFields(pkg) {
+  const discountCents = Math.max(0, pkg.standardValueCents - pkg.priceCents);
+  return {
+    pricing_package_id: pkg.id,
+    pricing_package_name: pkg.name,
+    package_guest_count: pkg.guestCount,
+    standard_value_cents: pkg.standardValueCents,
+    package_price_cents: pkg.priceCents,
+    discount_amount_cents: discountCents,
+    final_amount_cents: pkg.priceCents,
+  };
+}
+
+function stripeLineItemNameForBioPackage(pkg) {
+  if (pkg.id === 'bio_solo') {
+    return 'Solo Bioluminescence Night Tour — 1 Guest';
+  }
+  return `Bioluminescence Night Tour — ${pkg.guestCount} Guests`;
+}
+
+module.exports = {
+  normalizeBioCharterType,
+  extractPricingPackageId,
+  validateDirectBioPackageCheckout,
+  bioPackageExpectedTotals,
+  resolveCharterBioPricing,
+  bioPackageBookingFields,
+  stripeLineItemNameForBioPackage,
+  isDirectBioPackagePricingEnabled,
+};

@@ -15,10 +15,12 @@
     "test:staff-booking-duration": "node tests/staffBookingDuration.test.js",
     "test:admin-login-redirect": "node tests/adminLoginRedirect.test.js",
     "test:captain-booking": "node tests/captainBookingService.test.js",
+    "test:captain-portal": "node tests/captainBookingService.test.js && node ../scripts/captainPortalSmokeTest.mjs",
     "test:pre-trip": "node tests/preTripSubmissionGuard.test.js && node --test tests/preTripMatchSuggestions.test.js tests/waiverPassengerLimits.test.js",
     "test:boat-capacity": "node tests/boatSafetyCapacity.test.js && node --test tests/boatCapacityService.test.js",
     "test:groupon-import": "node --test tests/grouponImportService.test.js",
     "test:groupon-booking": "node --test tests/grouponImportService.test.js tests/grouponVoucherEligibility.test.js tests/grouponRequestNotifications.test.js tests/grouponApprovalService.test.js tests/adminSupportService.test.js tests/availabilityService.test.js",
+    "test:bio-packages": "node tests/bioluminescencePackages.test.js",
     "test:admin-smoke": "node ../scripts/adminSmokeTest.mjs",
     "test:ollama": "node --test tests/ollamaClient.test.js"
   },

@@ -8,6 +8,7 @@ import { supabase } from '../lib/supabase';
 import { logSupabaseError } from '../lib/supabaseErrors';
 import { getBoatPlaceholderImage } from '../lib/boatPlaceholders';
 import FullPageLoader from '../components/FullPageLoader';
+import { EXPERIENCE_RENTAL } from '../lib/experienceCatalog';
 import SafeImage from '../components/SafeImage';
 import SmartImage from '../components/ui/SmartImage';
 
@@ -193,9 +194,9 @@ const COPY: Record<BoatRentalsLocationVariant, LocationCopy> = {
     metaKeywords:
       'Titusville boat rentals, Indian River Lagoon boat tours, rocket launch viewing Florida, Indian River Lagoon pontoon rental, rocket launch boat viewing, Max Brewer Bridge boat rental, Space Coast charters, Cape Canaveral launch viewing boat',
     heroImage:
-      '/images/bioluminescent-boat-tour-titusville-florida-indian-river-lagoon-night-glowing-water-launch-zone-charters-pontoon-center-console.png',
+      '/images/transparent-pricing-boat-rentals-titusville-florida-space-coast-launch-zone-charters.jpg',
     heroImageAlt:
-      'Bioluminescent night boating scene in Titusville on the Indian River Lagoon with Launch Zone Charters vessels',
+      'Daytime pontoon boat rental on the Indian River Lagoon, Titusville Florida Space Coast',
     eyebrow: 'Titusville · Indian River Lagoon',
     heroTitle: 'Titusville boat rentals',
     heroSubtitle:
@@ -283,7 +284,7 @@ const CHARTER_EXPERIENCES: CharterExperience[] = [
     icon: '🚀',
     title: 'Rocket Launch Charter',
     description: 'Watch a SpaceX or NASA launch from the water.',
-    bullets: ['Private experience', 'Captain included', 'Fuel included'],
+    bullets: ['Captain-led charter', 'Captain included', 'Fuel included'],
     priceLabel: 'Starting rates available',
     priceSub: 'Final price shown before checkout',
     cta: 'Book Charter',
@@ -293,7 +294,7 @@ const CHARTER_EXPERIENCES: CharterExperience[] = [
     icon: '🌌',
     title: 'Bioluminescence Tour',
     description: 'Experience glowing waters in the Indian River Lagoon.',
-    bullets: ['Private experience', 'Calm guided tour'],
+    bullets: ['Captain-led night tour', 'Calm guided tour'],
     priceLabel: 'Private and shared options available',
     priceSub: 'Final price shown before checkout',
     cta: 'Book Tour',
@@ -301,9 +302,9 @@ const CHARTER_EXPERIENCES: CharterExperience[] = [
   {
     id: 'sunset',
     icon: '🌅',
-    title: 'Sunset Cruise',
-    description: 'Relax and enjoy scenic views on the Space Coast.',
-    bullets: ['Private experience', 'Perfect for groups'],
+    title: 'Sunset and Wildlife Cruise',
+    description: 'Relaxed captain-led cruise; wildlife may appear but is never guaranteed.',
+    bullets: ['Captain-led charter', 'Family-friendly'],
     priceLabel: 'Starting rates available',
     priceSub: 'Final price shown before checkout',
     cta: 'Book Cruise',
@@ -363,7 +364,7 @@ function BoatRentalsHeroContent({
           onClick={wrapNavigateClick(prefix, rentalBookPageKey, onNavigate)}
           className="lz-btn-primary relative z-[2] w-full shrink-0 justify-center shadow-[0_4px_20px_rgba(0,0,0,0.35),0_0_24px_rgba(255,140,43,0.35)] sm:w-auto sm:min-w-[180px]"
         >
-          Book now
+          {EXPERIENCE_RENTAL.bookCta}
         </button>
         <button
           type="button"
@@ -694,11 +695,18 @@ export default function BoatRentalsLocation({ onNavigate, variant }: BoatRentals
               id="charter-experiences-heading"
               className="font-display text-2xl font-bold tracking-tight text-white sm:text-3xl"
             >
-              Charter Experiences
+              Looking for a Captain-Led Experience?
             </h2>
             <p className="mx-auto mt-3 max-w-3xl text-sm leading-relaxed text-slate-300 sm:text-base">
-              Captain-led private experiences built for launch nights, glowing water, and relaxed coastal evenings.
+              These are separate from self-drive rentals on this page. Compare all options on{' '}
+              <a href="/experiences" className="font-semibold text-cyan-300 underline underline-offset-2">
+                View all experiences
+              </a>
+              .
             </p>
+          </div>
+          <div className="mt-4 text-center">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Charter experiences</p>
           </div>
           <div className="mt-12 grid gap-6 md:grid-cols-3">
             {CHARTER_EXPERIENCES.map((charter) => (
@@ -795,7 +803,7 @@ export default function BoatRentalsLocation({ onNavigate, variant }: BoatRentals
                       onClick={() => goToRentalBookingWithBoat(String(boat.id))}
                       className="lz-btn-primary mt-6 w-full justify-center"
                     >
-                      Reserve Rental
+                      Rent a Boat
                     </button>
                   </div>
                 </article>
@@ -903,7 +911,7 @@ export default function BoatRentalsLocation({ onNavigate, variant }: BoatRentals
               onClick={wrapNavigateClick(`boat_rentals_${variant}`, rentalBookPageKey, onNavigate)}
               className="lz-btn-primary order-1 w-full justify-center sm:order-none sm:min-w-[220px]"
             >
-              Book now
+              {EXPERIENCE_RENTAL.bookCta}
             </button>
             <a
               href="tel:803-542-1761"

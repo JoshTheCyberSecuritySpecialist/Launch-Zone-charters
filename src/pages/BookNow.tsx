@@ -70,6 +70,20 @@ interface ApiTimeSlot {
   startHHMM?: string;
 }
 
+/** API rows use `startIso`; BookNow historically used `start`. */
+function normalizeApiTimeSlots(
+  raw: Array<Partial<ApiTimeSlot> & { startIso?: string; endIso?: string }> | undefined
+): ApiTimeSlot[] {
+  return (raw || [])
+    .map((slot) => ({
+      start: String(slot.start || slot.startIso || '').trim(),
+      end: String(slot.end || slot.endIso || '').trim(),
+      label: String(slot.label || '').trim(),
+      startHHMM: slot.startHHMM,
+    }))
+    .filter((slot) => Boolean(slot.start));
+}
+
 type PromoValidationResult = {
   promoCode: string;
   originalSubtotal: number;
@@ -155,7 +169,8 @@ function buildSelectedStartDateTime({
   bookingMode: BookingMode;
   charterType: CharterType;
 }) {
-  if (slotStartIso.trim()) return new Date(slotStartIso.trim());
+  const slotIso = String(slotStartIso ?? '').trim();
+  if (slotIso) return new Date(slotIso);
   const parsedDate = parseYmd(date);
   const [hour, minute] = String(time || '').split(':').map(Number);
   if (!parsedDate || !Number.isFinite(hour) || !Number.isFinite(minute)) return new Date(NaN);
@@ -629,8 +644,13 @@ export default function BookNow({ onNavigate }: BookNowProps) {
   const SUNSET_SHARED_PER_PERSON = 75;
 
   const isBioCharter = bookingMode === 'charter' && bookingData.charterType === 'night_bio';
-  const isBioPackageFlow = isBioCharter && isDirectBioPackagePricingEnabled();
-  const selectedBioPackage = isBioPackageFlow ? getBioPackageDisplay(bioPackageId) : null;
+  const bioPackageFromUrl = getBioPackageDisplay(searchParams.get('package'));
+  /** Honor marketing deep links (`?package=bio_solo`) even before the Vite flag is enabled in prod. */
+  const isBioPackageFlow =
+    isBioCharter && (isDirectBioPackagePricingEnabled() || Boolean(bioPackageFromUrl));
+  const selectedBioPackage = isBioPackageFlow
+    ? getBioPackageDisplay(bioPackageId) ?? bioPackageFromUrl
+    : null;
   const isRocketCharter = bookingMode === 'charter' && bookingData.charterType === 'rocket_launch';
   const isSunsetCharter = bookingMode === 'charter' && bookingData.charterType === 'sunset_cruise';
   /** Charters use a ticket-style checkout and skip rental add-ons. */
@@ -849,7 +869,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     fetch(`${env.apiUrl}/api/availability/times?${q.toString()}`, { signal: ac.signal })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error('times'))))
       .then((data: { slots?: ApiTimeSlot[]; minLeadHours?: number }) => {
-        const slots = data.slots || [];
+        const slots = normalizeApiTimeSlots(data.slots);
         const minLeadHours = Number(data.minLeadHours);
         if (Number.isFinite(minLeadHours) && minLeadHours >= 0) {
           setSameDayMinLeadHours(minLeadHours);
@@ -926,7 +946,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
       const q = new URLSearchParams({ date, charterType });
       return fetch(`${env.apiUrl}/api/availability/charter/times?${q.toString()}`, { signal: ac.signal })
         .then((r) => (r.ok ? r.json() : Promise.reject(new Error('charter times'))))
-        .then((data: { slots?: ApiTimeSlot[] }) => data.slots || []);
+        .then((data: { slots?: ApiTimeSlot[] }) => normalizeApiTimeSlots(data.slots));
     };
     const nextDate = addDaysToYmd(bookingData.date, 1);
     const load =
@@ -1695,7 +1715,10 @@ export default function BookNow({ onNavigate }: BookNowProps) {
               {lines.line2}
             </span>
             <span className="text-[7px] font-normal leading-none text-slate-500">
-              {insight.score.toFixed(1)}/10
+              {typeof insight.score === 'number' && Number.isFinite(insight.score)
+                ? insight.score.toFixed(1)
+                : '—'}
+              /10
             </span>
           </>
         )}
@@ -2142,7 +2165,10 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                             <>
                               {' — '}
                               <span className="text-slate-100">
-                                {conditionsByDate.get(bestDayToBook.iso)?.score.toFixed(1) ?? '—'}/10
+                                {typeof bestDayToBook.score === 'number' && Number.isFinite(bestDayToBook.score)
+                                  ? bestDayToBook.score.toFixed(1)
+                                  : '—'}
+                                /10
                               </span>
                             </>
                           )}
@@ -2428,7 +2454,10 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                             <>
                               {' — '}
                               <span className="text-slate-100">
-                                {conditionsByDate.get(bestDayToBook.iso)?.score.toFixed(1) ?? '—'}/10
+                                {typeof bestDayToBook.score === 'number' && Number.isFinite(bestDayToBook.score)
+                                  ? bestDayToBook.score.toFixed(1)
+                                  : '—'}
+                                /10
                               </span>
                             </>
                           )}

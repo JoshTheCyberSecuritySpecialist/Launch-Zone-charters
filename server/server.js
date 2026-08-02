@@ -1766,6 +1766,14 @@ app.get('/api/boats', async (req, res) => {
   }
 });
 
+/** Public flags for booking UI (no secrets). */
+app.get('/api/public/booking-config', (req, res) => {
+  const { isDirectBioPackagePricingEnabled } = require('./config/bioluminescencePackages');
+  return res.json({
+    directBioPackagePricingEnabled: isDirectBioPackagePricingEnabled(),
+  });
+});
+
 function cleanText(value, maxLen = 500) {
   const text = String(value || '').trim();
   return text ? text.slice(0, maxLen) : '';

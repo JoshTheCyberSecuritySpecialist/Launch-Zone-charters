@@ -237,6 +237,10 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     slotStartIso: '',
   });
   const [bioPackageId, setBioPackageId] = useState<BioPackageId | null>(null);
+  /** From GET /api/public/booking-config — enables package UI when Vite flag was not baked into the build. */
+  const [serverDirectBioPackagesEnabled, setServerDirectBioPackagesEnabled] = useState<boolean | null>(
+    null
+  );
   const [waiverData, setWaiverData] = useState({
     agreed: false,
     signature: '',
@@ -639,16 +643,30 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     void loadBoats();
   }, [loadBoats]);
 
+  useEffect(() => {
+    if (!env.apiUrlConfigured || !env.apiUrl) return;
+    const ac = new AbortController();
+    fetch(`${env.apiUrl}/api/public/booking-config`, { signal: ac.signal })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error('booking-config'))))
+      .then((data: { directBioPackagePricingEnabled?: boolean }) => {
+        setServerDirectBioPackagesEnabled(Boolean(data.directBioPackagePricingEnabled));
+      })
+      .catch(() => setServerDirectBioPackagesEnabled(null));
+    return () => ac.abort();
+  }, [env.apiUrl, env.apiUrlConfigured]);
+
   const BIO_SHARED_PER_PERSON = 150;
   const ROCKET_SHARED_PER_PERSON = 85;
   const SUNSET_SHARED_PER_PERSON = 75;
 
   const isBioCharter = bookingMode === 'charter' && bookingData.charterType === 'night_bio';
   const bioPackageFromUrl = getBioPackageDisplay(searchParams.get('package'));
-  /** Honor marketing deep links (`?package=bio_solo`) even before the Vite flag is enabled in prod. */
+  const serverBioPackagesOn = serverDirectBioPackagesEnabled === true;
+  /** Deep links, selected package, Vite flag, or live server flag (Render env). */
   const isBioPackageFlow =
     isBioCharter &&
     (isDirectBioPackagePricingEnabled() ||
+      serverBioPackagesOn ||
       Boolean(bioPackageFromUrl) ||
       Boolean(bioPackageId));
   const selectedBioPackage = isBioPackageFlow
@@ -711,6 +729,35 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     },
     [setSearchParams]
   );
+
+  const charterTypeMatchesUrl = useCallback(
+    (charterType: CharterType, params: URLSearchParams) => {
+      const expected = charterTypeForApi(charterType);
+      const urlType = (params.get('charterType') || '').trim().toLowerCase();
+      if (expected === 'bio') return urlType === 'bio' || urlType === 'night_bio';
+      if (expected === 'sunset') return urlType === 'sunset' || urlType === 'sunset_cruise';
+      return urlType === 'rocket' || urlType === 'rocket_launch';
+    },
+    []
+  );
+
+  useEffect(() => {
+    if (bookingMode !== 'charter') return;
+    const urlTypeOk = charterTypeMatchesUrl(bookingData.charterType, searchParams);
+    const urlPackage = searchParams.get('package') || '';
+    const wantPackage = bioPackageId || '';
+    const packageOk =
+      charterTypeForApi(bookingData.charterType) !== 'bio' || urlPackage === wantPackage;
+    if (urlTypeOk && packageOk) return;
+    syncCharterExperienceUrl(bookingData.charterType, bioPackageId);
+  }, [
+    bookingMode,
+    bookingData.charterType,
+    bioPackageId,
+    searchParams,
+    syncCharterExperienceUrl,
+    charterTypeMatchesUrl,
+  ]);
 
   const handleSelectCharterExperience = useCallback(
     (charterType: CharterType) => {

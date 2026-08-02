@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import WhyBookDirectSection from '../components/marketing/WhyBookDirectSection';
+import StickyDirectBookingBar from '../components/marketing/StickyDirectBookingBar';
 import { Helmet } from 'react-helmet-async';
 import { useNavigate } from 'react-router-dom';
 import { Anchor, Award, Calendar, Clock, Loader2, Shield, Star, Volume2, VolumeX } from 'lucide-react';
@@ -89,6 +91,7 @@ export default function Home({ onNavigate }: HomeProps) {
   const [launchPreviewFailed, setLaunchPreviewFailed] = useState(false);
   const [heroVideoError, setHeroVideoError] = useState(false);
   const [heroVideoMuted, setHeroVideoMuted] = useState(true);
+  const [stickyDirectBarVisible, setStickyDirectBarVisible] = useState(false);
   const heroVideoRef = useRef<HTMLVideoElement | null>(null);
 
   const toggleHeroSound = () => {
@@ -153,7 +156,9 @@ export default function Home({ onNavigate }: HomeProps) {
   );
 
   return (
-    <div className="min-h-screen bg-lz-bg">
+    <div
+      className={`min-h-screen bg-lz-bg ${stickyDirectBarVisible ? 'pb-[calc(5.5rem+env(safe-area-inset-bottom))] md:pb-[calc(4.5rem+env(safe-area-inset-bottom))]' : ''}`}
+    >
       <Helmet prioritizeSeoTags>
         <title>Launch Zone Charters | Space Coast Boat Rentals &amp; Rocket Launch Viewing</title>
         <meta
@@ -176,7 +181,10 @@ export default function Home({ onNavigate }: HomeProps) {
         <script type="application/ld+json">{JSON.stringify(homeJsonLd)}</script>
       </Helmet>
 
-      <section className="relative isolate flex min-h-[700px] flex-col overflow-visible bg-lz-bg md:min-h-[70vh]">
+      <section
+        id="home-hero"
+        className="relative isolate flex min-h-[700px] flex-col overflow-visible bg-lz-bg md:min-h-[70vh]"
+      >
         {/* Layered hero: bg + overlay (hover depth on .lz-hero-container) */}
         <div className="home-hero-bg lz-hero-container absolute inset-0 z-0 overflow-visible" aria-hidden>
           <div className="lz-hero-cinematic-wrap">
@@ -328,6 +336,8 @@ export default function Home({ onNavigate }: HomeProps) {
           </div>
         </div>
       </section>
+
+      <WhyBookDirectSection />
 
       <section className="lz-home-section border-t border-white/5" aria-labelledby="choose-experience-heading">
         <div className="lz-home-inner">
@@ -710,6 +720,7 @@ export default function Home({ onNavigate }: HomeProps) {
           </div>
         </div>
       </section>
+      <StickyDirectBookingBar onVisibilityChange={setStickyDirectBarVisible} />
     </div>
   );
 }

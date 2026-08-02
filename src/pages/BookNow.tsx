@@ -1507,7 +1507,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
       }
 
       const rawBody = await sessionRes.text();
-      let sessionPayload: { url?: string; error?: string; message?: string } = {};
+      let sessionPayload: { url?: string; error?: string; message?: string; code?: string } = {};
       try {
         sessionPayload = rawBody ? (JSON.parse(rawBody) as typeof sessionPayload) : {};
       } catch {
@@ -1532,6 +1532,12 @@ export default function BookNow({ onNavigate }: BookNowProps) {
       if (apiMessage) {
         if (import.meta.env.DEV) {
           console.warn('[create-checkout-session] API error:', apiMessage);
+        }
+        if (sessionPayload.code === 'bio_package_pricing_unavailable') {
+          throw new Error(
+            apiMessage ||
+              'Direct package booking is temporarily unavailable. Please call 803-542-1761 or remove the package from the URL and book using standard pricing.'
+          );
         }
         const lower = apiMessage.toLowerCase();
         if (lower.includes('stripe not configured')) {

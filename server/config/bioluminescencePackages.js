@@ -35,11 +35,13 @@ const BIOLUMINESCENCE_PACKAGES = {
 
 const BIOLUMINESCENCE_PACKAGE_IDS = Object.freeze(Object.keys(BIOLUMINESCENCE_PACKAGES));
 
+/**
+ * Direct bio package pricing (BookNow + Stripe) is OFF unless explicitly enabled.
+ * Set DIRECT_BIO_PACKAGE_PRICING_ENABLED=true in production after migration + deploy.
+ * Missing, empty, or any value other than "true" keeps legacy $150×guests direct bio pricing.
+ */
 function isDirectBioPackagePricingEnabled() {
-  const raw = process.env.DIRECT_BIO_PACKAGE_PRICING_ENABLED;
-  if (raw == null || String(raw).trim() === '') return true;
-  const v = String(raw).trim().toLowerCase();
-  return v !== 'false' && v !== '0' && v !== 'no';
+  return process.env.DIRECT_BIO_PACKAGE_PRICING_ENABLED === 'true';
 }
 
 function getBioluminescencePackage(packageId) {

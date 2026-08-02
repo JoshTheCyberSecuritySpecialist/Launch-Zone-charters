@@ -26,8 +26,15 @@ import {
   previewCaptainCharterWindow,
 } from '../lib/captainNightWindow';
 import { fetchActiveCaptains, type AdminCaptainListItem } from '../lib/adminCaptains';
+import {
+  BIO_STAFF_PACKAGE_OPTIONS,
+  type BioPackageId,
+  getBioPackageDisplay,
+  isDirectBioPackagePricingEnabled,
+} from '../lib/bioluminescencePackages';
 
 type BookingType = 'rental' | 'captain_charter';
+type CharterProduct = 'general' | 'bio_night';
 type LocationValue = 'Port Orange' | 'Titusville';
 type PaymentStatus = 'pending' | 'deposit_paid' | 'paid';
 type PaymentMethod = '' | 'stripe' | 'cash' | 'venmo' | 'zelle' | 'paypal' | 'groupon' | 'comp' | 'other';
@@ -98,6 +105,8 @@ const blankForm = () => {
     phone: '',
     email: '',
     bookingType: 'rental' as BookingType,
+    charterProduct: 'general' as CharterProduct,
+    bioPackageId: '' as '' | BioPackageId,
     location: 'Port Orange' as LocationValue,
     boatId: '',
     date: todayYmd(),
@@ -112,6 +121,7 @@ const blankForm = () => {
     paymentMethod: '' as PaymentMethod,
     bookingSource: 'admin',
     staffNotes: '',
+    compReason: '',
     captainId: '',
     emergencyContactNotes: '',
   };
@@ -181,6 +191,11 @@ export default function AdminStaffBooking() {
     }
     return previewCaptainCharterWindow(form.date, form.startTime, durationHours);
   }, [durationHours, form.bookingType, form.date, form.startTime]);
+
+  const staffBioPackageSummary = useMemo(() => {
+    if (form.charterProduct !== 'bio_night' || !form.bioPackageId) return null;
+    return getBioPackageDisplay(form.bioPackageId);
+  }, [form.bioPackageId, form.charterProduct]);
 
   const getAdminToken = useCallback(async () => {
     const { data } = await supabase.auth.getSession();
@@ -337,6 +352,23 @@ export default function AdminStaffBooking() {
   }, [loadToday]);
 
   useEffect(() => {
+    if (
+      form.bookingType === 'captain_charter' &&
+      form.charterProduct === 'bio_night' &&
+      form.bioPackageId &&
+      isDirectBioPackagePricingEnabled()
+    ) {
+      const pkg = getBioPackageDisplay(form.bioPackageId);
+      if (!pkg) return;
+      setForm((prev) => ({
+        ...prev,
+        passengerCount: String(pkg.guestCount),
+        originalPrice: money(pkg.standardValueUsd),
+        discount: money(pkg.savingsUsd),
+        finalPrice: money(pkg.directPriceUsd),
+      }));
+      return;
+    }
     if (!selectedBoat || durationHours <= 0) return;
     const base = computeStaffBookingOriginalPrice(selectedBoat, durationHours, form.bookingType);
     const discount = Number(form.discount) || 0;
@@ -345,7 +377,14 @@ export default function AdminStaffBooking() {
       originalPrice: money(base),
       finalPrice: money(Math.max(0, base - discount)),
     }));
-  }, [durationHours, form.bookingType, form.discount, selectedBoat]);
+  }, [
+    durationHours,
+    form.bookingType,
+    form.bioPackageId,
+    form.charterProduct,
+    form.discount,
+    selectedBoat,
+  ]);
 
   useEffect(() => {
     const seq = ++availabilityCheckSeq.current;
@@ -376,6 +415,14 @@ export default function AdminStaffBooking() {
             rental_location: form.location,
             passenger_count:
               form.bookingType === 'captain_charter' ? Math.floor(Number(form.passengerCount) || 1) : 1,
+            charter_type:
+              form.bookingType === 'captain_charter' && form.charterProduct === 'bio_night' ? 'bio' : undefined,
+            pricing_package_id:
+              form.bookingType === 'captain_charter' &&
+              form.charterProduct === 'bio_night' &&
+              form.bioPackageId
+                ? form.bioPackageId
+                : undefined,
           }),
         });
         const payload = (await res.json().catch(() => ({}))) as {
@@ -450,6 +497,22 @@ export default function AdminStaffBooking() {
     if (form.bookingType === 'captain_charter') {
       const validation = validateCharterPassengerCount(form.passengerCount);
       if (!validation.valid) blockers.push(validation.error);
+      if (
+        form.charterProduct === 'bio_night' &&
+        isDirectBioPackagePricingEnabled() &&
+        !form.bioPackageId
+      ) {
+        blockers.push('Select a bioluminescence package.');
+      }
+      if (
+        form.charterProduct === 'bio_night' &&
+        form.paymentMethod === 'groupon'
+      ) {
+        blockers.push('Groupon vouchers must be redeemed through the Groupon booking workflow, not direct bio packages.');
+      }
+      if (form.paymentMethod === 'comp' && !form.compReason.trim()) {
+        blockers.push('Comp reason is required for complimentary bookings.');
+      }
       if (captainWindowPreview && !captainWindowPreview.valid) {
         blockers.push(captainWindowPreview.message || CAPTAIN_NIGHT_SCHEDULE_NOTE);
       }
@@ -482,9 +545,13 @@ export default function AdminStaffBooking() {
     durationHours,
     form.boatId,
     form.bookingType,
+    form.bioPackageId,
+    form.charterProduct,
     form.customerName,
     form.date,
     form.passengerCount,
+    form.compReason,
+    form.paymentMethod,
     form.phone,
     form.startTime,
     captainWindowPreview,
@@ -556,12 +623,21 @@ export default function AdminStaffBooking() {
           startTime: form.startTime,
           durationHours,
           passenger_count: form.bookingType === 'captain_charter' ? form.passengerCount : 1,
+          charter_type:
+            form.bookingType === 'captain_charter' && form.charterProduct === 'bio_night' ? 'bio' : undefined,
+          pricing_package_id:
+            form.bookingType === 'captain_charter' &&
+            form.charterProduct === 'bio_night' &&
+            form.bioPackageId
+              ? form.bioPackageId
+              : undefined,
           original_price: form.originalPrice,
           discount: form.discount,
           final_price: form.finalPrice,
           payment_status: form.paymentStatus,
           payment_method: form.paymentMethod || null,
           booking_source: form.bookingSource,
+          comp_reason: form.paymentMethod === 'comp' ? form.compReason.trim() : undefined,
           staff_notes: form.staffNotes,
           captain_id: form.bookingType === 'captain_charter' && form.captainId ? form.captainId : null,
           emergency_contact_notes:
@@ -756,6 +832,8 @@ export default function AdminStaffBooking() {
                     setForm((p) => ({
                       ...p,
                       bookingType: nextType,
+                      charterProduct: nextType === 'rental' ? 'general' : p.charterProduct,
+                      bioPackageId: nextType === 'rental' ? '' : p.bioPackageId,
                       captainId: nextType === 'rental' ? '' : p.captainId,
                       ...durationFieldsForNewBookingType(nextType),
                     }));
@@ -770,6 +848,58 @@ export default function AdminStaffBooking() {
                   </span>
                 ) : null}
               </label>
+              {form.bookingType === 'captain_charter' ? (
+                <label className={labelClass}>
+                  Charter experience
+                  <select
+                    className={inputClass}
+                    value={form.charterProduct}
+                    onChange={(e) => {
+                      const next = e.target.value as CharterProduct;
+                      setForm((p) => ({
+                        ...p,
+                        charterProduct: next,
+                        bioPackageId: next === 'bio_night' ? p.bioPackageId : '',
+                        passengerCount: next === 'bio_night' ? p.passengerCount : '1',
+                      }));
+                    }}
+                  >
+                    <option value="general">General captain charter</option>
+                    {isDirectBioPackagePricingEnabled() ? (
+                      <option value="bio_night">Bioluminescence night tour</option>
+                    ) : null}
+                  </select>
+                </label>
+              ) : null}
+              {form.bookingType === 'captain_charter' &&
+              form.charterProduct === 'bio_night' &&
+              isDirectBioPackagePricingEnabled() ? (
+                <label className={labelClass}>
+                  Bioluminescence package *
+                  <select
+                    className={inputClass}
+                    value={form.bioPackageId}
+                    onChange={(e) => {
+                      const id = e.target.value as BioPackageId | '';
+                      setForm((p) => ({ ...p, bioPackageId: id }));
+                    }}
+                  >
+                    <option value="">Select package</option>
+                    {BIO_STAFF_PACKAGE_OPTIONS.map((opt) => (
+                      <option key={opt.id} value={opt.id}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="mt-1 block text-xs font-normal text-slate-500">
+                    Solo $40 · Two $78 · Four $150 — guest count is set by the package.
+                  </span>
+                  <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-950">
+                    Direct packages cover 1, 2, or 4 guests only. For five guests, use a general captain charter with
+                    manual pricing or contact ops — do not combine package prices.
+                  </p>
+                </label>
+              ) : null}
               {form.bookingType === 'captain_charter' &&
               captainWindowPreview &&
               !captainWindowPreview.valid &&
@@ -848,6 +978,21 @@ export default function AdminStaffBooking() {
                 </label>
               ) : null}
               {form.bookingType === 'captain_charter' ? (
+                form.charterProduct === 'bio_night' && isDirectBioPackagePricingEnabled() ? (
+                  <label className={labelClass}>
+                    Passengers
+                    <input
+                      className={`${inputClass} bg-slate-100`}
+                      type="number"
+                      readOnly
+                      value={form.passengerCount}
+                      aria-readonly
+                    />
+                    <span className="mt-1 block text-xs font-normal text-slate-500">
+                      Locked to the selected bioluminescence package.
+                    </span>
+                  </label>
+                ) : (
                 <label className={labelClass}>
                   Passengers
                   <input
@@ -863,6 +1008,7 @@ export default function AdminStaffBooking() {
                     1–{CHARTER_MAX_PASSENGERS} passengers (plus captain).
                   </span>
                 </label>
+                )
               ) : null}
               {form.bookingType === 'captain_charter' ? (
                 <>
@@ -925,6 +1071,17 @@ export default function AdminStaffBooking() {
                   <option value="other">Other</option>
                 </select>
               </label>
+              {form.paymentMethod === 'comp' ? (
+                <label className={`${labelClass} sm:col-span-2`}>
+                  Comp reason *
+                  <textarea
+                    className={`${inputClass} min-h-[80px]`}
+                    value={form.compReason}
+                    onChange={(e) => setForm((p) => ({ ...p, compReason: e.target.value }))}
+                    placeholder="Internal reason for complimentary booking (required)"
+                  />
+                </label>
+              ) : null}
               <label className={labelClass}>
                 Booking Source
                 <input className={inputClass} value={form.bookingSource} onChange={(e) => setForm((p) => ({ ...p, bookingSource: e.target.value }))} />
@@ -1025,14 +1182,32 @@ export default function AdminStaffBooking() {
             </div>
 
             <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <h3 className="font-bold text-slate-900">Current Selection</h3>
-              <p className="mt-2 text-sm text-slate-600">
-                {selectedBoat?.name || 'No boat selected'} · {form.location} · {durationHours || '-'} hr
-              </p>
-              <p className="mt-2 text-3xl font-black text-slate-900">${Number(form.finalPrice || 0).toFixed(2)}</p>
-              {form.bookingType === 'captain_charter' ? (
-                <p className="mt-1 text-xs text-slate-500">Includes captain fee at ${PRICING.captainHourly}/hr.</p>
-              ) : null}
+              <h3 className="font-bold text-slate-900">Staff review</h3>
+              {staffBioPackageSummary ? (
+                <>
+                  <p className="mt-2 text-sm font-semibold text-slate-800">{staffBioPackageSummary.cardTitle}</p>
+                  <p className="text-xs text-slate-600">
+                    Package ID: {staffBioPackageSummary.id} · {staffBioPackageSummary.guestCount} guest
+                    {staffBioPackageSummary.guestCount === 1 ? '' : 's'}
+                  </p>
+                  <p className="mt-2 text-3xl font-black text-slate-900">
+                    ${staffBioPackageSummary.directPriceUsd.toFixed(2)}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Standard ${staffBioPackageSummary.standardValueUsd} · Save ${staffBioPackageSummary.savingsUsd}
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="mt-2 text-sm text-slate-600">
+                    {selectedBoat?.name || 'No boat selected'} · {form.location} · {durationHours || '-'} hr
+                  </p>
+                  <p className="mt-2 text-3xl font-black text-slate-900">${Number(form.finalPrice || 0).toFixed(2)}</p>
+                  {form.bookingType === 'captain_charter' ? (
+                    <p className="mt-1 text-xs text-slate-500">Includes captain fee at ${PRICING.captainHourly}/hr.</p>
+                  ) : null}
+                </>
+              )}
             </div>
           </aside>
         </div>

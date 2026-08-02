@@ -135,12 +135,31 @@ function runGrouponIsolationTest() {
   assert.strictEqual(groupon.skipPackage, true);
 }
 
+function runStaffBioResolveTest() {
+  const { resolveStaffBioCharterPackage } = require('../services/bioluminescencePackagePricing');
+  const resolved = resolveStaffBioCharterPackage({
+    body: { charter_type: 'bio', pricing_package_id: 'bio_solo', booking_source: 'admin' },
+    passengerCount: 1,
+  });
+  assert.strictEqual(resolved.ok, true);
+  assert.strictEqual(resolved.charterType, 'bio');
+  assert.strictEqual(resolved.passengerCount, 1);
+  assert.strictEqual(resolved.package?.priceCents, 4000);
+
+  const bad = resolveStaffBioCharterPackage({
+    body: { charter_type: 'bio', pricing_package_id: 'bio_two', booking_source: 'admin' },
+    passengerCount: 4,
+  });
+  assert.strictEqual(bad.ok, false);
+}
+
 function run() {
   runPackageLookupTests();
   runTamperingTests();
   runStripeTotalsTests();
   runCapacityTests();
   runGrouponIsolationTest();
+  runStaffBioResolveTest();
   console.log('bioluminescencePackages.test.js: all tests passed');
 }
 

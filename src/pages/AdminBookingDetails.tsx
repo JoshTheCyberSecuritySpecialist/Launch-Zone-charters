@@ -303,7 +303,7 @@ export default function AdminBookingDetails() {
       setBoats(Array.isArray(boatsPayload.boats) ? boatsPayload.boats : []);
       try {
         const captainRows = await fetchActiveCaptains();
-        const assigned = b.captains as { id?: string; full_name?: string } | null | undefined;
+        const assigned = bookingPayload.booking?.captains as { id?: string; full_name?: string } | null | undefined;
         if (assigned?.id && !captainRows.some((row) => row.id === assigned.id)) {
           setCaptains([
             ...captainRows,

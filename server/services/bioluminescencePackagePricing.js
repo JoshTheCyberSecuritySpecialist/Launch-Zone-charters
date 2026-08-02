@@ -137,6 +137,81 @@ function stripeLineItemNameForBioPackage(pkg) {
   return `Bioluminescence Night Tour — ${pkg.guestCount} Guests`;
 }
 
+function assertBioPackageRequestAllowed({ pricingPackageId, charterType, bookingMode }) {
+  const packageId = String(pricingPackageId || '').trim();
+  if (!packageId) {
+    return { ok: true };
+  }
+  if (String(bookingMode || '').trim().toLowerCase() !== 'charter') {
+    return {
+      ok: false,
+      statusCode: 400,
+      code: 'bio_package_invalid_context',
+      error: 'Bioluminescence package pricing applies only to charter bookings.',
+    };
+  }
+  const bioType = normalizeBioCharterType(charterType);
+  if (bioType !== 'bio') {
+    return {
+      ok: false,
+      statusCode: 400,
+      code: 'bio_package_invalid_context',
+      error: 'Bioluminescence package pricing applies only to bioluminescence night tours.',
+    };
+  }
+  if (!isDirectBioPackagePricingEnabled()) {
+    return {
+      ok: false,
+      statusCode: 503,
+      code: 'bio_package_pricing_unavailable',
+      error:
+        'Direct bioluminescence package booking is temporarily unavailable. Please call 803-542-1761 or refresh the page to continue.',
+    };
+  }
+  return { ok: true };
+}
+
+function resolveStaffBioCharterPackage({ body, passengerCount }) {
+  const pricingPackageId = extractPricingPackageId(body);
+  if (pricingPackageId && !isDirectBioPackagePricingEnabled()) {
+    return {
+      ok: false,
+      statusCode: 503,
+      code: 'bio_package_pricing_unavailable',
+      error:
+        'Direct bioluminescence package booking is temporarily unavailable on the server. Disable package selection or enable server package pricing.',
+    };
+  }
+  const charterTypeRaw = String(body?.charter_type || body?.charterType || '')
+    .trim()
+    .toLowerCase();
+  const isBio =
+    Boolean(pricingPackageId) || charterTypeRaw === 'bio' || charterTypeRaw === 'night_bio';
+  if (!isBio) {
+    return {
+      ok: true,
+      passengerCount,
+      charterType: charterTypeRaw || 'captain_charter',
+      package: null,
+    };
+  }
+  const bioCheck = validateDirectBioPackageCheckout({
+    charterType: 'bio',
+    pricingPackageId,
+    passengerCountFromClient: passengerCount,
+    bookingSource: String(body?.booking_source || body?.bookingSource || 'admin').toLowerCase(),
+  });
+  if (!bioCheck.ok) {
+    return { ok: false, error: bioCheck.error, statusCode: bioCheck.statusCode || 400 };
+  }
+  return {
+    ok: true,
+    passengerCount: bioCheck.passengerCount,
+    charterType: 'bio',
+    package: bioCheck.package,
+  };
+}
+
 module.exports = {
   normalizeBioCharterType,
   extractPricingPackageId,
@@ -145,5 +220,7 @@ module.exports = {
   resolveCharterBioPricing,
   bioPackageBookingFields,
   stripeLineItemNameForBioPackage,
+  resolveStaffBioCharterPackage,
+  assertBioPackageRequestAllowed,
   isDirectBioPackagePricingEnabled,
 };

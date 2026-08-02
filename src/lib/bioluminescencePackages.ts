@@ -62,11 +62,12 @@ export const BIO_PACKAGE_DISPLAY: BioPackageDisplay[] = [
   },
 ];
 
+/**
+ * Mirrors server flag: package UI/checkout only when VITE_DIRECT_BIO_PACKAGE_PRICING_ENABLED=true.
+ * Missing or any other value keeps legacy per-guest bio pricing in BookNow.
+ */
 export function isDirectBioPackagePricingEnabled(): boolean {
-  const raw = import.meta.env.VITE_DIRECT_BIO_PACKAGE_PRICING_ENABLED as string | undefined;
-  if (raw == null || String(raw).trim() === '') return true;
-  const v = String(raw).trim().toLowerCase();
-  return v !== 'false' && v !== '0' && v !== 'no';
+  return import.meta.env.VITE_DIRECT_BIO_PACKAGE_PRICING_ENABLED === 'true';
 }
 
 export function getBioPackageDisplay(id: string | null | undefined): BioPackageDisplay | null {
@@ -82,3 +83,13 @@ export const BIO_PACKAGE_PRICING_DISCLAIMER =
   'Direct prices match our standard Groupon deal prices. Groupon-issued promotional codes may vary.';
 
 export const BIO_LEGACY_PRICING_LABEL = 'Legacy bioluminescence pricing';
+
+/** Admin staff booking — labels must match server package prices. */
+export const BIO_STAFF_PACKAGE_OPTIONS = BIO_PACKAGE_DISPLAY.map((p) => ({
+  id: p.id,
+  label: `${p.cardTitle} — $${p.directPriceUsd}`,
+  guestCount: p.guestCount,
+  standardValueUsd: p.standardValueUsd,
+  directPriceUsd: p.directPriceUsd,
+  savingsUsd: p.savingsUsd,
+}));

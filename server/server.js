@@ -1903,6 +1903,17 @@ app.post('/api/admin/staff-bookings/check', async (req, res) => {
     }
     let passengerCount = Math.max(1, Math.floor(Number(req.body?.passenger_count ?? req.body?.passengerCount ?? 1) || 1));
     if (bookingType === 'captain_charter') {
+      const bioResolved = bioPackagePricing.resolveStaffBioCharterPackage({
+        body: req.body || {},
+        passengerCount,
+      });
+      if (!bioResolved.ok) {
+        return res.status(bioResolved.statusCode || 400).json({
+          error: bioResolved.error,
+          code: bioResolved.code,
+        });
+      }
+      passengerCount = bioResolved.passengerCount;
       const validation = validateCharterPassengerCount(passengerCount);
       if (!validation.valid) return res.status(400).json({ error: validation.error });
       passengerCount = validation.count;
@@ -1959,7 +1970,19 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
       : 'rental';
     const location = cleanText(body.rental_location || body.location, 80);
     let passengerCount = Math.max(1, Math.floor(Number(body.passenger_count || body.passengerCount || 1) || 1));
+    let staffBioPackage = null;
+    let staffCharterType = 'captain_charter';
     if (bookingType === 'captain_charter') {
+      const bioResolved = bioPackagePricing.resolveStaffBioCharterPackage({ body, passengerCount });
+      if (!bioResolved.ok) {
+        return res.status(bioResolved.statusCode || 400).json({
+          error: bioResolved.error,
+          code: bioResolved.code,
+        });
+      }
+      passengerCount = bioResolved.passengerCount;
+      staffCharterType = bioResolved.charterType || 'captain_charter';
+      staffBioPackage = bioResolved.package || null;
       const validation = validateCharterPassengerCount(passengerCount);
       if (!validation.valid) return res.status(400).json({ error: validation.error });
       passengerCount = validation.count;
@@ -2001,13 +2024,35 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
     if (!boat?.id) return res.status(400).json({ error: 'Boat not found.' });
 
     const customer = await findOrCreateStaffCustomer({ fullName: customerName, email, phone });
-    const originalPrice = parseStaffMoney(body.original_price ?? body.originalPrice, 0);
-    const discount = parseStaffMoney(body.discount, 0);
-    const finalPrice = parseStaffMoney(body.final_price ?? body.finalPrice, Math.max(0, originalPrice - discount));
+    const paymentMethod = normalizeStaffPaymentMethod(body.payment_method || body.paymentMethod);
+    if (staffBioPackage && paymentMethod === 'groupon') {
+      return res.status(400).json({
+        error: 'Groupon voucher bookings use the Groupon redemption workflow, not direct bio package pricing.',
+      });
+    }
+    const compReason = cleanText(body.comp_reason || body.compReason, 500);
+    if (paymentMethod === 'comp' && !compReason) {
+      return res.status(400).json({ error: 'Comp reason is required for complimentary staff bookings.' });
+    }
+    let originalPrice = parseStaffMoney(body.original_price ?? body.originalPrice, 0);
+    let discount = parseStaffMoney(body.discount, 0);
+    let finalPrice = parseStaffMoney(body.final_price ?? body.finalPrice, Math.max(0, originalPrice - discount));
+    const packagePriceUsd = staffBioPackage ? roundMoney(staffBioPackage.priceCents / 100) : null;
+    const packageStandardUsd = staffBioPackage
+      ? roundMoney(staffBioPackage.standardValueCents / 100)
+      : null;
+    if (staffBioPackage) {
+      originalPrice = packageStandardUsd;
+      if (paymentMethod !== 'comp') {
+        finalPrice = packagePriceUsd;
+        discount = roundMoney(Math.max(0, originalPrice - finalPrice));
+      } else {
+        discount = roundMoney(Math.max(0, originalPrice - finalPrice));
+      }
+    }
     const paymentStatus = action === 'hold'
       ? 'pending'
       : normalizeStaffPaymentStatus(body.payment_status || body.paymentStatus);
-    const paymentMethod = normalizeStaffPaymentMethod(body.payment_method || body.paymentMethod);
     const amountCollected = action === 'hold'
       ? 0
       : parseStaffMoney(body.amount_collected ?? body.amountCollected, paymentStatus === 'pending' ? 0 : finalPrice);
@@ -2029,7 +2074,7 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
       customer_id: customer.id,
       boat_id: boat.id,
       booking_type: bookingType === 'captain_charter' ? 'charter' : 'rental',
-      charter_type: bookingType === 'captain_charter' ? 'captain_charter' : null,
+      charter_type: bookingType === 'captain_charter' ? staffCharterType : null,
       charter_seating: bookingType === 'captain_charter' ? 'shared' : null,
       captain_id: captainId,
       guest_count: passengerCount,
@@ -2050,7 +2095,7 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
       balance_due: roundMoney(Math.max(0, finalPrice - amountCollected)),
       payment_status: paymentStatus,
       status,
-      is_night_tour: false,
+      is_night_tour: Boolean(staffBioPackage),
       is_rocket_tour: false,
       license_status: 'pending',
       insurance_status: bookingType === 'captain_charter' ? 'verified' : 'pending',
@@ -2063,12 +2108,25 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
       amount_collected: amountCollected,
       manual_discount_reason: cleanText(body.manual_discount_reason || body.manualDiscountReason, 500) || null,
       hold_expires_at: action === 'hold' ? DateTime.now().plus({ hours: 2 }).toUTC().toISO() : null,
-      staff_notes: cleanText(body.staff_notes || body.staffNotes, 1000) || null,
-      admin_notes: cleanText(body.staff_notes || body.staffNotes, 1000) || null,
+      staff_notes: [
+        cleanText(body.staff_notes || body.staffNotes, 1000),
+        compReason ? `Comp reason: ${compReason}` : '',
+      ]
+        .filter(Boolean)
+        .join('\n')
+        .slice(0, 1000) || null,
+      admin_notes: [
+        cleanText(body.staff_notes || body.staffNotes, 1000),
+        compReason ? `Comp reason: ${compReason}` : '',
+      ]
+        .filter(Boolean)
+        .join('\n')
+        .slice(0, 1000) || null,
       emergency_contact_notes: cleanText(body.emergency_contact_notes || body.emergencyContactNotes, 2000) || null,
       original_total: originalPrice,
       discount_amount: discount,
       final_total: finalPrice,
+      ...(staffBioPackage ? bioPackagePricing.bioPackageBookingFields(staffBioPackage) : {}),
     };
 
     const { data: booking, error } = await supabase
@@ -2085,6 +2143,25 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
         return res.status(409).json({ error: SLOT_TAKEN_USER_MESSAGE });
       }
       throw error;
+    }
+
+    if (paymentMethod === 'comp' && staffBioPackage) {
+      await bookingReliability.insertActivity(supabase, {
+        booking_id: booking.id,
+        event_type: 'staff_comp_booking_created',
+        actor_type: 'admin',
+        actor_id: adminUser.id,
+        message: 'Staff comp bioluminescence package booking created',
+        payload: {
+          package_id: staffBioPackage.id,
+          package_name: staffBioPackage.name,
+          normal_amount_cents: staffBioPackage.priceCents,
+          standard_value_cents: staffBioPackage.standardValueCents,
+          final_amount_usd: finalPrice,
+          comp_reason: compReason,
+          staff_user_id: adminUser.id,
+        },
+      });
     }
 
     return res.status(201).json({ booking, customer });
@@ -6058,6 +6135,18 @@ app.post('/api/create-checkout-session', async (req, res) => {
     const bookingSource = String(booking.bookingSource || booking.booking_source || 'website')
       .trim()
       .toLowerCase();
+
+    const packageGate = bioPackagePricing.assertBioPackageRequestAllowed({
+      pricingPackageId,
+      charterType,
+      bookingMode,
+    });
+    if (!packageGate.ok) {
+      return res.status(packageGate.statusCode || 400).json({
+        error: packageGate.error,
+        code: packageGate.code,
+      });
+    }
 
     const passengerCountRaw = Number(
       booking.passengerCount ?? booking.passenger_count ?? booking.guest_count

@@ -647,7 +647,10 @@ export default function BookNow({ onNavigate }: BookNowProps) {
   const bioPackageFromUrl = getBioPackageDisplay(searchParams.get('package'));
   /** Honor marketing deep links (`?package=bio_solo`) even before the Vite flag is enabled in prod. */
   const isBioPackageFlow =
-    isBioCharter && (isDirectBioPackagePricingEnabled() || Boolean(bioPackageFromUrl));
+    isBioCharter &&
+    (isDirectBioPackagePricingEnabled() ||
+      Boolean(bioPackageFromUrl) ||
+      Boolean(bioPackageId));
   const selectedBioPackage = isBioPackageFlow
     ? getBioPackageDisplay(bioPackageId) ?? bioPackageFromUrl
     : null;
@@ -683,6 +686,68 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     },
     [setSearchParams]
   );
+
+  const syncCharterExperienceUrl = useCallback(
+    (charterType: CharterType, packageId: BioPackageId | null) => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.set('bookingMode', 'charter');
+          if (charterType === 'night_bio') {
+            next.set('charterType', 'bio');
+            if (packageId) next.set('package', packageId);
+            else next.delete('package');
+          } else if (charterType === 'sunset_cruise') {
+            next.set('charterType', 'sunset');
+            next.delete('package');
+          } else {
+            next.set('charterType', 'rocket');
+            next.delete('package');
+          }
+          return next;
+        },
+        { replace: true }
+      );
+    },
+    [setSearchParams]
+  );
+
+  const handleSelectCharterExperience = useCallback(
+    (charterType: CharterType) => {
+      setBookingMode('charter');
+      if (charterType === 'night_bio') {
+        const pkg = getBioPackageDisplay(bioPackageId);
+        setBookingData((prev) => ({
+          ...prev,
+          captainIncluded: true,
+          charterType: 'night_bio',
+          charterVariant: 'private',
+          passengerCount: pkg?.guestCount ?? prev.passengerCount ?? 1,
+          rentalType: 'half_day',
+          hours: 1,
+          time: '20:00',
+          slotStartIso: '',
+        }));
+        syncCharterExperienceUrl('night_bio', bioPackageId);
+      } else {
+        setBookingData((prev) => ({
+          ...prev,
+          captainIncluded: true,
+          charterType,
+          charterVariant: 'private',
+          passengerCount: 1,
+          rentalType: 'half_day',
+          hours: 1,
+          time: charterType === 'sunset_cruise' ? '18:30' : prev.time,
+          slotStartIso: '',
+        }));
+        syncCharterExperienceUrl(charterType, null);
+      }
+      setStep(1);
+    },
+    [bioPackageId, syncCharterExperienceUrl]
+  );
+
   const sharedTourOverLimit =
     bookingMode === 'charter' &&
     (bookingData.passengerCount < CHARTER_MIN_PASSENGERS || bookingData.passengerCount > CHARTER_MAX_PASSENGERS);
@@ -1130,7 +1195,21 @@ export default function BookNow({ onNavigate }: BookNowProps) {
   };
 
   const calculateCharterPricing = () => {
-    if (isBioPackageFlow && selectedBioPackage) {
+    if (isBioPackageFlow) {
+      if (!selectedBioPackage) {
+        return {
+          basePrice: 0,
+          captainFee: 0,
+          deposit: 0,
+          weekendSurcharge: 0,
+          rocketLaunchSurcharge: 0,
+          bioTourSurcharge: 0,
+          sunsetExperienceSurcharge: 0,
+          nightExperienceSurcharge: 0,
+          peakSeasonSurcharge: 0,
+          total: 0,
+        };
+      }
       const total = selectedBioPackage.directPriceUsd;
       return {
         basePrice: total,
@@ -1917,19 +1996,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                 <div className="mt-8 grid gap-4 sm:grid-cols-2 md:gap-5">
                   <button
                     type="button"
-                    onClick={() => {
-                      setBookingMode('charter');
-                      setBookingData((prev) => ({
-                        ...prev,
-                        captainIncluded: true,
-                        charterType: 'rocket_launch',
-                        charterVariant: 'private',
-                        passengerCount: 1,
-                        rentalType: 'half_day',
-                        hours: 1,
-                      }));
-                      setStep(1);
-                    }}
+                    onClick={() => handleSelectCharterExperience('rocket_launch')}
                     className={`min-h-[120px] rounded-2xl border p-5 text-left transition active:scale-[0.99] md:p-6 ${bookingChoiceIdle}`}
                   >
                     <span className="text-2xl" aria-hidden>
@@ -1940,20 +2007,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                   </button>
                   <button
                     type="button"
-                    onClick={() => {
-                      setBookingMode('charter');
-                      setBookingData((prev) => ({
-                        ...prev,
-                        captainIncluded: true,
-                        charterType: 'night_bio',
-                        charterVariant: 'private',
-                        passengerCount: 1,
-                        rentalType: 'half_day',
-                        hours: 1,
-                        time: '20:00',
-                      }));
-                      setStep(1);
-                    }}
+                    onClick={() => handleSelectCharterExperience('night_bio')}
                     className={`min-h-[120px] rounded-2xl border p-5 text-left transition active:scale-[0.99] md:p-6 ${bookingChoiceIdle}`}
                   >
                     <span className="text-2xl" aria-hidden>
@@ -1964,20 +2018,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                   </button>
                   <button
                     type="button"
-                    onClick={() => {
-                      setBookingMode('charter');
-                      setBookingData((prev) => ({
-                        ...prev,
-                        captainIncluded: true,
-                        charterType: 'sunset_cruise',
-                        charterVariant: 'private',
-                        passengerCount: 1,
-                        rentalType: 'half_day',
-                        hours: 1,
-                        time: '18:30',
-                      }));
-                      setStep(1);
-                    }}
+                    onClick={() => handleSelectCharterExperience('sunset_cruise')}
                     className={`min-h-[120px] rounded-2xl border p-5 text-left transition active:scale-[0.99] md:p-6 ${bookingChoiceIdle}`}
                   >
                     <span className="text-2xl" aria-hidden>

@@ -1,6 +1,18 @@
 import { useEffect, useRef } from 'react';
-import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import {
+  Anchor,
+  CreditCard,
+  Headphones,
+  Heart,
+  ListChecks,
+  Shield,
+  Sparkles,
+  Tag,
+} from 'lucide-react';
+import { env } from '../../config/env.js';
+import { trackDirectBookingEvent } from '../../lib/directBookingMarketing';
+import { wrapRouterNavigate } from '../../lib/clickPerf';
 import DirectBookingComparison from './DirectBookingComparison';
 import DirectBookingSteps from './DirectBookingSteps';
 import DirectBookingFAQ from './DirectBookingFAQ';
@@ -89,7 +101,7 @@ export default function WhyBookDirectSection() {
     <section
       ref={sectionRef}
       id="why-book-direct"
-      className="lz-home-section border-t border-cyan-500/15 bg-gradient-to-b from-cyan-950/20 to-transparent motion-safe:animate-none"
+      className="lz-home-section border-t border-cyan-500/15 bg-gradient-to-b from-cyan-950/20 to-transparent"
       aria-labelledby="why-book-direct-heading"
     >
       <div className="lz-home-inner">

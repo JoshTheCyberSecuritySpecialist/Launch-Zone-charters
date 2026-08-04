@@ -56,3 +56,5 @@ Or paste the migration into **Supabase → SQL Editor**:
 - CAPTCHA on public find-booking / contact form
 - Redis-backed rate limits for multi-instance API
 - Remove email fallback from `lz_is_admin()` once all admins use `auth.uid()`
+- Set `GROUPON_VOUCHER_HASH_SECRET` in production (do not rely on service-role fallback)
+- See **`docs/SECURITY_PHASE5_AUDIT.md`** for the full Phase 5 findings table (Aug 2026)

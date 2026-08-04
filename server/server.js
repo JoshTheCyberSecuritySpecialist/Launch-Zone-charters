@@ -787,6 +787,13 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  next();
+});
+
 async function resolveCustomerEmail(customerId) {
   if (!customerId) return '';
   const { data: cRow } = await supabase
@@ -1738,7 +1745,7 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
   return res.json({ received: true, queued: Boolean(out.queued), ignored: Boolean(out.ignored) });
 });
 
-app.use(express.json());
+app.use(express.json({ limit: '2mb' }));
 
 /**
  * Active fleet for booking UI — service role reads boats (fallback when browser anon fails / empty).
@@ -6922,6 +6929,23 @@ const CONFIRM_EMAIL_RATE_WINDOW_MS = 60 * 1000;
 const CONFIRM_EMAIL_RATE_MAX = 10;
 const confirmEmailRateByIp = new Map();
 
+const CONTACT_RATE_WINDOW_MS = 60 * 1000;
+const CONTACT_RATE_MAX = 8;
+const contactRateByIp = new Map();
+
+function checkContactRate(ip) {
+  const key = String(ip || 'unknown').trim() || 'unknown';
+  const now = Date.now();
+  const prev = contactRateByIp.get(key);
+  if (!prev || now - prev.windowStart > CONTACT_RATE_WINDOW_MS) {
+    contactRateByIp.set(key, { windowStart: now, count: 1 });
+    return true;
+  }
+  if (prev.count >= CONTACT_RATE_MAX) return false;
+  prev.count += 1;
+  return true;
+}
+
 function checkConfirmEmailRate(ip) {
   const key = String(ip || 'unknown').trim() || 'unknown';
   const now = Date.now();
@@ -7474,6 +7498,11 @@ app.post('/api/public/verify-booking-gate', async (req, res) => {
 app.post('/api/public/booking-upload-url', async (req, res) => {
   try {
     if (!supabaseConfigured) return res.status(503).json({ error: 'Server not configured' });
+
+    const ip = requestIpBestEffort(req);
+    if (!checkFindBookingRate(ip)) {
+      return res.status(429).json({ error: 'Too many upload requests. Please wait a minute.' });
+    }
 
     const bookingId = String(req.body?.bookingId || '').trim();
     const email = normalizeEmailParam(req.body?.email);
@@ -8731,6 +8760,11 @@ app.post('/api/contact', async (req, res) => {
     if (!supabaseConfigured) {
       console.error('[contact] SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY missing');
       return res.status(503).json({ error: 'Contact service not configured' });
+    }
+
+    const ip = requestIpBestEffort(req);
+    if (!checkContactRate(ip)) {
+      return res.status(429).json({ error: 'Too many messages. Please wait a minute and try again.' });
     }
 
     const fields = contactSubmission.parseContactBody(req.body);

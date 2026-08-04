@@ -323,10 +323,17 @@ export default function Header({ onNavigate, currentPage }: HeaderProps) {
               </button>
               <button
                 type="button"
-                onClick={() => handleNavigation('experiences')}
+                onClick={() => handleNavigation('book-bio')}
                 className="lz-btn-nav-cta lz-btn-nav-cta--toolbar shrink-0 whitespace-nowrap text-[11px] sm:text-xs sm:whitespace-normal"
               >
-                Book an Experience
+                Book Direct
+              </button>
+              <button
+                type="button"
+                onClick={() => handleNavigation('experiences')}
+                className="hidden shrink-0 whitespace-nowrap rounded-lz border border-white/15 bg-white/[0.06] px-2.5 py-2 text-[11px] font-semibold text-white/90 backdrop-blur-md transition hover:border-amber-400/40 hover:text-white md:inline-flex md:px-3 md:text-xs"
+              >
+                Experiences
               </button>
               <button
                 type="button"

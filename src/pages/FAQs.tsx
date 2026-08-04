@@ -60,6 +60,16 @@ const FAQ_GROUPS: FAQGroup[] = [
         answer:
           'Book online at launchzonecharters.com/booking/groupon. Enter your Groupon voucher number and the last name on the voucher, then choose your date and time. Your request is submitted with $0 due today, but your trip is not confirmed until Launch Zone Charters reviews availability and sends confirmation. Do not use a promo code on the regular Book Now checkout; Groupon vouchers must be redeemed on the Groupon booking page.',
       },
+      {
+        question: 'Can I book directly instead of using Groupon?',
+        answer:
+          'Yes. You can reserve eligible tours directly through the Launch Zone Charters website. Direct reservations are booked and managed through our system. Customers who already purchased a Groupon voucher should use the dedicated Groupon redemption page and follow the voucher terms.',
+      },
+      {
+        question: 'Why should I book directly?',
+        answer:
+          'Booking directly keeps your reservation, confirmations, required forms and trip communication connected through Launch Zone Charters. Third-party promotional prices may vary.',
+      },
     ],
   },
   {

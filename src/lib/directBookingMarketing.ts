@@ -1,8 +1,10 @@
 /** Lightweight hooks for future analytics — no PII. */
 export type DirectBookingMarketingEvent =
   | 'why_book_direct_viewed'
+  | 'direct_booking_section_viewed'
   | 'direct_booking_cta_clicked'
   | 'direct_packages_clicked'
+  | 'groupon_redemption_link_clicked'
   | 'sticky_direct_bar_viewed'
   | 'sticky_direct_bar_clicked'
   | 'sticky_direct_bar_dismissed'

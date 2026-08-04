@@ -6,8 +6,12 @@ const PHONE_TEL = `tel:${PHONE_DISPLAY.replace(/\D/g, '')}`;
 
 const FAQ_ITEMS = [
   {
+    q: 'Can I book directly instead of using Groupon?',
+    a: 'Yes. You can reserve eligible tours directly through the Launch Zone Charters website. Direct reservations are booked and managed through our system. Customers who already purchased a Groupon voucher should use the dedicated Groupon redemption page and follow the voucher terms.',
+  },
+  {
     q: 'Why should I book directly?',
-    a: 'Direct booking gives you one place to choose your experience, pick your preferred date, communicate with the local booking team, receive trip details, and complete secure payment during online checkout.',
+    a: 'Booking directly keeps your reservation, confirmations, required forms and trip communication connected through Launch Zone Charters. Third-party promotional prices may vary.',
   },
   {
     q: 'Is the direct price the same as the Groupon deal?',
@@ -15,11 +19,11 @@ const FAQ_ITEMS = [
   },
   {
     q: 'Am I charged when I submit my preferred date?',
-    a: 'For online bookings, you complete secure payment through Stripe during checkout after selecting your date and time. You receive confirmation details by email once checkout is complete.',
+    a: 'For direct online charter bookings, you complete secure payment through Stripe during checkout after selecting your date and time. Groupon voucher requests are submitted separately on the Groupon booking page with $0 due at request time until your trip is reviewed and confirmed.',
   },
   {
     q: 'Do I receive confirmation?',
-    a: 'Yes. You receive reservation details after online checkout. If the schedule needs to change due to weather or operations, our booking team will contact you with options.',
+    a: 'Direct online bookings receive confirmation details by email after checkout. Groupon requests are confirmed by our booking team after availability is reviewed. If weather or operations require a change, we will contact you.',
   },
   {
     q: 'Can I contact someone directly?',
@@ -35,7 +39,7 @@ const FAQ_ITEMS = [
   },
   {
     q: 'Is payment secure?',
-    a: 'Yes. Online payments are processed securely through Stripe.',
+    a: 'Yes. Direct online payments are processed securely through Stripe.',
   },
 ] as const;
 

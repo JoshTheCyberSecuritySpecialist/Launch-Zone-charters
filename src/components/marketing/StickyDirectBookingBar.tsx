@@ -6,6 +6,7 @@ import {
   trackDirectBookingEvent,
 } from '../../lib/directBookingMarketing';
 import { wrapRouterNavigate } from '../../lib/clickPerf';
+import { bioBookingUrl } from '../../lib/bioluminescencePackages';
 
 type StickyDirectBookingBarProps = {
   heroSentinelId?: string;
@@ -55,11 +56,11 @@ export default function StickyDirectBookingBar({
     trackDirectBookingEvent('sticky_direct_bar_dismissed');
   }, []);
 
-  const goExperiences = wrapRouterNavigate(
+  const goBookDirect = wrapRouterNavigate(
     'home_sticky_direct',
-    'book_experience',
+    'book_direct',
     navigate,
-    '/experiences'
+    bioBookingUrl('bio_solo')
   );
 
   if (!visible) return null;
@@ -76,11 +77,19 @@ export default function StickyDirectBookingBar({
             <span className="hidden md:inline">Book Direct With Launch Zone Charters</span>
           </p>
           <p className="mt-0.5 hidden text-xs text-slate-400 md:block">
-            Same standard package pricing · Direct local support · Secure checkout · Support a local
-            business
+            Direct local support · Secure checkout ·{' '}
+            <Link
+              to="/booking/groupon"
+              className="text-cyan-300/90 underline underline-offset-2"
+              onClick={() =>
+                trackDirectBookingEvent('groupon_redemption_link_clicked', { placement: 'sticky_bar' })
+              }
+            >
+              Groupon redemption
+            </Link>
           </p>
           <p className="mt-0.5 text-[11px] leading-snug text-slate-400 md:hidden">
-            Same standard package pricing · Direct local support
+            Direct booking · Local support
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -94,13 +103,13 @@ export default function StickyDirectBookingBar({
           <button
             type="button"
             onClick={() => {
-              trackDirectBookingEvent('sticky_direct_bar_clicked', { target: 'experiences' });
-              goExperiences();
+              trackDirectBookingEvent('sticky_direct_bar_clicked', { target: 'book_direct' });
+              goBookDirect();
             }}
             className="lz-btn-primary min-h-[44px] px-4 py-2 text-xs font-semibold uppercase tracking-wide sm:min-h-[48px] sm:px-5 sm:text-sm"
           >
             <span className="sm:hidden">Book</span>
-            <span className="hidden sm:inline">Book Your Experience</span>
+            <span className="hidden sm:inline">Book Direct</span>
           </button>
           <button
             type="button"

@@ -1,66 +1,39 @@
 import { useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
+import { Headphones, ListChecks, MessageSquare, ClipboardList } from 'lucide-react';
 import {
-  Anchor,
-  CreditCard,
-  Headphones,
-  Heart,
-  ListChecks,
-  Shield,
-  Sparkles,
-  Tag,
-} from 'lucide-react';
-import { env } from '../../config/env.js';
+  BIO_PACKAGE_DISPLAY,
+  bioBookingUrl,
+} from '../../lib/bioluminescencePackages';
 import { trackDirectBookingEvent } from '../../lib/directBookingMarketing';
 import { wrapRouterNavigate } from '../../lib/clickPerf';
-import DirectBookingComparison from './DirectBookingComparison';
 import DirectBookingSteps from './DirectBookingSteps';
 import DirectBookingFAQ from './DirectBookingFAQ';
 
-const PHONE_DISPLAY = env.contactPhone || '803-542-1761';
-const PHONE_TEL = `tel:${PHONE_DISPLAY.replace(/\D/g, '')}`;
-
-const FEATURES = [
-  {
-    icon: Tag,
-    title: 'Same Standard Package Pricing',
-    body: 'Book our standard bioluminescence packages directly without purchasing a separate voucher.',
-  },
-  {
-    icon: ListChecks,
-    title: 'One Simple Booking Process',
-    body: 'Choose your experience, select your preferred date, and submit your request in one place.',
-  },
+const DIRECT_BENEFITS = [
   {
     icon: Headphones,
     title: 'Direct Local Support',
-    body: 'Call or text the local booking team that manages your reservation and trip details.',
+    body: 'Communicate directly with the Launch Zone Charters booking team about your reservation and trip details.',
   },
   {
-    icon: CreditCard,
-    title: 'Secure Online Payment',
-    body: 'Complete checkout securely through Stripe with clear totals before you pay.',
+    icon: ListChecks,
+    title: 'Simple Online Reservation',
+    body: 'Choose the available package, date and time directly through the Launch Zone Charters booking system.',
   },
   {
-    icon: Heart,
-    title: 'Support a Local Business',
-    body: 'Direct bookings support a locally owned Space Coast business and the team operating your trip.',
+    icon: MessageSquare,
+    title: 'Clear Trip Communication',
+    body: 'Receive booking confirmations, reminders and important trip instructions directly from Launch Zone Charters.',
   },
   {
-    icon: Shield,
-    title: 'Captain & Safety Included',
-    body: 'Captain-led experiences include the captain, fuel, and required safety equipment. Self-drive rentals do not include a captain.',
+    icon: ClipboardList,
+    title: 'Easy Reservation Management',
+    body: 'Keep reservation details, required forms and trip information connected to your direct booking.',
   },
 ] as const;
 
-const TRUST_BADGES = [
-  'Family-Owned Business',
-  'Captain-Led Experiences',
-  'Titusville & Daytona Beach',
-  'Space Coast Specialists',
-  'Secure Stripe Checkout',
-  'Direct Phone & Text Support',
-] as const;
+const startingAtUsd = Math.min(...BIO_PACKAGE_DISPLAY.map((p) => p.directPriceUsd));
 
 export default function WhyBookDirectSection() {
   const navigate = useNavigate();
@@ -75,26 +48,20 @@ export default function WhyBookDirectSection() {
         if (entry?.isIntersecting && !viewedRef.current) {
           viewedRef.current = true;
           trackDirectBookingEvent('why_book_direct_viewed');
-          observer.disconnect();
+          trackDirectBookingEvent('direct_booking_section_viewed');
         }
       },
-      { rootMargin: '0px', threshold: 0.15 }
+      { rootMargin: '0px', threshold: 0.12 }
     );
     observer.observe(el);
     return () => observer.disconnect();
   }, []);
 
-  const goExperiences = wrapRouterNavigate(
+  const goBookDirect = wrapRouterNavigate(
     'home_why_direct',
-    'book_experience',
+    'book_direct_bio',
     navigate,
-    '/experiences'
-  );
-  const goPackages = wrapRouterNavigate(
-    'home_why_direct',
-    'bio_packages',
-    navigate,
-    '/bioluminescent-tours#packages'
+    bioBookingUrl('bio_solo')
   );
 
   return (
@@ -106,35 +73,22 @@ export default function WhyBookDirectSection() {
     >
       <div className="lz-home-inner">
         <div className="lz-home-section__head text-center">
-          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-cyan-300/90">
-            Book direct
-          </p>
           <h2
             id="why-book-direct-heading"
-            className="mt-2 font-display text-2xl font-bold uppercase tracking-[0.1em] text-white md:text-3xl"
+            className="font-display text-2xl font-bold uppercase tracking-[0.1em] text-white md:text-3xl"
           >
-            Book Direct With Launch Zone Charters
+            Book Direct with Launch Zone Charters
           </h2>
           <p className="mx-auto mt-4 max-w-3xl text-base leading-relaxed text-slate-300 md:text-lg">
-            Book with the local team that operates your experience, receive direct support, and avoid
-            unnecessary voucher-redemption steps.
-          </p>
-          <p className="mx-auto mt-4 max-w-3xl text-sm leading-relaxed text-slate-400 md:text-base">
-            When you book directly, you work with the same local team that schedules, operates, and
-            supports your trip from start to finish.
-          </p>
-          <p className="mx-auto mt-2 max-w-2xl text-sm text-slate-500">
-            Choose your experience, request your preferred date, and receive confirmation details after
-            secure online checkout.
+            Reserve directly with our local booking team for straightforward scheduling, direct trip
+            communication and easy access to your reservation details. Already purchased a Groupon? You
+            can still redeem your voucher through our dedicated Groupon booking page.
           </p>
         </div>
 
-        <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3 lg:gap-5">
-          {FEATURES.map(({ icon: Icon, title, body }) => (
-            <article
-              key={title}
-              className="lz-card-glass p-5 transition motion-safe:hover:border-cyan-400/25 md:p-6"
-            >
+        <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:gap-5">
+          {DIRECT_BENEFITS.map(({ icon: Icon, title, body }) => (
+            <article key={title} className="lz-card-glass p-5 md:p-6">
               <Icon className="h-6 w-6 text-cyan-300/90" aria-hidden />
               <h3 className="mt-3 text-sm font-bold uppercase tracking-wide text-white">{title}</h3>
               <p className="mt-2 text-sm leading-relaxed text-slate-300">{body}</p>
@@ -142,67 +96,60 @@ export default function WhyBookDirectSection() {
           ))}
         </div>
 
-        <DirectBookingComparison />
-        <DirectBookingSteps />
-
-        <div className="mt-12 flex flex-wrap justify-center gap-2 md:gap-3">
-          {TRUST_BADGES.map((label) => (
-            <span
-              key={label}
-              className="rounded-full border border-white/10 bg-slate-950/50 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-300 md:text-xs"
-            >
-              {label}
-            </span>
-          ))}
-        </div>
-
-        <div className="lz-card-glass mx-auto mt-12 max-w-3xl border border-[var(--lz-cta)]/25 bg-[rgba(255,140,43,0.06)] p-6 text-center md:p-8">
-          <Sparkles className="mx-auto h-7 w-7 text-[var(--lz-cta)]" aria-hidden />
-          <h3 className="mt-3 font-display text-lg font-bold uppercase tracking-wide text-white md:text-xl">
-            Thank You for Supporting Local
-          </h3>
-          <p className="mt-3 text-sm leading-relaxed text-slate-300 md:text-base">
-            When you book directly, more of your purchase supports the locally owned team that maintains
-            the boats, invests in safety, and operates your experience on Florida&apos;s Space Coast.
+        <div className="lz-card-glass mx-auto mt-10 max-w-3xl border border-cyan-400/20 p-6 md:p-8">
+          <p className="text-center font-display text-lg font-bold text-white md:text-xl">
+            Bioluminescence tours starting at ${startingAtUsd.toFixed(0)} when booked directly
+          </p>
+          <ul className="mt-6 space-y-3">
+            {BIO_PACKAGE_DISPLAY.map((pkg) => (
+              <li
+                key={pkg.id}
+                className="flex flex-col gap-1 border-b border-white/10 pb-3 last:border-0 last:pb-0 sm:flex-row sm:items-center sm:justify-between"
+              >
+                <span className="text-sm font-semibold text-slate-100">{pkg.cardTitle}</span>
+                <span className="text-sm text-slate-300">
+                  {pkg.guestCount} guest{pkg.guestCount === 1 ? '' : 's'} · $
+                  {pkg.directPriceUsd.toFixed(2)} total
+                </span>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-5 text-center text-xs leading-relaxed text-slate-400 md:text-sm">
+            Promotional pricing on third-party marketplaces may vary. Direct reservations are booked
+            and managed through Launch Zone Charters.
           </p>
         </div>
 
+        <DirectBookingSteps />
+
         <DirectBookingFAQ />
 
-        <div className="mt-12 flex flex-col items-center gap-4 sm:flex-row sm:justify-center">
+        <div className="mt-10 flex flex-col items-center gap-4">
           <button
             type="button"
             onClick={() => {
-              trackDirectBookingEvent('direct_booking_cta_clicked', { target: 'experiences' });
-              goExperiences();
+              trackDirectBookingEvent('direct_booking_cta_clicked', { target: 'book_direct_bio' });
+              goBookDirect();
             }}
-            className="lz-btn-primary min-h-[48px] w-full min-w-[12rem] sm:w-auto"
+            className="lz-btn-primary min-h-[48px] w-full max-w-md"
           >
-            Book Your Experience
+            Book Direct
           </button>
-          <button
-            type="button"
-            onClick={() => {
-              trackDirectBookingEvent('direct_packages_clicked', { target: 'bio_packages' });
-              goPackages();
-            }}
-            className="lz-btn-secondary min-h-[48px] w-full min-w-[12rem] sm:w-auto"
-          >
-            View Bioluminescence Packages
-          </button>
+          <p className="text-center text-sm text-slate-400">
+            Already have a Groupon voucher?{' '}
+            <Link
+              to="/booking/groupon"
+              className="font-semibold text-cyan-300 underline underline-offset-2"
+              onClick={() =>
+                trackDirectBookingEvent('groupon_redemption_link_clicked', {
+                  placement: 'why_book_direct',
+                })
+              }
+            >
+              Redeem it here
+            </Link>
+          </p>
         </div>
-        <p className="mt-4 text-center text-sm text-slate-400">
-          <Anchor className="mr-1 inline h-4 w-4 text-cyan-400/80" aria-hidden />
-          <a
-            href={PHONE_TEL}
-            className="font-semibold text-cyan-300 underline underline-offset-2"
-            onClick={() =>
-              trackDirectBookingEvent('direct_booking_cta_clicked', { target: 'phone' })
-            }
-          >
-            Call or Text {PHONE_DISPLAY}
-          </a>
-        </p>
       </div>
     </section>
   );

@@ -10,7 +10,65 @@ const {
 
 const DEFAULT_LAST_REVIEWED = '1970-01-01T00:00:00.000Z';
 const NEW_BOOKINGS_LOOKBACK_DAYS = 14;
-const NEW_BOOKINGS_LIMIT = 25;
+const NEW_BOOKINGS_LIMIT = 40;
+/** Advisory only — does not block bookings. Override via ADMIN_OPS_MIN_TURNAROUND_MINUTES env. */
+const ADMIN_OPS_MIN_TURNAROUND_MINUTES = Math.max(
+  15,
+  Math.min(180, Number(process.env.ADMIN_OPS_MIN_TURNAROUND_MINUTES) || 45)
+);
+
+const ALLOWED_SORT = new Set(['trip_date', 'recently_booked', 'customer_name']);
+const ALLOWED_FILTER = new Set([
+  'today',
+  'tomorrow',
+  'weekend',
+  'new',
+  'conflict',
+  'missing_boat',
+  'missing_captain',
+  'direct',
+  'groupon',
+  'staff',
+]);
+
+function getBusinessTimezone() {
+  return String(process.env.BUSINESS_TIMEZONE || 'America/New_York').trim();
+}
+
+function parseOpsSort(raw) {
+  const v = String(raw || 'trip_date').trim().toLowerCase();
+  return ALLOWED_SORT.has(v) ? v : 'trip_date';
+}
+
+/** @returns {{ filter: string | null } | { error: string }} */
+function parseOpsFilterQuery(raw) {
+  if (raw == null || String(raw).trim() === '') {
+    return { filter: null };
+  }
+  const v = String(raw).trim().toLowerCase();
+  if (!ALLOWED_FILTER.has(v)) {
+    return { error: `Invalid filter. Allowed: ${[...ALLOWED_FILTER].join(', ')}` };
+  }
+  return { filter: v };
+}
+
+function parseOpsFilter(raw) {
+  const parsed = parseOpsFilterQuery(raw);
+  return parsed.error ? null : parsed.filter;
+}
+
+function validateOpsQuery(sortRaw, filterRaw) {
+  const sort = parseOpsSort(sortRaw);
+  const sortProvided = sortRaw != null && String(sortRaw).trim() !== '';
+  if (sortProvided && !ALLOWED_SORT.has(String(sortRaw).trim().toLowerCase())) {
+    return { error: 'Invalid sort parameter.', statusCode: 400 };
+  }
+  const filterParsed = parseOpsFilterQuery(filterRaw);
+  if (filterParsed.error) {
+    return { error: filterParsed.error, statusCode: 400 };
+  }
+  return { sort, filter: filterParsed.filter };
+}
 
 function bookingSourceDisplay(row) {
   const src = String(row.booking_source || '').trim().toLowerCase();
@@ -105,33 +163,6 @@ function detectBoatOverlapConflicts(rows) {
           boat_id: a.boat_id,
           urgency: 15,
         });
-        continue;
-      }
-
-      const cluster = active.filter((row) => {
-        const s = new Date(row.start_time).getTime();
-        const e = new Date(row.end_time).getTime();
-        return intervalsOverlap(aStart, aEnd, s, e) || intervalsOverlap(bStart, bEnd, s, e);
-      });
-      const used = cluster.reduce((sum, row) => {
-        if (!isSharedCharterBooking(row) && isExclusiveBoatBooking(row)) {
-          return CHARTER_MAX_PASSENGERS;
-        }
-        if (isSharedCharterBooking(row)) {
-          const gc = Number(row.guest_count || row.passenger_count || 1);
-          return sum + (Number.isFinite(gc) ? gc : CHARTER_MAX_PASSENGERS);
-        }
-        return sum;
-      }, 0);
-      if (used > CHARTER_MAX_PASSENGERS) {
-        conflicts.push({
-          type: 'shared_capacity_exceeded',
-          label: `Shared charter seats may exceed ${CHARTER_MAX_PASSENGERS} for this time slot`,
-          booking_id: a.id,
-          other_booking_id: b.id,
-          boat_id: a.boat_id,
-          urgency: 14,
-        });
       }
     }
   }
@@ -166,7 +197,8 @@ function detectCaptainOverlapConflicts(rows) {
   return conflicts;
 }
 
-function detectAssignmentWarnings(bookings) {
+function detectAssignmentWarnings(bookings, zone) {
+  const tz = zone || getBusinessTimezone();
   const warnings = [];
   for (const b of bookings || []) {
     if (['cancelled', 'completed'].includes(String(b.status))) continue;
@@ -186,9 +218,8 @@ function detectAssignmentWarnings(bookings) {
         urgency: 5,
       });
     }
-    const endMs = new Date(b.end_time).getTime();
-    const startMs = new Date(b.start_time).getTime();
-    if (Number.isFinite(endMs) && Number.isFinite(startMs) && endMs <= startMs) {
+    const sched = parseScheduleStartEnd(b, tz);
+    if (!sched.valid || sched.invalidRange) {
       warnings.push({
         type: 'invalid_times',
         label: 'End time is not after start time',
@@ -200,11 +231,160 @@ function detectAssignmentWarnings(bookings) {
   return warnings;
 }
 
+function canonicalServiceKey(row) {
+  const bt = String(row.booking_type || '').trim().toLowerCase();
+  const ct = String(row.charter_type || '').trim().toLowerCase();
+  const seating = String(row.charter_seating || '').trim().toLowerCase();
+  return `${bt}|${ct}|${seating}`;
+}
+
+function normalizedDepartureLocation(row) {
+  return String(row.rental_location || '').trim().toLowerCase() || 'unknown';
+}
+
+/**
+ * Shared departures: no stable shared_departure_id / trip_instance_id exists on bookings (schema audit).
+ * When a future column is added, it takes precedence. Otherwise group by boat + normalized start +
+ * canonical service + departure location + business timezone — not by overlapping intervals alone.
+ */
+function sharedDepartureGroupKey(row, zone) {
+  const stable =
+    row.shared_departure_id ||
+    row.departure_id ||
+    row.trip_instance_id ||
+    row.group_booking_id ||
+    row.schedule_slot_id;
+  if (stable) return `stable:${String(stable).trim()}`;
+
+  if (!isSharedCharterBooking(row) || !row.boat_id) return null;
+  const sched = parseScheduleStartEnd(row, zone);
+  if (!sched.valid) return null;
+  const startKey = sched.start.setZone(zone).toFormat("yyyy-MM-dd'T'HH:mm");
+  return [
+    'fallback',
+    String(row.boat_id),
+    startKey,
+    canonicalServiceKey(row),
+    normalizedDepartureLocation(row),
+    zone,
+  ].join('|');
+}
+
+function rowsInSharedDepartureGroup(row, allRaw, zone) {
+  const key = sharedDepartureGroupKey(row, zone);
+  if (!key) return [row];
+  return (allRaw || []).filter((other) => {
+    if (!isSharedCharterBooking(other)) return false;
+    if (String(other.boat_id) !== String(row.boat_id)) return false;
+    if (['cancelled', 'completed'].includes(String(other.status))) return false;
+    return sharedDepartureGroupKey(other, zone) === key;
+  });
+}
+
+function detectSharedDepartureCapacityConflicts(rows, zone) {
+  const conflicts = [];
+  const byKey = new Map();
+  for (const row of rows || []) {
+    if (!isSharedCharterBooking(row) || !row.boat_id) continue;
+    if (['cancelled', 'completed'].includes(String(row.status))) continue;
+    const key = sharedDepartureGroupKey(row, zone);
+    if (!key) continue;
+    const list = byKey.get(key) || [];
+    list.push(row);
+    byKey.set(key, list);
+  }
+  for (const list of byKey.values()) {
+    if (list.length < 2) continue;
+    let used = 0;
+    for (const row of list) {
+      const gc = Number(row.guest_count || row.passenger_count || 1);
+      used += Number.isFinite(gc) ? gc : CHARTER_MAX_PASSENGERS;
+    }
+    if (used > CHARTER_MAX_PASSENGERS) {
+      conflicts.push({
+        type: 'shared_capacity_exceeded',
+        label: `Shared charter seats may exceed ${CHARTER_MAX_PASSENGERS} for this departure`,
+        booking_id: list[0].id,
+        other_booking_id: list[1].id,
+        boat_id: list[0].boat_id,
+        urgency: 14,
+      });
+    }
+  }
+  return conflicts;
+}
+
+/** Advisory duplicate hints only — does not cancel or merge bookings. */
+function detectDuplicateBookingWarnings(rows, zone) {
+  const warnings = [];
+  const byVoucher = new Map();
+  const byStripe = new Map();
+  const byExternal = new Map();
+  const byCustomerSlot = new Map();
+  const tz = zone || getBusinessTimezone();
+
+  const addToMap = (map, key, row) => {
+    if (!key) return;
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(row);
+  };
+
+  for (const row of rows || []) {
+    if (['cancelled', 'completed'].includes(String(row.status))) continue;
+    addToMap(byVoucher, row.groupon_voucher_id ? String(row.groupon_voucher_id) : null, row);
+    addToMap(
+      byStripe,
+      row.stripe_checkout_session_id ? String(row.stripe_checkout_session_id).trim() : null,
+      row
+    );
+    addToMap(byExternal, row.external_reference ? String(row.external_reference).trim() : null, row);
+
+    const sched = parseScheduleStartEnd(row, tz);
+    if (sched.valid && row.customer_id) {
+      const slotKey = `${row.customer_id}|${sched.start.setZone(tz).toFormat("yyyy-MM-dd'T'HH:mm")}|${canonicalServiceKey(row)}`;
+      addToMap(byCustomerSlot, slotKey, row);
+    }
+  }
+
+  const pushPairs = (type, label, list) => {
+    if (!list || list.length < 2) return;
+    for (let i = 1; i < list.length; i += 1) {
+      warnings.push({
+        type,
+        label,
+        booking_id: list[0].id,
+        other_booking_id: list[i].id,
+        urgency: 8,
+      });
+    }
+  };
+
+  for (const list of byVoucher.values()) {
+    pushPairs('duplicate_groupon_voucher', 'Possible duplicate Groupon voucher link', list);
+  }
+  for (const list of byStripe.values()) {
+    pushPairs('duplicate_stripe_session', 'Possible duplicate Stripe checkout session', list);
+  }
+  for (const list of byExternal.values()) {
+    pushPairs('duplicate_external_reference', 'Possible duplicate import / external reference', list);
+  }
+  for (const list of byCustomerSlot.values()) {
+    pushPairs(
+      'duplicate_customer_slot',
+      'Possible duplicate booking for same customer, time, and service',
+      list
+    );
+  }
+
+  return warnings;
+}
+
 /**
  * @param {Array} normalizedBookings - ops-shaped rows with boat_id, times, etc.
  * @param {Array} rawRows - DB rows for capacity helpers
  */
-function buildScheduleConflicts(normalizedBookings, rawRows) {
+function buildScheduleConflicts(normalizedBookings, rawRows, zone) {
+  const tz = zone || getBusinessTimezone();
   const byBoat = new Map();
   for (const raw of rawRows || []) {
     if (!raw.boat_id) continue;
@@ -216,8 +396,10 @@ function buildScheduleConflicts(normalizedBookings, rawRows) {
   for (const boatRows of byBoat.values()) {
     conflicts.push(...detectBoatOverlapConflicts(boatRows));
   }
+  conflicts.push(...detectSharedDepartureCapacityConflicts(rawRows || [], tz));
   conflicts.push(...detectCaptainOverlapConflicts(rawRows || []));
-  conflicts.push(...detectAssignmentWarnings(normalizedBookings));
+  conflicts.push(...detectAssignmentWarnings(normalizedBookings, tz));
+  conflicts.push(...detectDuplicateBookingWarnings(rawRows || [], tz));
 
   const seen = new Set();
   return conflicts
@@ -284,10 +466,519 @@ async function markAllBookingsReviewed(supabase, adminUserId) {
   return { error, lastReviewedAt: now };
 }
 
+function shortDisplayName(fullName) {
+  const parts = String(fullName || 'Guest').trim().split(/\s+/);
+  if (parts.length === 0) return 'Guest';
+  if (parts.length === 1) return parts[0];
+  return `${parts[0]} ${parts[parts.length - 1].charAt(0)}.`;
+}
+
+function parseScheduleStartEnd(row, zone) {
+  const startIso = String(row.start_time || '').trim();
+  const endIso = String(row.end_time || '').trim();
+  const start = DateTime.fromISO(startIso, { zone: 'utc' }).setZone(zone);
+  let end = DateTime.fromISO(endIso, { zone: 'utc' }).setZone(zone);
+  if (!start.isValid) {
+    return { valid: false, start: null, end: null, overnight: false };
+  }
+  if (!end.isValid) {
+    return { valid: false, start, end: null, overnight: false };
+  }
+  let overnight = false;
+  let invalidRange = false;
+  if (end <= start) {
+    const charterBio =
+      String(row.booking_type) === 'charter' && String(row.charter_type || '').toLowerCase() === 'bio';
+    if (charterBio) {
+      end = end.plus({ days: 1 });
+      overnight = true;
+    } else {
+      invalidRange = true;
+    }
+  } else if (end.startOf('day') > start.startOf('day')) {
+    overnight = true;
+  }
+  if (invalidRange) {
+    return { valid: false, start, end, overnight: false, invalidRange: true };
+  }
+  return { valid: true, start, end, overnight, invalidRange: false };
+}
+
+function relativeTripLabel(startDt, zone, status) {
+  if (!startDt || !startDt.isValid) return { label: null, invalid: true };
+  const now = DateTime.now().setZone(zone);
+  const today = now.startOf('day');
+  const tripDay = startDt.startOf('day');
+  const diffDays = Math.floor(tripDay.diff(today, 'days').days);
+
+  if (!['cancelled', 'completed'].includes(String(status)) && startDt < now.minus({ minutes: 30 })) {
+    return { label: 'PAST DUE', invalid: false };
+  }
+  if (diffDays === 0) return { label: 'TODAY', invalid: false };
+  if (diffDays === 1) return { label: 'TOMORROW', invalid: false };
+  const dow = tripDay.weekday;
+  const isWeekendDay = dow === 5 || dow === 6 || dow === 7;
+  if (isWeekendDay && diffDays >= 0 && diffDays <= 6) {
+    return { label: 'THIS WEEKEND', invalid: false };
+  }
+  if (diffDays >= 2 && diffDays <= 6) {
+    return { label: `IN ${diffDays} DAYS`, invalid: false };
+  }
+  if (diffDays >= 7 && diffDays <= 13) {
+    return { label: 'NEXT WEEK', invalid: false };
+  }
+  return { label: null, invalid: false };
+}
+
+function formatTripDateLong(startDt, compact) {
+  if (!startDt?.isValid) return 'Needs scheduling review';
+  if (compact) return startDt.toFormat('ccc, MMM d, yyyy').toUpperCase();
+  return startDt.toFormat('cccc, MMMM d, yyyy').toUpperCase();
+}
+
+function formatScheduledTimeRange(startDt, endDt, overnight) {
+  if (!startDt?.isValid || !endDt?.isValid) return 'Time not set';
+  const tOpts = { hour: 'numeric', minute: '2-digit' };
+  const startStr = startDt.toLocaleString(DateTime.TIME_SIMPLE, tOpts);
+  if (!overnight && startDt.hasSame(endDt, 'day')) {
+    return `${startStr} – ${endDt.toLocaleString(DateTime.TIME_SIMPLE, tOpts)}`;
+  }
+  const endDay = endDt.toFormat('cccc, MMMM d').toUpperCase();
+  return `${startStr} – ${endDay} AT ${endDt.toLocaleString(DateTime.TIME_SIMPLE, tOpts)}`;
+}
+
+function classifyCharterMode(row) {
+  const bt = String(row.booking_type || '').trim().toLowerCase();
+  if (bt === 'rental') return { mode: 'RENTAL', reliable: true };
+  if (bt !== 'charter') return { mode: 'NEEDS REVIEW', reliable: false };
+  if (isSharedCharterBooking(row)) return { mode: 'SHARED TRIP', reliable: true };
+  if (isExclusiveBoatBooking(row) && !isSharedCharterBooking(row)) {
+    return { mode: 'PRIVATE CHARTER', reliable: true };
+  }
+  const seating = String(row.charter_seating || '').trim().toLowerCase();
+  if (seating === 'private') return { mode: 'PRIVATE CHARTER', reliable: true };
+  if (seating === 'shared') return { mode: 'SHARED TRIP', reliable: true };
+  return { mode: 'NEEDS REVIEW', reliable: false };
+}
+
+function serviceNameDetailed(row) {
+  const bt = String(row.booking_type || '').trim().toLowerCase();
+  const ct = String(row.charter_type || '').trim().toLowerCase();
+  const { mode } = classifyCharterMode(row);
+  if (bt === 'rental') return 'Boat Rental';
+  if (ct === 'bio') {
+    if (mode === 'SHARED TRIP') return 'Shared Bioluminescence Tour';
+    if (mode === 'PRIVATE CHARTER') return 'Private Bioluminescence Charter';
+    return 'Captain-Led Bioluminescence Tour';
+  }
+  if (ct === 'rocket') return 'Rocket Launch Charter';
+  if (ct === 'sunset' || ct === 'dolphin') return 'Dolphin & Sunset Cruise';
+  if (ct === 'captain_charter') return 'Captain-Led Charter';
+  return tripTypeLabel(row);
+}
+
+function captainRequiredForRow(row) {
+  return String(row.booking_type || '').trim().toLowerCase() === 'charter';
+}
+
+function buildReadinessStatus(norm, row) {
+  const pay = String(norm.payment_status || '').toLowerCase();
+  const payment =
+    pay === 'paid' || pay === 'complete' || pay === 'completed'
+      ? 'Paid'
+      : norm.outstanding > 0
+        ? 'Pending'
+        : 'Pending';
+
+  const waiver = norm.waiver_done ? 'Approved' : 'Missing';
+  let insurance = 'Not required';
+  if (String(row.booking_type) !== 'charter') {
+    const ins = String(row.insurance_status || '').toLowerCase();
+    if (ins === 'verified') insurance = 'Approved';
+    else if (ins === 'submitted') insurance = 'Pending';
+    else if (ins === 'rejected') insurance = 'Rejected';
+    else insurance = 'Missing';
+  }
+
+  let captain = 'Not required';
+  if (captainRequiredForRow(row)) {
+    captain = row.captain_id ? 'Assigned' : 'Missing';
+  }
+
+  const boat = row.boat_id ? 'Assigned' : 'Missing';
+
+  const pending = [payment, waiver, insurance, captain, boat].some((s) =>
+    ['Pending', 'Missing', 'Rejected'].includes(s)
+  );
+  return {
+    overall: pending ? 'pending' : 'ready',
+    payment,
+    waiver,
+    insurance,
+    captain,
+    boat,
+  };
+}
+
+function indexConflictsByBooking(scheduleConflicts, rawById) {
+  const map = new Map();
+  const add = (bookingId, detail) => {
+    const id = String(bookingId);
+    if (!map.has(id)) map.set(id, []);
+    map.get(id).push(detail);
+  };
+  for (const c of scheduleConflicts || []) {
+    const other = c.other_booking_id ? rawById.get(String(c.other_booking_id)) : null;
+    const cust = other
+      ? Array.isArray(other.customers)
+        ? other.customers[0]
+        : other.customers
+      : null;
+    const detail = {
+      type: c.type,
+      message: c.label,
+      overlappingBookingId: c.other_booking_id || null,
+      overlappingCustomerDisplayName: cust?.full_name ? shortDisplayName(cust.full_name) : null,
+      overlappingStart: other?.start_time || null,
+      overlappingEnd: other?.end_time || null,
+    };
+    add(c.booking_id, detail);
+    if (c.other_booking_id) add(c.other_booking_id, { ...detail, overlappingBookingId: c.booking_id });
+  }
+  return map;
+}
+
+const CONFLICT_PRIORITY = {
+  invalid_times: 1,
+  shared_capacity_exceeded: 2,
+  boat_exclusive_overlap: 3,
+  captain_overlap: 4,
+  missing_captain: 5,
+  missing_boat: 6,
+  duplicate_groupon_voucher: 7,
+  duplicate_stripe_session: 7,
+  duplicate_external_reference: 7,
+  duplicate_customer_slot: 7,
+};
+
+function primaryConflictStatus(details) {
+  if (!details?.length) return { status: 'No conflict', issues: [] };
+  const sorted = [...details].sort(
+    (a, b) => (CONFLICT_PRIORITY[a.type] || 99) - (CONFLICT_PRIORITY[b.type] || 99)
+  );
+  const primary = sorted[0];
+  const statusMap = {
+    invalid_times: 'Invalid time',
+    shared_capacity_exceeded: 'Capacity exceeded',
+    boat_exclusive_overlap: 'Possible boat conflict',
+    captain_overlap: 'Possible captain conflict',
+    missing_boat: 'Missing boat',
+    missing_captain: 'Missing captain',
+    duplicate_groupon_voucher: 'Possible duplicate',
+    duplicate_stripe_session: 'Possible duplicate',
+    duplicate_external_reference: 'Possible duplicate',
+    duplicate_customer_slot: 'Possible duplicate',
+  };
+  return {
+    status: statusMap[primary.type] || 'Needs review',
+    issues: sorted.map((d) => d.type),
+  };
+}
+
+function sharedClusterGuestTotal(row, allRaw, zone) {
+  if (!isSharedCharterBooking(row) || !row.boat_id) return null;
+  const cluster = rowsInSharedDepartureGroup(row, allRaw, zone);
+  let total = 0;
+  for (const other of cluster) {
+    const gc = Number(other.guest_count || other.passenger_count || 1);
+    total += Number.isFinite(gc) ? gc : CHARTER_MAX_PASSENGERS;
+  }
+  return total;
+}
+
+function capacityLines(row, allRaw, zone) {
+  const guests = Number(row.guest_count || row.passenger_count || 1);
+  const { mode } = classifyCharterMode(row);
+  if (mode === 'SHARED TRIP') {
+    const grouped = sharedClusterGuestTotal(row, allRaw, zone) ?? guests;
+    return {
+      guestsOnReservation: guests,
+      capacityText: `Trip capacity: ${grouped} of ${CHARTER_MAX_PASSENGERS} seats booked`,
+    };
+  }
+  if (mode === 'RENTAL') {
+    return {
+      guestsOnReservation: guests,
+      capacityText: `Guests: ${guests} · Boat maximum: ${CHARTER_MAX_PASSENGERS} guests`,
+    };
+  }
+  return {
+    guestsOnReservation: guests,
+    capacityText: `Guests: ${guests} · Boat maximum: ${CHARTER_MAX_PASSENGERS} guests`,
+  };
+}
+
+function sameDayTripCount(row, allRaw, zone) {
+  const sched = parseScheduleStartEnd(row, zone);
+  if (!sched.valid || !row.boat_id) return 0;
+  const dayKey = sched.start.toISODate();
+  let n = 0;
+  for (const other of allRaw) {
+    if (String(other.boat_id) !== String(row.boat_id)) continue;
+    if (['cancelled', 'completed'].includes(String(other.status))) continue;
+    const o = parseScheduleStartEnd(other, zone);
+    if (!o.valid) continue;
+    if (o.start.toISODate() === dayKey) n += 1;
+  }
+  return Math.max(0, n - 1);
+}
+
+function turnaroundWarningFor(row, allRaw, zone) {
+  const sched = parseScheduleStartEnd(row, zone);
+  if (!sched.valid) return null;
+  let minGap = null;
+  for (const other of allRaw) {
+    if (String(other.id) === String(row.id)) continue;
+    if (['cancelled', 'completed'].includes(String(other.status))) continue;
+    const sameBoat = row.boat_id && String(other.boat_id) === String(row.boat_id);
+    const sameCaptain =
+      row.captain_id && other.captain_id && String(row.captain_id) === String(other.captain_id);
+    if (!sameBoat && !sameCaptain) continue;
+    const o = parseScheduleStartEnd(other, zone);
+    if (!o.valid) continue;
+    if (!sched.start.hasSame(o.start, 'day')) continue;
+    const gapAfter = o.start.diff(sched.end, 'minutes').minutes;
+    const gapBefore = sched.start.diff(o.end, 'minutes').minutes;
+    for (const g of [gapAfter, gapBefore]) {
+      if (g >= 0 && g < ADMIN_OPS_MIN_TURNAROUND_MINUTES) {
+        if (minGap == null || g < minGap) minGap = g;
+      }
+    }
+  }
+  if (minGap == null) return null;
+  return {
+    turnaroundMinutes: Math.round(minGap),
+    message: `Turnaround warning — only ${Math.round(minGap)} minutes between trips`,
+  };
+}
+
+function buildNewBookingCard(raw, norm, ctx) {
+  const zone = ctx.businessTimezone;
+  const sched = parseScheduleStartEnd(raw, zone);
+  const rel = sched.valid
+    ? relativeTripLabel(sched.start, zone, raw.status)
+    : { label: null, invalid: true };
+  const captain = Array.isArray(raw.captains) ? raw.captains[0] : raw.captains;
+  const captainName = captain?.full_name ? String(captain.full_name).trim() : null;
+  const { mode } = classifyCharterMode(raw);
+  const conflictDetails = ctx.conflictsByBooking.get(String(raw.id)) || [];
+  const { status: conflictStatus, issues: conflictIssueCodes } = primaryConflictStatus(conflictDetails);
+  const cap = capacityLines(raw, ctx.allRaw, zone);
+  const turnaround = turnaroundWarningFor(raw, ctx.allRaw, zone);
+  const otherTrips = sameDayTripCount(raw, ctx.allRaw, zone);
+  const locationRaw = String(raw.rental_location || norm.location || '').trim();
+
+  return {
+    id: raw.id,
+    bookingId: raw.id,
+    customer_name: norm.customer_name,
+    customer_phone: norm.customer_phone,
+    customer_email: norm.customer_email,
+    booking_source: norm.booking_source,
+    source_label: bookingSourceDisplay(raw),
+    scheduledStart: raw.start_time,
+    scheduledEnd: raw.end_time,
+    businessTimezone: zone,
+    tripDateLong: sched.valid ? formatTripDateLong(sched.start, false) : 'NEEDS SCHEDULING REVIEW',
+    tripDateCompact: sched.valid ? formatTripDateLong(sched.start, true) : 'NEEDS SCHEDULING REVIEW',
+    relativeDateLabel: rel.invalid ? null : rel.label,
+    scheduledTimeDisplay: sched.valid ? formatScheduledTimeRange(sched.start, sched.end, sched.overnight) : 'Time not set',
+    groupDateKey: sched.valid ? sched.start.toISODate() : 'needs-review',
+    serviceName: serviceNameDetailed(raw),
+    trip_type: serviceNameDetailed(raw),
+    charterMode: mode,
+    passenger_count: cap.guestsOnReservation,
+    capacityText: cap.capacityText,
+    groupedTripPassengerCount: sharedClusterGuestTotal(raw, ctx.allRaw, zone),
+    boatCapacity: CHARTER_MAX_PASSENGERS,
+    boat_name: norm.boat_name,
+    boatDisplay: raw.boat_id ? norm.boat_name : 'Not assigned',
+    boatMissing: !raw.boat_id,
+    captainName,
+    captainDisplay: captainRequiredForRow(raw)
+      ? captainName || 'Not assigned'
+      : 'Not required',
+    captainMissing: captainRequiredForRow(raw) && !raw.captain_id,
+    captainRequired: captainRequiredForRow(raw),
+    locationName: locationRaw || 'Departure location not set',
+    departureDisplay: locationRaw || 'Departure location not set',
+    payment_status: norm.payment_status,
+    status: norm.status,
+    created_at: raw.created_at,
+    is_new: true,
+    conflictStatus,
+    conflictIssueCodes,
+    conflictDetails,
+    sameDayTripCount: otherTrips,
+    sameDayContext:
+      otherTrips > 0 ? `${otherTrips} other trip${otherTrips === 1 ? '' : 's'} scheduled that day` : null,
+    turnaroundMinutes: turnaround?.turnaroundMinutes ?? null,
+    turnaroundWarning: turnaround?.message ?? null,
+    readinessStatus: buildReadinessStatus(norm, raw),
+    readiness: readinessLabel(norm),
+    waiver_done: norm.waiver_done,
+    insurance_done: norm.insurance_done,
+    outstanding: norm.outstanding,
+    start_time: raw.start_time,
+    end_time: raw.end_time,
+  };
+}
+
+function sortNewBookings(cards, sort) {
+  const list = [...cards];
+  if (sort === 'recently_booked') {
+    list.sort(
+      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    );
+    return list;
+  }
+  if (sort === 'customer_name') {
+    list.sort((a, b) =>
+      String(a.customer_name).localeCompare(String(b.customer_name), undefined, { sensitivity: 'base' })
+    );
+    return list;
+  }
+  list.sort((a, b) => {
+    const sa = DateTime.fromISO(String(a.scheduledStart || ''), { zone: 'utc' }).toMillis();
+    const sb = DateTime.fromISO(String(b.scheduledStart || ''), { zone: 'utc' }).toMillis();
+    if (sa !== sb) return sa - sb;
+    return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+  });
+  return list;
+}
+
+function filterNewBookings(cards, filter, zone) {
+  if (!filter) return cards;
+  const now = DateTime.now().setZone(zone);
+  const today = now.startOf('day');
+  const tomorrow = today.plus({ days: 1 });
+  return cards.filter((c) => {
+    const start = DateTime.fromISO(String(c.scheduledStart || ''), { zone: 'utc' }).setZone(zone);
+    switch (filter) {
+      case 'today':
+        return start.isValid && start >= today && start < today.plus({ days: 1 });
+      case 'tomorrow':
+        return start.isValid && start >= tomorrow && start < tomorrow.plus({ days: 1 });
+      case 'weekend': {
+        if (!start.isValid) return false;
+        const d = start.weekday;
+        return d === 5 || d === 6 || d === 7;
+      }
+      case 'new':
+        return c.is_new;
+      case 'conflict':
+        return c.conflictStatus !== 'No conflict';
+      case 'missing_boat':
+        return c.boatMissing;
+      case 'missing_captain':
+        return c.captainMissing;
+      case 'direct':
+        return String(c.source_label).includes('Direct');
+      case 'groupon':
+        return String(c.source_label).includes('Groupon');
+      case 'staff':
+        return String(c.source_label).includes('Staff');
+      default:
+        return true;
+    }
+  });
+}
+
+function groupNewBookingsByTripDate(cards, zone) {
+  const groups = new Map();
+  for (const c of cards) {
+    const key = c.groupDateKey || 'needs-review';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(c);
+  }
+  const orderedKeys = [...groups.keys()].sort((a, b) => {
+    if (a === 'needs-review') return 1;
+    if (b === 'needs-review') return -1;
+    return a.localeCompare(b);
+  });
+  const now = DateTime.now().setZone(zone);
+  const todayKey = now.startOf('day').toISODate();
+  const tomorrowKey = now.plus({ days: 1 }).startOf('day').toISODate();
+
+  return orderedKeys.map((key) => {
+    const bookings = groups.get(key);
+    let headerRelative = null;
+    let headerDate = key === 'needs-review' ? 'NEEDS SCHEDULING REVIEW' : key;
+    if (key === todayKey) {
+      headerRelative = 'TODAY';
+      headerDate = bookings[0]?.tripDateLong || headerDate;
+    } else if (key === tomorrowKey) {
+      headerRelative = 'TOMORROW';
+      headerDate = bookings[0]?.tripDateLong || headerDate;
+    } else if (key !== 'needs-review' && bookings[0]?.tripDateLong) {
+      headerDate = bookings[0].tripDateCompact || bookings[0].tripDateLong;
+    }
+    return {
+      groupKey: key,
+      headerRelative,
+      headerDate,
+      bookings,
+    };
+  });
+}
+
+function buildNewBookingCards({
+  rawRows,
+  normalizeRow,
+  lastReviewedAt,
+  acknowledgedIds,
+  scheduleConflicts,
+  sort,
+  filter,
+  businessTimezone,
+}) {
+  const zone = businessTimezone || getBusinessTimezone();
+  const rawById = new Map((rawRows || []).map((r) => [String(r.id), r]));
+  const recentNormalized = (rawRows || []).map((r) => normalizeRow(r));
+  const scheduleForRecent = buildScheduleConflicts(recentNormalized, rawRows || [], zone);
+  const conflictsByBooking = indexConflictsByBooking(scheduleForRecent, rawById);
+  const ctx = {
+    businessTimezone: zone,
+    conflictsByBooking,
+    allRaw: rawRows || [],
+  };
+
+  let cards = [];
+  for (const raw of rawRows || []) {
+    const norm = normalizeRow(raw);
+    if (
+      !isBookingNewForAdmin(
+        { id: raw.id, created_at: raw.created_at },
+        lastReviewedAt,
+        acknowledgedIds
+      )
+    ) {
+      continue;
+    }
+    cards.push(buildNewBookingCard(raw, norm, ctx));
+  }
+
+  cards = filterNewBookings(cards, filter, zone);
+  cards = sortNewBookings(cards, sort);
+  cards = cards.slice(0, NEW_BOOKINGS_LIMIT);
+  const grouped = groupNewBookingsByTripDate(cards, zone);
+  return { cards, grouped };
+}
+
 async function fetchRecentBookingCandidates(supabase, lookbackDays = NEW_BOOKINGS_LOOKBACK_DAYS) {
   const since = DateTime.utc().minus({ days: lookbackDays }).toISO();
   const select =
-    'id, customer_id, boat_id, captain_id, start_time, end_time, status, payment_status, booking_source, staff_created, rental_location, booking_type, charter_type, charter_seating, guest_count, waiver_signed, license_status, insurance_status, license_url, insurance_url, hold_expires_at, final_total, total_price, total_amount, deposit_paid, deposit_amount, amount_collected, balance_due, created_at, customers(full_name, email, phone), boats(id, name, type), waivers(id)';
+    'id, customer_id, boat_id, captain_id, start_time, end_time, status, payment_status, booking_source, staff_created, rental_location, booking_type, charter_type, charter_seating, guest_count, waiver_signed, license_status, insurance_status, license_url, insurance_url, hold_expires_at, final_total, total_price, total_amount, deposit_paid, deposit_amount, amount_collected, balance_due, created_at, groupon_voucher_id, stripe_checkout_session_id, external_reference, customers(full_name, email, phone), boats(id, name, type), captains(full_name), waivers(id)';
   const { data, error } = await supabase
     .from('bookings')
     .select(select)
@@ -331,6 +1022,13 @@ function summarizeActionCounts({
 module.exports = {
   DEFAULT_LAST_REVIEWED,
   NEW_BOOKINGS_LIMIT,
+  ADMIN_OPS_MIN_TURNAROUND_MINUTES,
+  ALLOWED_SORT,
+  ALLOWED_FILTER,
+  getBusinessTimezone,
+  parseOpsSort,
+  parseOpsFilter,
+  validateOpsQuery,
   bookingSourceDisplay,
   tripTypeLabel,
   readinessLabel,
@@ -344,5 +1042,18 @@ module.exports = {
   fetchRecentBookingCandidates,
   summarizeActionCounts,
   detectBoatOverlapConflicts,
+  detectSharedDepartureCapacityConflicts,
+  detectDuplicateBookingWarnings,
+  sharedDepartureGroupKey,
   evaluateSharedCharterCapacity,
+  buildNewBookingCards,
+  parseScheduleStartEnd,
+  relativeTripLabel,
+  formatTripDateLong,
+  formatScheduledTimeRange,
+  classifyCharterMode,
+  serviceNameDetailed,
+  sortNewBookings,
+  filterNewBookings,
+  groupNewBookingsByTripDate,
 };

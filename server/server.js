@@ -4848,28 +4848,30 @@ app.get('/api/admin/operations-dashboard', async (req, res) => {
       ackResult.status === 'fulfilled' ? ackResult.value : new Set();
     const recentCreatedRows =
       recentCreatedResult.status === 'fulfilled' ? recentCreatedResult.value : [];
-    const recentNormalized = recentCreatedRows.map(normalizeOpsBooking);
-    const newBookings = recentNormalized
-      .filter((b) =>
-        adminOperationsDashboard.isBookingNewForAdmin(
-          { id: b.id, created_at: b.created_at },
-          lastReviewedAt,
-          acknowledgedIds
-        )
-      )
-      .slice(0, adminOperationsDashboard.NEW_BOOKINGS_LIMIT)
-      .map((b) => ({
-        ...b,
-        source_label: adminOperationsDashboard.bookingSourceDisplay(b),
-        trip_type: adminOperationsDashboard.tripTypeLabel(b),
-        readiness: adminOperationsDashboard.readinessLabel(b),
-        is_new: true,
-      }));
 
     const scheduleConflicts = adminOperationsDashboard.buildScheduleConflicts(
       upcomingBookings,
-      upcomingRows
+      upcomingRows,
+      availabilityService.BUSINESS_TZ
     );
+    const queryCheck = adminOperationsDashboard.validateOpsQuery(req.query.sort, req.query.filter);
+    if (queryCheck.error) {
+      return res.status(queryCheck.statusCode || 400).json({ error: queryCheck.error });
+    }
+    const opsSort = queryCheck.sort;
+    const opsFilter = queryCheck.filter;
+    const { cards: newBookings, grouped: newBookingsGrouped } =
+      adminOperationsDashboard.buildNewBookingCards({
+        rawRows: recentCreatedRows,
+        normalizeRow: normalizeOpsBooking,
+        lastReviewedAt,
+        acknowledgedIds,
+        scheduleConflicts,
+        sort: opsSort,
+        filter: opsFilter,
+        businessTimezone: availabilityService.BUSINESS_TZ,
+      });
+
     const actionRequired = actionItemsForBookings(upcomingBookings);
     const pendingApprovals =
       upcomingBookings.filter((b) => ['pending', 'pending_verification'].includes(String(b.status))).length;
@@ -4915,9 +4917,13 @@ app.get('/api/admin/operations-dashboard', async (req, res) => {
 
     return res.json({
       generatedAt: new Date().toISOString(),
+      businessTimezone: availabilityService.BUSINESS_TZ,
+      sort: opsSort,
+      filter: opsFilter,
       lastReviewedAt,
       counts,
       newBookings,
+      newBookingsGrouped,
       conflicts: scheduleConflicts,
       upcoming,
       todaySchedule,

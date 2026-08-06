@@ -28,14 +28,17 @@ import { humanizeLabel } from '../components/admin/adminDisplay';
 import LoadingSection from '../components/admin/LoadingSection';
 import { env } from '../config/env.js';
 import { adminCharterCapacityLines } from '../lib/charterCapacity';
-import { fetchJsonWithTimeout, withTimeout } from '../lib/adminDiagnostics';
+import { withTimeout } from '../lib/adminDiagnostics';
 import {
   formatRelativeTime,
+  fetchOperationsDashboard,
   markAllBookingsReviewed,
   markBookingReviewed,
-  sourceBadgeClass,
+  OPS_FILTER_OPTIONS,
+  OPS_SORT_OPTIONS,
   type OpsDashboardPayload,
 } from '../lib/adminOpsDashboard';
+import AdminOpsNewBookingCard from '../components/admin/AdminOpsNewBookingCard';
 
 type OpsBooking = {
   id: string;
@@ -99,9 +102,10 @@ type DashboardPayload = OpsDashboardPayload & {
   revenue: { today: RevenueSummary; week: RevenueSummary; month: RevenueSummary };
   bookingSources: Record<string, number>;
   recentActivity: Activity[];
-  weather?: Record<string, any>;
+  weather?: Record<string, unknown>;
   alerts: ActionItem[];
   today?: string;
+  newBookingsGrouped: OpsDashboardPayload['newBookingsGrouped'];
 };
 
 const money = (value: number | string | null | undefined) => `$${Number(value || 0).toFixed(2)}`;
@@ -150,6 +154,8 @@ export default function AdminOperationsDashboard() {
   const [notice, setNotice] = useState<string | null>(null);
   const [liveNotice, setLiveNotice] = useState<string | null>(null);
   const [lastFetchedAt, setLastFetchedAt] = useState<number | null>(null);
+  const [opsSort, setOpsSort] = useState<'trip_date' | 'recently_booked' | 'customer_name'>('trip_date');
+  const [opsFilter, setOpsFilter] = useState('');
   const knownNewBookingIdsRef = useRef<Set<string>>(new Set());
   const pollInFlightRef = useRef(false);
   const POLL_MS = 45_000;
@@ -170,12 +176,10 @@ export default function AdminOperationsDashboard() {
       if (!env.apiUrlConfigured || !env.apiUrl) throw new Error('API URL is not configured.');
       const token = await getAdminToken();
       if (!token) throw new Error('Admin session expired.');
-      const data = await fetchJsonWithTimeout<DashboardPayload>(
-        'Operations dashboard',
-        `${env.apiUrl}/api/admin/operations-dashboard`,
-        { headers: { Authorization: `Bearer ${token}` } },
-        20000
-      );
+      const data = await fetchOperationsDashboard(token, {
+        sort: opsSort,
+        filter: opsFilter || undefined,
+      });
       const prevKnown = knownNewBookingIdsRef.current;
       const incomingNew = (data.newBookings || []).map((b) => b.id);
       if (prevKnown.size > 0) {
@@ -194,7 +198,7 @@ export default function AdminOperationsDashboard() {
     } finally {
       setLoading(false);
     }
-  }, [getAdminToken, isAdmin]);
+  }, [getAdminToken, isAdmin, opsSort, opsFilter]);
 
   useEffect(() => {
     if (authLoading || !isAdmin) return;
@@ -280,7 +284,7 @@ export default function AdminOperationsDashboard() {
     }
   }, [getAdminToken, loadDashboard]);
 
-  const todayTrips = payload?.todayTrips || [];
+  const todayTrips = useMemo(() => payload?.todayTrips ?? [], [payload?.todayTrips]);
   const actionRequired = payload?.actionRequired || [];
 
   const nextTrip = useMemo(() => {
@@ -499,7 +503,7 @@ export default function AdminOperationsDashboard() {
         </button>
       }
     >
-      <div className="space-y-5 pb-[max(1rem,env(safe-area-inset-bottom))] lg:space-y-6">
+      <div className="max-w-full space-y-5 overflow-x-hidden pb-[max(5rem,env(safe-area-inset-bottom))] lg:space-y-6">
         {notice ? <div className="rounded-lg bg-red-100 px-4 py-3 font-semibold text-red-800">{notice}</div> : null}
         <div
           className="rounded-lg border border-cyan-200 bg-cyan-50 px-4 py-2 text-sm text-cyan-950"
@@ -546,72 +550,72 @@ export default function AdminOperationsDashboard() {
               </button>
             ) : null}
           </div>
-          <div className="mt-3 space-y-3">
-            {(payload.newBookings || []).length === 0 ? (
+
+          <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <label className="flex min-h-11 flex-1 items-center gap-2 text-sm font-semibold text-slate-800">
+              Sort
+              <select
+                value={opsSort}
+                onChange={(e) =>
+                  setOpsSort(e.target.value as 'trip_date' | 'recently_booked' | 'customer_name')
+                }
+                className="min-h-11 flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+              >
+                {OPS_SORT_OPTIONS.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          <div className="mt-2 flex gap-2 overflow-x-auto pb-1 [-webkit-overflow-scrolling:touch]">
+            {OPS_FILTER_OPTIONS.map((f) => {
+              const active = opsFilter === f.id;
+              return (
+                <button
+                  key={f.id || 'all'}
+                  type="button"
+                  onClick={() => setOpsFilter(f.id)}
+                  className={`shrink-0 min-h-11 rounded-full px-4 py-2 text-sm font-semibold ${
+                    active ? 'bg-slate-900 text-white' : 'border border-slate-300 bg-white text-slate-800'
+                  }`}
+                >
+                  {f.label}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="mt-4 space-y-6">
+            {(payload.newBookingsGrouped || []).length === 0 ? (
               <p className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-6 text-base text-slate-600">
-                No new bookings since your last review.
+                No new bookings match this filter.
               </p>
             ) : (
-              payload.newBookings!.map((booking) => (
-                <article
-                  key={booking.id}
-                  className="rounded-2xl border border-cyan-200 bg-white p-4 shadow-sm"
-                >
-                  <div className="flex flex-wrap items-start justify-between gap-2">
-                    <div>
-                      <span className="rounded-full bg-cyan-600 px-2 py-0.5 text-xs font-bold uppercase text-white">
-                        New
-                      </span>
-                      <span
-                        className={`ml-2 rounded-full px-2 py-0.5 text-xs font-bold ${sourceBadgeClass(booking.source_label)}`}
-                      >
-                        {booking.source_label}
-                      </span>
-                      <h3 className="mt-2 text-lg font-black text-slate-900">{booking.customer_name}</h3>
-                      <p className="text-sm text-slate-600">
-                        {booking.trip_type} · {timeLabel(booking.start_time, booking.end_time)} ·{' '}
-                        {booking.passenger_count} guest{booking.passenger_count === 1 ? '' : 's'}
-                      </p>
-                      <p className="text-xs text-slate-500">
-                        {booking.boat_name} · Created {formatRelativeTime(booking.created_at)}
-                      </p>
-                    </div>
-                    <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold capitalize text-slate-800">
-                      {booking.payment_status.replace(/_/g, ' ')}
-                    </span>
+              payload.newBookingsGrouped!.map((group) => (
+                <div key={group.groupKey}>
+                  <header className="border-b border-slate-200 pb-2">
+                    {group.headerRelative ? (
+                      <p className="text-sm font-black tracking-wide text-amber-800">{group.headerRelative}</p>
+                    ) : group.groupKey === 'needs-review' ? (
+                      <p className="text-sm font-black text-red-800">NEEDS SCHEDULING REVIEW</p>
+                    ) : (
+                      <p className="text-sm font-black text-slate-600">LATER</p>
+                    )}
+                    <p className="text-base font-bold text-slate-900">{group.headerDate}</p>
+                  </header>
+                  <div className="mt-3 space-y-3">
+                    {group.bookings.map((booking) => (
+                      <AdminOpsNewBookingCard
+                        key={booking.id}
+                        booking={booking}
+                        onMarkReviewed={(id) => void handleMarkReviewed(id)}
+                      />
+                    ))}
                   </div>
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    {booking.customer_phone ? (
-                      <a
-                        href={`tel:${String(booking.customer_phone).replace(/\D/g, '')}`}
-                        className="inline-flex min-h-11 items-center justify-center rounded-xl bg-slate-900 px-4 text-sm font-bold text-white"
-                      >
-                        Call
-                      </a>
-                    ) : null}
-                    {booking.customer_phone ? (
-                      <a
-                        href={`sms:${String(booking.customer_phone).replace(/\D/g, '')}`}
-                        className="inline-flex min-h-11 items-center justify-center rounded-xl border border-slate-300 bg-white px-4 text-sm font-bold text-slate-900"
-                      >
-                        Text
-                      </a>
-                    ) : null}
-                    <Link
-                      to={`/admin/bookings/${booking.id}`}
-                      className="inline-flex min-h-11 items-center justify-center rounded-xl bg-amber-600 px-4 text-sm font-bold text-white"
-                    >
-                      Open booking
-                    </Link>
-                    <button
-                      type="button"
-                      onClick={() => void handleMarkReviewed(booking.id)}
-                      className="inline-flex min-h-11 items-center justify-center rounded-xl border border-slate-300 px-4 text-sm font-semibold text-slate-800"
-                    >
-                      Mark reviewed
-                    </button>
-                  </div>
-                </article>
+                </div>
               ))
             )}
           </div>

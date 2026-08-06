@@ -12,23 +12,71 @@ export type OpsDashboardCounts = {
   conflicts: number;
 };
 
-export type OpsNewBooking = {
+export type OpsReadinessStatus = {
+  overall: string;
+  payment: string;
+  waiver: string;
+  insurance: string;
+  captain: string;
+  boat: string;
+};
+
+export type OpsConflictDetail = {
+  type: string;
+  message: string;
+  overlappingBookingId: string | null;
+  overlappingCustomerDisplayName: string | null;
+  overlappingStart?: string | null;
+  overlappingEnd?: string | null;
+};
+
+export type OpsNewBookingCard = {
   id: string;
+  bookingId: string;
   customer_name: string;
   customer_phone: string | null;
   customer_email: string | null;
   source_label: string;
+  scheduledStart: string;
+  scheduledEnd: string;
+  businessTimezone: string;
+  tripDateLong: string;
+  tripDateCompact: string;
+  relativeDateLabel: string | null;
+  scheduledTimeDisplay: string;
+  groupDateKey: string;
+  serviceName: string;
   trip_type: string;
-  start_time: string;
-  end_time: string;
+  charterMode: string;
   passenger_count: number;
-  boat_name: string;
+  capacityText: string;
+  boatDisplay: string;
+  boatMissing: boolean;
+  captainDisplay: string;
+  captainMissing: boolean;
+  departureDisplay: string;
   payment_status: string;
   status: string;
   created_at: string | null;
-  readiness: string;
-  is_new?: boolean;
+  is_new: boolean;
+  conflictStatus: string;
+  conflictDetails: OpsConflictDetail[];
+  sameDayContext: string | null;
+  turnaroundWarning: string | null;
+  readinessStatus: OpsReadinessStatus;
+  start_time: string;
+  end_time: string;
 };
+
+export type OpsNewBookingGroup = {
+  groupKey: string;
+  headerRelative: string | null;
+  headerDate: string;
+  bookings: OpsNewBookingCard[];
+};
+
+/** @deprecated use OpsNewBookingCard — kept for schedule slices */
+export type OpsNewBooking = OpsNewBookingCard;
 
 export type OpsConflict = {
   type: string;
@@ -40,17 +88,26 @@ export type OpsConflict = {
 
 export type OpsDashboardPayload = {
   generatedAt: string;
+  businessTimezone: string;
+  sort: string;
+  filter: string | null;
   lastReviewedAt: string;
   counts: OpsDashboardCounts;
-  newBookings: OpsNewBooking[];
+  newBookings: OpsNewBookingCard[];
+  newBookingsGrouped: OpsNewBookingGroup[];
   conflicts: OpsConflict[];
   upcoming: { today: number; tomorrow: number; weekend: number; nextSevenDays: number };
-  todaySchedule: OpsNewBooking[];
-  todayTrips: OpsNewBooking[];
+  todaySchedule: OpsNewBookingCard[];
+  todayTrips: OpsNewBookingCard[];
   actionRequired: Array<{ booking_id: string; type: string; label: string; customer_name: string }>;
   recentActivity: Array<{ id: string; booking_id?: string; event_type: string; message?: string; created_at: string }>;
   revenue?: Record<string, unknown>;
   weather?: Record<string, unknown>;
+};
+
+export type OpsDashboardQuery = {
+  sort?: 'trip_date' | 'recently_booked' | 'customer_name';
+  filter?: string;
 };
 
 async function adminFetch<T>(token: string, path: string, init?: RequestInit): Promise<T> {
@@ -72,8 +129,13 @@ async function adminFetch<T>(token: string, path: string, init?: RequestInit): P
   );
 }
 
-export async function fetchOperationsDashboard(token: string) {
-  return adminFetch<OpsDashboardPayload>(token, '/api/admin/operations-dashboard');
+export async function fetchOperationsDashboard(token: string, query?: OpsDashboardQuery) {
+  const params = new URLSearchParams();
+  if (query?.sort) params.set('sort', query.sort);
+  if (query?.filter) params.set('filter', query.filter);
+  const qs = params.toString();
+  const path = `/api/admin/operations-dashboard${qs ? `?${qs}` : ''}`;
+  return adminFetch<OpsDashboardPayload>(token, path);
 }
 
 export async function markBookingReviewed(token: string, bookingId: string) {
@@ -111,3 +173,23 @@ export function sourceBadgeClass(sourceLabel: string) {
   if (s.includes('staff')) return 'bg-violet-100 text-violet-950';
   return 'bg-cyan-100 text-cyan-950';
 }
+
+export const OPS_FILTER_OPTIONS = [
+  { id: '', label: 'All new' },
+  { id: 'today', label: 'Today' },
+  { id: 'tomorrow', label: 'Tomorrow' },
+  { id: 'weekend', label: 'This weekend' },
+  { id: 'new', label: 'New' },
+  { id: 'conflict', label: 'Conflict' },
+  { id: 'missing_boat', label: 'Missing boat' },
+  { id: 'missing_captain', label: 'Missing captain' },
+  { id: 'direct', label: 'Direct' },
+  { id: 'groupon', label: 'Groupon' },
+  { id: 'staff', label: 'Staff' },
+] as const;
+
+export const OPS_SORT_OPTIONS = [
+  { id: 'trip_date', label: 'Trip date' },
+  { id: 'recently_booked', label: 'Recently booked' },
+  { id: 'customer_name', label: 'Customer name' },
+] as const;

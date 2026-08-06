@@ -1,10 +1,19 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { DateTime } = require('luxon');
 const {
   isBookingNewForAdmin,
   buildScheduleConflicts,
   computeUpcomingCounts,
   bookingSourceDisplay,
+  relativeTripLabel,
+  formatScheduledTimeRange,
+  parseOpsSort,
+  parseScheduleStartEnd,
+  validateOpsQuery,
+  filterNewBookings,
+  sharedDepartureGroupKey,
+  detectDuplicateBookingWarnings,
 } = require('../services/adminOperationsDashboardService');
 
 test('isBookingNewForAdmin respects last reviewed and acknowledgements', () => {
@@ -53,23 +62,19 @@ test('detects exclusive boat overlap conflict', () => {
   ];
   const normalized = rows.map((r) => ({
     ...r,
-    status: r.status,
-    boat_id: r.boat_id,
-    booking_type: r.booking_type,
     captain_id: null,
-    start_time: r.start_time,
-    end_time: r.end_time,
     outstanding: 0,
     waiver_done: true,
     insurance_done: true,
     ready_for_departure: false,
   }));
-  const conflicts = buildScheduleConflicts(normalized, rows);
+  const conflicts = buildScheduleConflicts(normalized, rows, 'America/New_York');
   assert.ok(conflicts.some((c) => c.type === 'boat_exclusive_overlap'));
 });
 
-test('shared charter overlap within capacity does not exclusive-conflict', () => {
+test('shared charter overlap with different starts does not use interval grouping for capacity', () => {
   const boatId = '22222222-2222-2222-2222-222222222222';
+  const zone = 'America/New_York';
   const rows = [
     {
       id: 's1',
@@ -80,7 +85,8 @@ test('shared charter overlap within capacity does not exclusive-conflict', () =>
       status: 'confirmed',
       start_time: '2026-08-10T22:00:00.000Z',
       end_time: '2026-08-11T01:00:00.000Z',
-      guest_count: 2,
+      guest_count: 4,
+      rental_location: 'Marina',
     },
     {
       id: 's2',
@@ -91,7 +97,8 @@ test('shared charter overlap within capacity does not exclusive-conflict', () =>
       status: 'confirmed',
       start_time: '2026-08-10T22:30:00.000Z',
       end_time: '2026-08-11T01:30:00.000Z',
-      guest_count: 2,
+      guest_count: 4,
+      rental_location: 'Marina',
     },
   ];
   const normalized = rows.map((r) => ({
@@ -102,8 +109,55 @@ test('shared charter overlap within capacity does not exclusive-conflict', () =>
     insurance_done: true,
     ready_for_departure: false,
   }));
-  const conflicts = buildScheduleConflicts(normalized, rows);
-  assert.equal(conflicts.filter((c) => c.type === 'boat_exclusive_overlap').length, 0);
+  const conflicts = buildScheduleConflicts(normalized, rows, zone);
+  assert.equal(
+    conflicts.filter((c) => c.type === 'shared_capacity_exceeded').length,
+    0,
+    'different normalized starts must not share capacity bucket'
+  );
+  assert.notEqual(sharedDepartureGroupKey(rows[0], zone), sharedDepartureGroupKey(rows[1], zone));
+});
+
+test('shared charter same departure key flags capacity when guests exceed max', () => {
+  const boatId = '33333333-3333-3333-3333-333333333333';
+  const zone = 'America/New_York';
+  const start = DateTime.fromObject({ year: 2026, month: 8, day: 10, hour: 22, minute: 0 }, { zone }).toUTC().toISO();
+  const rows = [
+    {
+      id: 'a',
+      boat_id: boatId,
+      booking_type: 'charter',
+      charter_type: 'bio',
+      charter_seating: 'shared',
+      status: 'confirmed',
+      start_time: start,
+      end_time: '2026-08-11T01:00:00.000Z',
+      guest_count: 4,
+      rental_location: 'Marina',
+    },
+    {
+      id: 'b',
+      boat_id: boatId,
+      booking_type: 'charter',
+      charter_type: 'bio',
+      charter_seating: 'shared',
+      status: 'confirmed',
+      start_time: start,
+      end_time: '2026-08-11T01:30:00.000Z',
+      guest_count: 4,
+      rental_location: 'Marina',
+    },
+  ];
+  const normalized = rows.map((r) => ({
+    ...r,
+    captain_id: 'cap-1',
+    outstanding: 0,
+    waiver_done: true,
+    insurance_done: true,
+    ready_for_departure: false,
+  }));
+  const conflicts = buildScheduleConflicts(normalized, rows, zone);
+  assert.ok(conflicts.some((c) => c.type === 'shared_capacity_exceeded'));
 });
 
 test('computeUpcomingCounts buckets by business timezone', () => {
@@ -117,6 +171,161 @@ test('computeUpcomingCounts buckets by business timezone', () => {
   assert.ok(typeof out.today === 'number');
   assert.ok(typeof out.tomorrow === 'number');
   assert.ok(out.nextSevenDays >= 0);
+});
+
+test('relativeTripLabel TODAY and TOMORROW in business TZ', () => {
+  const zone = 'America/New_York';
+  const today = DateTime.now().setZone(zone).startOf('day').plus({ hours: 20 });
+  assert.equal(relativeTripLabel(today, zone, 'confirmed').label, 'TODAY');
+  const tomorrow = today.plus({ days: 1 });
+  assert.equal(relativeTripLabel(tomorrow, zone, 'confirmed').label, 'TOMORROW');
+});
+
+test('formatScheduledTimeRange overnight shows end calendar day', () => {
+  const zone = 'America/New_York';
+  const start = DateTime.fromISO('2026-08-15T03:00:00.000Z').setZone(zone);
+  const end = DateTime.fromISO('2026-08-15T04:00:00.000Z').setZone(zone).plus({ hours: 2 });
+  const out = formatScheduledTimeRange(start, end, true);
+  assert.match(out, /AT/);
+});
+
+test('parseOpsSort allowlist defaults unknown sort', () => {
+  assert.equal(parseOpsSort('trip_date'), 'trip_date');
+  assert.equal(parseOpsSort('invalid'), 'trip_date');
+});
+
+test('validateOpsQuery returns 400 for invalid filter and sort', () => {
+  assert.equal(validateOpsQuery('trip_date', null).filter, null);
+  assert.equal(validateOpsQuery(undefined, 'today').filter, 'today');
+  assert.ok(validateOpsQuery('not-a-sort', null).error);
+  assert.equal(validateOpsQuery('not-a-sort', null).statusCode, 400);
+  assert.ok(validateOpsQuery('trip_date', 'bad-filter').error);
+});
+
+test('overnight bio 11pm to midnight rolls end to next day', () => {
+  const zone = 'America/New_York';
+  const startLocal = DateTime.fromObject({ year: 2026, month: 8, day: 10, hour: 23, minute: 0 }, { zone });
+  const endLocal = DateTime.fromObject({ year: 2026, month: 8, day: 10, hour: 0, minute: 0 }, { zone });
+  const row = {
+    booking_type: 'charter',
+    charter_type: 'bio',
+    start_time: startLocal.toUTC().toISO(),
+    end_time: endLocal.toUTC().toISO(),
+  };
+  const sched = parseScheduleStartEnd(row, zone);
+  assert.equal(sched.valid, true);
+  assert.equal(sched.overnight, true);
+  assert.ok(sched.end > sched.start);
+});
+
+test('overnight bio 11:30pm to 1am', () => {
+  const zone = 'America/New_York';
+  const startLocal = DateTime.fromObject({ year: 2026, month: 8, day: 10, hour: 23, minute: 30 }, { zone });
+  const endLocal = DateTime.fromObject({ year: 2026, month: 8, day: 10, hour: 1, minute: 0 }, { zone });
+  const row = {
+    booking_type: 'charter',
+    charter_type: 'bio',
+    start_time: startLocal.toUTC().toISO(),
+    end_time: endLocal.toUTC().toISO(),
+  };
+  const sched = parseScheduleStartEnd(row, zone);
+  assert.equal(sched.valid, true);
+  assert.equal(sched.overnight, true);
+});
+
+test('rental end before start is invalid not overnight', () => {
+  const zone = 'America/New_York';
+  const row = {
+    booking_type: 'rental',
+    start_time: '2026-08-10T18:00:00.000Z',
+    end_time: '2026-08-10T14:00:00.000Z',
+  };
+  const sched = parseScheduleStartEnd(row, zone);
+  assert.equal(sched.valid, false);
+  assert.equal(sched.invalidRange, true);
+  assert.equal(sched.overnight, false);
+});
+
+test('timezone conversion near midnight labels trip day in business TZ', () => {
+  const zone = 'America/New_York';
+  const start = DateTime.fromObject({ year: 2026, month: 8, day: 11, hour: 0, minute: 15 }, { zone });
+  const row = { start_time: start.toUTC().toISO(), end_time: start.plus({ hours: 2 }).toUTC().toISO() };
+  const sched = parseScheduleStartEnd(row, zone);
+  assert.equal(sched.valid, true);
+  assert.equal(sched.start.toISODate(), '2026-08-11');
+});
+
+test('filterNewBookings covers required filters', () => {
+  const zone = 'America/New_York';
+  const todayStart = DateTime.now().setZone(zone).startOf('day').plus({ hours: 10 });
+  const tomorrowStart = todayStart.plus({ days: 1 });
+  const fri = todayStart.plus({ days: 7 }).set({ weekday: 5 });
+  const base = {
+    is_new: true,
+    conflictStatus: 'No conflict',
+    boatMissing: false,
+    captainMissing: false,
+    source_label: 'Direct Website',
+  };
+  const cards = [
+    { ...base, scheduledStart: todayStart.toUTC().toISO(), source_label: 'Direct Website' },
+    { ...base, scheduledStart: tomorrowStart.toUTC().toISO(), source_label: 'Groupon' },
+    { ...base, scheduledStart: fri.toUTC().toISO(), source_label: 'Staff Entry' },
+    {
+      ...base,
+      scheduledStart: todayStart.toUTC().toISO(),
+      conflictStatus: 'Missing boat',
+      boatMissing: true,
+    },
+    {
+      ...base,
+      scheduledStart: todayStart.toUTC().toISO(),
+      captainMissing: true,
+      conflictStatus: 'Missing captain',
+    },
+    {
+      ...base,
+      scheduledStart: todayStart.toUTC().toISO(),
+      conflictStatus: 'Possible duplicate',
+    },
+    { ...base, scheduledStart: todayStart.toUTC().toISO(), is_new: true },
+  ];
+
+  assert.equal(filterNewBookings(cards, 'today', zone).length, 5);
+  assert.equal(filterNewBookings(cards, 'tomorrow', zone).length, 1);
+  assert.ok(filterNewBookings(cards, 'weekend', zone).length >= 1);
+  assert.equal(filterNewBookings(cards, 'new', zone).length, cards.length);
+  assert.equal(filterNewBookings(cards, 'conflict', zone).length, 3);
+  assert.equal(filterNewBookings(cards, 'missing_boat', zone).length, 1);
+  assert.equal(filterNewBookings(cards, 'missing_captain', zone).length, 1);
+  assert.equal(filterNewBookings(cards, 'direct', zone).length, 5);
+  assert.equal(filterNewBookings(cards, 'groupon', zone).length, 1);
+  assert.equal(filterNewBookings(cards, 'staff', zone).length, 1);
+});
+
+test('detectDuplicateBookingWarnings flags stripe session duplicates in batch', () => {
+  const rows = [
+    {
+      id: '1',
+      status: 'confirmed',
+      stripe_checkout_session_id: 'cs_test_abc',
+      customer_id: 'c1',
+      start_time: '2026-08-10T14:00:00.000Z',
+      end_time: '2026-08-10T18:00:00.000Z',
+      booking_type: 'rental',
+    },
+    {
+      id: '2',
+      status: 'confirmed',
+      stripe_checkout_session_id: 'cs_test_abc',
+      customer_id: 'c2',
+      start_time: '2026-08-11T14:00:00.000Z',
+      end_time: '2026-08-11T18:00:00.000Z',
+      booking_type: 'rental',
+    },
+  ];
+  const warnings = detectDuplicateBookingWarnings(rows, 'America/New_York');
+  assert.ok(warnings.some((w) => w.type === 'duplicate_stripe_session'));
 });
 
 console.log('adminOperationsDashboard.test.js: all tests passed');

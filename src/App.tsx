@@ -22,6 +22,7 @@ import WaiversInsurance from './pages/WaiversInsurance';
 import BookingDepositCancel from './pages/BookingDepositCancel';
 import VerifyBooking from './pages/VerifyBooking';
 import Admin from './pages/Admin';
+import AdminAnalytics from './pages/AdminAnalytics';
 import AdminBookingsHub from './pages/AdminBookingsHub';
 import AdminApprovals from './pages/AdminApprovals';
 import AdminMessages from './pages/AdminMessages';
@@ -172,6 +173,7 @@ function AppLayout() {
           <Route path="/admin/more" element={<AdminMoreTools />} />
           <Route path="/admin/bookings" element={<AdminBookingsHub />} />
           <Route path="/admin/bookings/list" element={<Admin onNavigate={onNavigate} />} />
+          <Route path="/admin/analytics" element={<AdminAnalytics />} />
           <Route path="/admin/bookings/:id/edit" element={<AdminBookingEdit />} />
           <Route path="/admin/bookings/:id" element={<AdminBookingDetails />} />
           <Route path="/admin/staff-booking" element={<AdminStaffBooking />} />

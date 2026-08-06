@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom';
 import {
   AlertTriangle,
   BookOpen,
+  BarChart3,
   ClipboardList,
   Inbox,
   LayoutGrid,
@@ -20,6 +21,12 @@ import AdminAccessDenied from '../components/admin/AdminAccessDenied';
 import AdminDashboardCard from '../components/admin/AdminDashboardCard';
 
 const TOOLS = [
+  {
+    to: '/admin/analytics',
+    title: 'Analytics',
+    description: 'Lifetime bookings, revenue, and customer totals.',
+    icon: <BarChart3 className="h-6 w-6" />,
+  },
   {
     to: '/admin/outbox',
     title: 'Communications Outbox',

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   AlertTriangle,
+  Bell,
   CalendarDays,
   CloudSun,
   DollarSign,
@@ -28,6 +29,13 @@ import LoadingSection from '../components/admin/LoadingSection';
 import { env } from '../config/env.js';
 import { adminCharterCapacityLines } from '../lib/charterCapacity';
 import { fetchJsonWithTimeout, withTimeout } from '../lib/adminDiagnostics';
+import {
+  formatRelativeTime,
+  markAllBookingsReviewed,
+  markBookingReviewed,
+  sourceBadgeClass,
+  type OpsDashboardPayload,
+} from '../lib/adminOpsDashboard';
 
 type OpsBooking = {
   id: string;
@@ -83,7 +91,7 @@ type Activity = {
   created_at: string;
 };
 
-type DashboardPayload = {
+type DashboardPayload = OpsDashboardPayload & {
   todayTrips: OpsBooking[];
   actionRequired: ActionItem[];
   schedule: { boats: BoatStatus[]; bookings: OpsBooking[] };
@@ -93,6 +101,7 @@ type DashboardPayload = {
   recentActivity: Activity[];
   weather?: Record<string, any>;
   alerts: ActionItem[];
+  today?: string;
 };
 
 const money = (value: number | string | null | undefined) => `$${Number(value || 0).toFixed(2)}`;
@@ -139,6 +148,11 @@ export default function AdminOperationsDashboard() {
   const [payload, setPayload] = useState<DashboardPayload | null>(null);
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [liveNotice, setLiveNotice] = useState<string | null>(null);
+  const [lastFetchedAt, setLastFetchedAt] = useState<number | null>(null);
+  const knownNewBookingIdsRef = useRef<Set<string>>(new Set());
+  const pollInFlightRef = useRef(false);
+  const POLL_MS = 45_000;
 
   const getAdminToken = useCallback(async () => {
     const { data } = await withTimeout('Admin session lookup', supabase.auth.getSession(), 12000);
@@ -162,7 +176,19 @@ export default function AdminOperationsDashboard() {
         { headers: { Authorization: `Bearer ${token}` } },
         20000
       );
+      const prevKnown = knownNewBookingIdsRef.current;
+      const incomingNew = (data.newBookings || []).map((b) => b.id);
+      if (prevKnown.size > 0) {
+        const fresh = incomingNew.filter((id) => !prevKnown.has(id));
+        if (fresh.length > 0) {
+          setLiveNotice(
+            fresh.length === 1 ? '1 new booking arrived' : `${fresh.length} new bookings arrived`
+          );
+        }
+      }
+      knownNewBookingIdsRef.current = new Set(incomingNew);
       setPayload(data);
+      setLastFetchedAt(Date.now());
     } catch (err) {
       setNotice(err instanceof Error ? err.message : 'Could not load operations dashboard.');
     } finally {
@@ -175,7 +201,7 @@ export default function AdminOperationsDashboard() {
     void loadDashboard();
   }, [authLoading, isAdmin, loadDashboard]);
 
-  const { counts, countsLoading, reloadCounts } = useAdminQuickCounts(isAdmin && !authLoading);
+  const { counts: headCounts, countsLoading, reloadCounts } = useAdminQuickCounts(isAdmin && !authLoading);
   const lastBackgroundRefreshRef = useRef(0);
   const BACKGROUND_REFRESH_MS = 60_000;
 
@@ -191,6 +217,68 @@ export default function AdminOperationsDashboard() {
     window.addEventListener('focus', refreshIfStale);
     return () => window.removeEventListener('focus', refreshIfStale);
   }, [authLoading, isAdmin, loadDashboard, reloadCounts]);
+
+  useEffect(() => {
+    if (authLoading || !isAdmin) return;
+    let timer: number | undefined;
+    const tick = () => {
+      if (document.hidden || pollInFlightRef.current) return;
+      pollInFlightRef.current = true;
+      void loadDashboard().finally(() => {
+        pollInFlightRef.current = false;
+      });
+    };
+    const schedule = () => {
+      window.clearInterval(timer);
+      timer = window.setInterval(tick, POLL_MS);
+    };
+    const onVisibility = () => {
+      if (!document.hidden) {
+        tick();
+        schedule();
+      }
+    };
+    schedule();
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [authLoading, isAdmin, loadDashboard]);
+
+  useEffect(() => {
+    if (!liveNotice) return;
+    const t = window.setTimeout(() => setLiveNotice(null), 6000);
+    return () => window.clearTimeout(t);
+  }, [liveNotice]);
+
+  const handleMarkReviewed = useCallback(
+    async (bookingId: string) => {
+      try {
+        const token = await getAdminToken();
+        if (!token) throw new Error('Admin session expired.');
+        await markBookingReviewed(token, bookingId);
+        knownNewBookingIdsRef.current.delete(bookingId);
+        await loadDashboard();
+      } catch (err) {
+        setNotice(err instanceof Error ? err.message : 'Could not mark reviewed.');
+      }
+    },
+    [getAdminToken, loadDashboard]
+  );
+
+  const handleMarkAllReviewed = useCallback(async () => {
+    if (!window.confirm('Mark all current new bookings as reviewed?')) return;
+    try {
+      const token = await getAdminToken();
+      if (!token) throw new Error('Admin session expired.');
+      await markAllBookingsReviewed(token);
+      knownNewBookingIdsRef.current = new Set();
+      await loadDashboard();
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : 'Could not mark all reviewed.');
+    }
+  }, [getAdminToken, loadDashboard]);
 
   const todayTrips = payload?.todayTrips || [];
   const actionRequired = payload?.actionRequired || [];
@@ -314,14 +402,89 @@ export default function AdminOperationsDashboard() {
   }
 
   const weather = payload.weather || {};
+  const dashboardCounts = payload.counts;
+  const todayLabel = new Date().toLocaleDateString(undefined, {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+  });
+  const updatedLabel =
+    lastFetchedAt != null ? formatRelativeTime(new Date(lastFetchedAt).toISOString()) : '';
+
+  const actionCenterItems = [
+    {
+      key: 'new',
+      count: dashboardCounts?.newBookings ?? 0,
+      label: 'New bookings',
+      hint: 'Since your last review',
+      to: '#ops-new-bookings',
+      urgent: (dashboardCounts?.newBookings ?? 0) > 0,
+    },
+    {
+      key: 'approvals',
+      count: dashboardCounts?.pendingApprovals ?? 0,
+      label: 'Pending approvals',
+      hint: 'Bookings & pre-trip',
+      to: '/admin/approvals',
+      urgent: (dashboardCounts?.pendingApprovals ?? 0) > 0,
+    },
+    {
+      key: 'groupon',
+      count: dashboardCounts?.grouponPending ?? 0,
+      label: 'Groupon to review',
+      hint: 'Voucher requests',
+      to: '/admin/approvals',
+      urgent: (dashboardCounts?.grouponPending ?? 0) > 0,
+    },
+    {
+      key: 'waivers',
+      count: dashboardCounts?.pendingWaivers ?? 0,
+      label: 'Waivers needed',
+      hint: 'Upcoming trips',
+      to: '/admin/approvals',
+      urgent: (dashboardCounts?.pendingWaivers ?? 0) > 0,
+    },
+    {
+      key: 'messages',
+      count: dashboardCounts?.unreadMessages ?? 0,
+      label: 'Unread messages',
+      hint: 'Contact inbox',
+      to: '/admin/messages',
+      urgent: (dashboardCounts?.unreadMessages ?? 0) > 0,
+    },
+    {
+      key: 'conflicts',
+      count: dashboardCounts?.conflicts ?? 0,
+      label: 'Schedule warnings',
+      hint: 'Possible conflicts',
+      to: '#ops-conflicts',
+      urgent: (dashboardCounts?.conflicts ?? 0) > 0,
+    },
+  ].filter((item) => item.count > 0 || item.key === 'new');
 
   return (
     <AdminShell
       title="Operations Dashboard"
       mobileTitle="Operations"
-      subtitle="Launch Zone Admin"
-      hideSubtitleOnMobile
-      headerActions={refreshHeaderAction}
+      subtitle={todayLabel}
+      hideSubtitleOnMobile={false}
+      headerActions={
+        <div className="flex items-center gap-2">
+          <Link
+            to="/admin/messages"
+            className="relative inline-flex h-11 w-11 items-center justify-center rounded-lg bg-slate-800 hover:bg-slate-700"
+            aria-label={`Messages${dashboardCounts?.unreadMessages ? `, ${dashboardCounts.unreadMessages} unread` : ''}`}
+          >
+            <Bell className="h-5 w-5 text-white" aria-hidden />
+            {(dashboardCounts?.unreadMessages ?? 0) > 0 ? (
+              <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-bold text-white">
+                {dashboardCounts!.unreadMessages > 9 ? '9+' : dashboardCounts!.unreadMessages}
+              </span>
+            ) : null}
+          </Link>
+          {refreshHeaderAction}
+        </div>
+      }
       actions={
         <button
           type="button"
@@ -336,8 +499,170 @@ export default function AdminOperationsDashboard() {
         </button>
       }
     >
-      <div className="space-y-5 lg:space-y-6">
+      <div className="space-y-5 pb-[max(1rem,env(safe-area-inset-bottom))] lg:space-y-6">
         {notice ? <div className="rounded-lg bg-red-100 px-4 py-3 font-semibold text-red-800">{notice}</div> : null}
+        <div
+          className="rounded-lg border border-cyan-200 bg-cyan-50 px-4 py-2 text-sm text-cyan-950"
+          aria-live="polite"
+        >
+          <span className="font-semibold">Polling updates</span>
+          {updatedLabel ? ` · Updated ${updatedLabel}` : null}
+          {liveNotice ? ` · ${liveNotice}` : null}
+        </div>
+
+        <section aria-labelledby="ops-action-center">
+          <h2 id="ops-action-center" className="text-lg font-black text-slate-900">
+            Action center
+          </h2>
+          <div className="mt-3 grid grid-cols-1 gap-3 min-[400px]:grid-cols-2">
+            {actionCenterItems.map((item) => (
+              <Link
+                key={item.key}
+                to={item.to.startsWith('#') ? `/admin${item.to}` : item.to}
+                className={`flex min-h-[72px] flex-col justify-center rounded-2xl border px-4 py-3 ${
+                  item.urgent ? 'border-amber-300 bg-amber-50' : 'border-slate-200 bg-white'
+                }`}
+              >
+                <span className="text-2xl font-black text-slate-900">{item.count}</span>
+                <span className="text-sm font-bold text-slate-800">{item.label}</span>
+                <span className="text-xs text-slate-600">{item.hint}</span>
+              </Link>
+            ))}
+          </div>
+        </section>
+
+        <section id="ops-new-bookings" aria-labelledby="ops-new-bookings-heading">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 id="ops-new-bookings-heading" className="text-lg font-black text-slate-900">
+              New bookings
+            </h2>
+            {(payload.newBookings?.length ?? 0) > 0 ? (
+              <button
+                type="button"
+                onClick={() => void handleMarkAllReviewed()}
+                className="min-h-11 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800"
+              >
+                Mark all reviewed
+              </button>
+            ) : null}
+          </div>
+          <div className="mt-3 space-y-3">
+            {(payload.newBookings || []).length === 0 ? (
+              <p className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-6 text-base text-slate-600">
+                No new bookings since your last review.
+              </p>
+            ) : (
+              payload.newBookings!.map((booking) => (
+                <article
+                  key={booking.id}
+                  className="rounded-2xl border border-cyan-200 bg-white p-4 shadow-sm"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <span className="rounded-full bg-cyan-600 px-2 py-0.5 text-xs font-bold uppercase text-white">
+                        New
+                      </span>
+                      <span
+                        className={`ml-2 rounded-full px-2 py-0.5 text-xs font-bold ${sourceBadgeClass(booking.source_label)}`}
+                      >
+                        {booking.source_label}
+                      </span>
+                      <h3 className="mt-2 text-lg font-black text-slate-900">{booking.customer_name}</h3>
+                      <p className="text-sm text-slate-600">
+                        {booking.trip_type} · {timeLabel(booking.start_time, booking.end_time)} ·{' '}
+                        {booking.passenger_count} guest{booking.passenger_count === 1 ? '' : 's'}
+                      </p>
+                      <p className="text-xs text-slate-500">
+                        {booking.boat_name} · Created {formatRelativeTime(booking.created_at)}
+                      </p>
+                    </div>
+                    <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold capitalize text-slate-800">
+                      {booking.payment_status.replace(/_/g, ' ')}
+                    </span>
+                  </div>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {booking.customer_phone ? (
+                      <a
+                        href={`tel:${String(booking.customer_phone).replace(/\D/g, '')}`}
+                        className="inline-flex min-h-11 items-center justify-center rounded-xl bg-slate-900 px-4 text-sm font-bold text-white"
+                      >
+                        Call
+                      </a>
+                    ) : null}
+                    {booking.customer_phone ? (
+                      <a
+                        href={`sms:${String(booking.customer_phone).replace(/\D/g, '')}`}
+                        className="inline-flex min-h-11 items-center justify-center rounded-xl border border-slate-300 bg-white px-4 text-sm font-bold text-slate-900"
+                      >
+                        Text
+                      </a>
+                    ) : null}
+                    <Link
+                      to={`/admin/bookings/${booking.id}`}
+                      className="inline-flex min-h-11 items-center justify-center rounded-xl bg-amber-600 px-4 text-sm font-bold text-white"
+                    >
+                      Open booking
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={() => void handleMarkReviewed(booking.id)}
+                      className="inline-flex min-h-11 items-center justify-center rounded-xl border border-slate-300 px-4 text-sm font-semibold text-slate-800"
+                    >
+                      Mark reviewed
+                    </button>
+                  </div>
+                </article>
+              ))
+            )}
+          </div>
+        </section>
+
+        {(payload.conflicts?.length ?? 0) > 0 ? (
+          <section id="ops-conflicts" aria-labelledby="ops-conflicts-heading">
+            <h2 id="ops-conflicts-heading" className="text-lg font-black text-red-900">
+              Schedule warnings
+            </h2>
+            <ul className="mt-3 space-y-2">
+              {payload.conflicts!.slice(0, 8).map((c) => (
+                <li key={`${c.type}-${c.booking_id}-${c.other_booking_id || ''}`}>
+                  <Link
+                    to={`/admin/bookings/${c.booking_id}`}
+                    className="block min-h-11 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-950"
+                  >
+                    {c.label}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+
+        {payload.upcoming ? (
+          <section aria-labelledby="ops-upcoming-heading">
+            <h2 id="ops-upcoming-heading" className="text-lg font-black text-slate-900">
+              Upcoming
+            </h2>
+            <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+              {(
+                [
+                  ['Today', payload.upcoming.today, 'today'],
+                  ['Tomorrow', payload.upcoming.tomorrow, 'tomorrow'],
+                  ['Weekend', payload.upcoming.weekend, 'weekend'],
+                  ['Next 7 days', payload.upcoming.nextSevenDays, 'week'],
+                ] as const
+              ).map(([label, n]) => (
+                <Link
+                  key={label}
+                  to="/admin/calendar"
+                  className="min-h-11 rounded-xl border border-slate-200 bg-white px-3 py-3 text-center"
+                >
+                  <div className="text-xl font-black text-slate-900">{n}</div>
+                  <div className="text-xs font-semibold text-slate-600">{label}</div>
+                </Link>
+              ))}
+            </div>
+          </section>
+        ) : null}
 
         {/* ——— Compact mobile command dashboard ——— */}
         <section className="space-y-5">
@@ -421,13 +746,17 @@ export default function AdminOperationsDashboard() {
                 description={
                   countsLoading
                     ? 'Loading…'
-                    : counts.unreadMessages > 0
-                      ? `${counts.unreadMessages} unread`
+                    : (dashboardCounts?.unreadMessages ?? headCounts.unreadMessages) > 0
+                      ? `${dashboardCounts?.unreadMessages ?? headCounts.unreadMessages} unread`
                       : 'Contact inbox'
                 }
                 icon={<Mail className="h-5 w-5" />}
-                badge={counts.unreadMessages > 0 ? String(counts.unreadMessages) : null}
-                highlight={counts.unreadMessages > 0}
+                badge={
+                  (dashboardCounts?.unreadMessages ?? headCounts.unreadMessages) > 0
+                    ? String(dashboardCounts?.unreadMessages ?? headCounts.unreadMessages)
+                    : null
+                }
+                highlight={(dashboardCounts?.unreadMessages ?? headCounts.unreadMessages) > 0}
               />
               <AdminQuickActionCard
                 to="/admin/approvals"
@@ -435,13 +764,17 @@ export default function AdminOperationsDashboard() {
                 description={
                   countsLoading
                     ? 'Loading…'
-                    : counts.pendingApprovals > 0
-                      ? `${counts.pendingApprovals} need review`
+                    : (dashboardCounts?.pendingApprovals ?? headCounts.pendingApprovals) > 0
+                      ? `${dashboardCounts?.pendingApprovals ?? headCounts.pendingApprovals} need review`
                       : 'All clear'
                 }
                 icon={<FileCheck2 className="h-5 w-5" />}
-                badge={counts.pendingApprovals > 0 ? String(counts.pendingApprovals) : null}
-                highlight={counts.pendingApprovals > 0}
+                badge={
+                  (dashboardCounts?.pendingApprovals ?? headCounts.pendingApprovals) > 0
+                    ? String(dashboardCounts?.pendingApprovals ?? headCounts.pendingApprovals)
+                    : null
+                }
+                highlight={(dashboardCounts?.pendingApprovals ?? headCounts.pendingApprovals) > 0}
               />
               <AdminQuickActionCard
                 to="/admin/calendar"
@@ -694,6 +1027,11 @@ export default function AdminOperationsDashboard() {
             {payload ? revenueCard('This Week', payload.revenue.week) : null}
             {payload ? revenueCard('This Month', payload.revenue.month) : null}
           </div>
+          <p className="text-sm text-slate-600 lg:col-span-3">
+            <Link to="/admin/analytics" className="font-semibold text-amber-800 underline">
+              View lifetime analytics
+            </Link>
+          </p>
         </section>
 
         <section className="grid gap-5 lg:grid-cols-3">

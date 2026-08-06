@@ -1,10 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  Calendar,
-  Users,
-  DollarSign,
-  Settings,
   Trash2,
   ChevronLeft,
   ChevronRight,
@@ -192,12 +188,6 @@ export default function Admin({ onNavigate }: AdminProps) {
     }
   }, [user, isAdmin, authLoading]);
   const [bookings, setBookings] = useState<AdminBookingRow[]>([]);
-  const [stats, setStats] = useState({
-    totalBookings: 0,
-    pendingBookings: 0,
-    revenue: 0,
-    customers: 0,
-  });
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [tableLoading, setTableLoading] = useState(false);
@@ -551,33 +541,6 @@ export default function Admin({ onNavigate }: AdminProps) {
     }
   };
 
-  const loadStats = useCallback(async () => {
-    adminDebugLog('admin:stats:start');
-    const [{ count: totalAll }, { count: pendingCt }, { data: priceRows }] = await withTimeout(
-      'Admin stats load',
-      Promise.all([
-        supabase.from('bookings').select('*', { count: 'exact', head: true }),
-        supabase
-          .from('bookings')
-          .select('*', { count: 'exact', head: true })
-          .in('status', ['pending', 'pending_verification']),
-        supabase.from('bookings').select('total_price').limit(5000),
-      ]),
-      15000
-    );
-
-    const revenue =
-      priceRows?.reduce((sum, row) => sum + parseFloat(String(row.total_price)), 0) ?? 0;
-
-    setStats({
-      totalBookings: totalAll ?? 0,
-      pendingBookings: pendingCt ?? 0,
-      revenue,
-      customers: totalAll ?? 0,
-    });
-    adminDebugLog('admin:stats:success', { totalBookings: totalAll, pendingBookings: pendingCt });
-  }, []);
-
   const loadBookings = useCallback(async () => {
     if (!isAdmin) return;
 
@@ -612,7 +575,6 @@ export default function Admin({ onNavigate }: AdminProps) {
         if (customerIds.length === 0) {
           setBookings([]);
           setTotalCount(0);
-          await loadStats();
           return;
         }
       }
@@ -698,7 +660,6 @@ export default function Admin({ onNavigate }: AdminProps) {
         console.log('✅ FINAL BOOKINGS:', rows);
       }
 
-      await loadStats();
       adminDebugLog('admin:bookings:success', { rows: rows.length });
     } catch (err) {
       const message = describeError(err, 'Could not load admin bookings.');
@@ -714,7 +675,7 @@ export default function Admin({ onNavigate }: AdminProps) {
       setTableLoading(false);
       initialBookingsLoadRef.current = false;
     }
-  }, [isAdmin, debouncedEmailSearch, statusFilter, page, loadStats]);
+  }, [isAdmin, debouncedEmailSearch, statusFilter, page]);
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -1027,6 +988,12 @@ export default function Admin({ onNavigate }: AdminProps) {
 
         <div className="mb-6 flex flex-wrap items-center gap-2 text-sm font-semibold">
           <Link
+            to="/admin/analytics"
+            className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-700 transition-colors hover:bg-slate-50"
+          >
+            Lifetime analytics
+          </Link>
+          <Link
             to="/admin/bookings"
             className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-700 transition-colors hover:bg-slate-50"
           >
@@ -1046,40 +1013,16 @@ export default function Admin({ onNavigate }: AdminProps) {
           </Link>
         </div>
 
-        <div className="mb-8 grid gap-6 md:grid-cols-4">
-          <div className="rounded-xl bg-white p-6 shadow">
-            <div className="mb-4 flex items-center justify-between">
-              <Calendar className="h-8 w-8 text-blue-600" />
-              <span className="text-3xl font-bold text-slate-900">{stats.totalBookings}</span>
-            </div>
-            <div className="text-sm font-semibold text-slate-600">Total Bookings</div>
-          </div>
-
-          <div className="rounded-xl bg-white p-6 shadow">
-            <div className="mb-4 flex items-center justify-between">
-              <Settings className="h-8 w-8 text-amber-600" />
-              <span className="text-3xl font-bold text-slate-900">{stats.pendingBookings}</span>
-            </div>
-            <div className="text-sm font-semibold text-slate-600">Pending Approval</div>
-          </div>
-
-          <div className="rounded-xl bg-white p-6 shadow">
-            <div className="mb-4 flex items-center justify-between">
-              <DollarSign className="h-8 w-8 text-green-600" />
-              <span className="text-3xl font-bold text-slate-900">
-                ${stats.revenue.toLocaleString()}
-              </span>
-            </div>
-            <div className="text-sm font-semibold text-slate-600">Total Revenue (est.)</div>
-          </div>
-
-          <div className="rounded-xl bg-white p-6 shadow">
-            <div className="mb-4 flex items-center justify-between">
-              <Users className="h-8 w-8 text-purple-600" />
-              <span className="text-3xl font-bold text-slate-900">{stats.customers}</span>
-            </div>
-            <div className="text-sm font-semibold text-slate-600">Customers</div>
-          </div>
+        <div className="mb-6 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+          Lifetime totals are on{' '}
+          <Link to="/admin/analytics" className="font-bold text-amber-800 underline">
+            Analytics
+          </Link>
+          . For new bookings and today&apos;s trips, use the{' '}
+          <Link to="/admin" className="font-bold text-amber-800 underline">
+            Operations Dashboard
+          </Link>
+          .
         </div>
 
         <div id="payment-recovery" className="rounded-xl bg-white shadow">

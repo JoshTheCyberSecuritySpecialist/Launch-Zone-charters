@@ -63,6 +63,7 @@ const { createGrouponBookingSafe } = require('./services/grouponBookingService')
 const { sendGrouponRequestReceivedNotifications } = require('./services/grouponRequestNotifications');
 const grouponApprovalService = require('./services/grouponApprovalService');
 const adminSupportService = require('./services/adminSupportService');
+const adminOperationsDashboard = require('./services/adminOperationsDashboardService');
 const cron = require('node-cron');
 const { runMonitor } = require('./jobs/conditionMonitor');
 
@@ -4652,6 +4653,8 @@ function normalizeOpsBooking(row) {
     booking_source: row.booking_source || (row.staff_created ? 'admin' : 'website'),
     booking_type: row.booking_type,
     charter_type: row.charter_type,
+    captain_id: row.captain_id || null,
+    created_at: row.created_at || null,
     waiver_done: Boolean(row.waiver_signed || (Array.isArray(row.waivers) && row.waivers.length > 0)),
     insurance_done: ['submitted', 'verified'].includes(String(row.insurance_status || '')),
     license_done: String(row.license_status || '') === 'verified' || Boolean(row.license_url),
@@ -4726,7 +4729,7 @@ app.get('/api/admin/operations-dashboard', async (req, res) => {
     const upcomingEnd = todayStart.plus({ days: 14 });
 
     const bookingSelect =
-      'id, customer_id, boat_id, start_time, end_time, status, payment_status, booking_source, staff_created, rental_location, booking_type, charter_type, guest_count, waiver_signed, license_status, insurance_status, license_url, insurance_url, hold_expires_at, final_total, total_price, total_amount, deposit_paid, deposit_amount, amount_collected, balance_due, customers(full_name, email, phone), boats(id, name, type), waivers(id)';
+      'id, customer_id, boat_id, captain_id, start_time, end_time, status, payment_status, booking_source, staff_created, rental_location, booking_type, charter_type, charter_seating, guest_count, waiver_signed, license_status, insurance_status, license_url, insurance_url, hold_expires_at, final_total, total_price, total_amount, deposit_paid, deposit_amount, amount_collected, balance_due, created_at, customers(full_name, email, phone), boats(id, name, type), waivers(id)';
 
     const [
       boatsResult,
@@ -4738,6 +4741,13 @@ app.get('/api/admin/operations-dashboard', async (req, res) => {
       activityResult,
       commsResult,
       weatherResult,
+      reviewStateResult,
+      ackResult,
+      recentCreatedResult,
+      grouponPendingResult,
+      paymentRecoveryResult,
+      unreadMessagesResult,
+      pendingPreTripResult,
     ] = await Promise.allSettled([
       supabase.from('boats').select('id, name, type, is_active').order('name'),
       supabase
@@ -4774,6 +4784,23 @@ app.get('/api/admin/operations-dashboard', async (req, res) => {
         .order('created_at', { ascending: false })
         .limit(20),
       getMarineConditions({ locationKey: 'daytona' }),
+      adminOperationsDashboard.loadReviewState(supabase, adminUser.id),
+      adminOperationsDashboard.loadAcknowledgedBookingIds(supabase, adminUser.id),
+      adminOperationsDashboard.fetchRecentBookingCandidates(supabase),
+      supabase
+        .from('bookings')
+        .select('*', { count: 'exact', head: true })
+        .eq('booking_source', 'groupon')
+        .in('status', ['pending', 'pending_verification']),
+      supabase
+        .from('payment_recovery_queue')
+        .select('*', { count: 'exact', head: true })
+        .in('status', ['open', 'retrying']),
+      supabase.from('contact_messages').select('*', { count: 'exact', head: true }).eq('is_read', false),
+      supabase
+        .from('pre_trip_submissions')
+        .select('*', { count: 'exact', head: true })
+        .eq('admin_status', 'pending'),
     ]);
 
     const boats = boatsResult.status === 'fulfilled' && !boatsResult.value.error ? boatsResult.value.data || [] : [];
@@ -4815,10 +4842,88 @@ app.get('/api/admin/operations-dashboard', async (req, res) => {
       ['hold_expires_today', 'upcoming_departure', 'missing_waiver', 'missing_insurance', 'missing_license'].includes(item.type)
     );
 
+    const lastReviewedAt =
+      reviewStateResult.status === 'fulfilled' ? reviewStateResult.value : adminOperationsDashboard.DEFAULT_LAST_REVIEWED;
+    const acknowledgedIds =
+      ackResult.status === 'fulfilled' ? ackResult.value : new Set();
+    const recentCreatedRows =
+      recentCreatedResult.status === 'fulfilled' ? recentCreatedResult.value : [];
+    const recentNormalized = recentCreatedRows.map(normalizeOpsBooking);
+    const newBookings = recentNormalized
+      .filter((b) =>
+        adminOperationsDashboard.isBookingNewForAdmin(
+          { id: b.id, created_at: b.created_at },
+          lastReviewedAt,
+          acknowledgedIds
+        )
+      )
+      .slice(0, adminOperationsDashboard.NEW_BOOKINGS_LIMIT)
+      .map((b) => ({
+        ...b,
+        source_label: adminOperationsDashboard.bookingSourceDisplay(b),
+        trip_type: adminOperationsDashboard.tripTypeLabel(b),
+        readiness: adminOperationsDashboard.readinessLabel(b),
+        is_new: true,
+      }));
+
+    const scheduleConflicts = adminOperationsDashboard.buildScheduleConflicts(
+      upcomingBookings,
+      upcomingRows
+    );
+    const actionRequired = actionItemsForBookings(upcomingBookings);
+    const pendingApprovals =
+      upcomingBookings.filter((b) => ['pending', 'pending_verification'].includes(String(b.status))).length;
+    const grouponPending =
+      grouponPendingResult.status === 'fulfilled' && !grouponPendingResult.value.error
+        ? grouponPendingResult.value.count || 0
+        : 0;
+    const openPaymentRecovery =
+      paymentRecoveryResult.status === 'fulfilled' && !paymentRecoveryResult.value.error
+        ? paymentRecoveryResult.value.count || 0
+        : 0;
+    const unreadMessages =
+      unreadMessagesResult.status === 'fulfilled' && !unreadMessagesResult.value.error
+        ? unreadMessagesResult.value.count || 0
+        : 0;
+    const pendingPreTrip =
+      pendingPreTripResult.status === 'fulfilled' && !pendingPreTripResult.value.error
+        ? pendingPreTripResult.value.count || 0
+        : 0;
+
+    const counts = adminOperationsDashboard.summarizeActionCounts({
+      newBookings,
+      pendingApprovals,
+      pendingPreTrip,
+      unreadMessages,
+      openPaymentRecovery,
+      grouponPending,
+      conflicts: scheduleConflicts,
+      actionRequired,
+    });
+
+    const upcoming = adminOperationsDashboard.computeUpcomingCounts(
+      upcomingRows,
+      availabilityService.BUSINESS_TZ
+    );
+
+    const todaySchedule = todayActive.map((trip) => ({
+      ...trip,
+      source_label: adminOperationsDashboard.bookingSourceDisplay(trip),
+      trip_type: adminOperationsDashboard.tripTypeLabel(trip),
+      readiness: adminOperationsDashboard.readinessLabel(trip),
+    }));
+
     return res.json({
+      generatedAt: new Date().toISOString(),
+      lastReviewedAt,
+      counts,
+      newBookings,
+      conflicts: scheduleConflicts,
+      upcoming,
+      todaySchedule,
       today: todayStart.toISODate(),
       todayTrips,
-      actionRequired: actionItemsForBookings(upcomingBookings),
+      actionRequired,
       schedule: {
         boats: boatStatus,
         bookings: todayTrips,
@@ -4853,6 +4958,45 @@ app.get('/api/admin/operations-dashboard', async (req, res) => {
   } catch (err) {
     console.error('[admin-operations-dashboard]', err);
     return res.status(err.statusCode || 500).json({ error: err.message || 'Could not load operations dashboard.' });
+  }
+});
+
+app.post('/api/admin/operations-dashboard/mark-reviewed', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const bookingId = String(req.body?.bookingId || req.body?.booking_id || '').trim();
+    if (!isBookingUuidParam(bookingId)) {
+      return res.status(400).json({ error: 'Valid bookingId is required.' });
+    }
+    const { error } = await adminOperationsDashboard.markBookingReviewed(supabase, adminUser.id, bookingId);
+    if (error) {
+      console.error('[admin-ops-mark-reviewed]', error.message);
+      return res.status(500).json({ error: 'Could not mark booking reviewed.' });
+    }
+    return res.json({ ok: true, bookingId });
+  } catch (err) {
+    console.error('[admin-ops-mark-reviewed]', err);
+    return res.status(500).json({ error: err.message || 'Could not mark booking reviewed.' });
+  }
+});
+
+app.post('/api/admin/operations-dashboard/mark-all-reviewed', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const { error, lastReviewedAt } = await adminOperationsDashboard.markAllBookingsReviewed(
+      supabase,
+      adminUser.id
+    );
+    if (error) {
+      console.error('[admin-ops-mark-all-reviewed]', error.message);
+      return res.status(500).json({ error: 'Could not mark all reviewed.' });
+    }
+    return res.json({ ok: true, lastReviewedAt });
+  } catch (err) {
+    console.error('[admin-ops-mark-all-reviewed]', err);
+    return res.status(500).json({ error: err.message || 'Could not mark all reviewed.' });
   }
 });
 

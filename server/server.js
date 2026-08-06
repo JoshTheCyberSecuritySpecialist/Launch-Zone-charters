@@ -4860,17 +4860,23 @@ app.get('/api/admin/operations-dashboard', async (req, res) => {
     }
     const opsSort = queryCheck.sort;
     const opsFilter = queryCheck.filter;
-    const { cards: newBookings, grouped: newBookingsGrouped } =
-      adminOperationsDashboard.buildNewBookingCards({
-        rawRows: recentCreatedRows,
-        normalizeRow: normalizeOpsBooking,
-        lastReviewedAt,
-        acknowledgedIds,
-        scheduleConflicts,
-        sort: opsSort,
-        filter: opsFilter,
-        businessTimezone: availabilityService.BUSINESS_TZ,
-      });
+    let newBookings = [];
+    let newBookingsGrouped = [];
+    try {
+      ({ cards: newBookings, grouped: newBookingsGrouped } =
+        adminOperationsDashboard.buildNewBookingCards({
+          rawRows: recentCreatedRows,
+          normalizeRow: normalizeOpsBooking,
+          lastReviewedAt,
+          acknowledgedIds,
+          scheduleConflicts,
+          sort: opsSort,
+          filter: opsFilter,
+          businessTimezone: availabilityService.BUSINESS_TZ,
+        }));
+    } catch (cardErr) {
+      console.error('[admin-operations-dashboard] new booking cards:', cardErr);
+    }
 
     const actionRequired = actionItemsForBookings(upcomingBookings);
     const pendingApprovals =

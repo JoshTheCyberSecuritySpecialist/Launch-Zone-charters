@@ -110,6 +110,45 @@ type DashboardPayload = OpsDashboardPayload & {
 
 const money = (value: number | string | null | undefined) => `$${Number(value || 0).toFixed(2)}`;
 
+const EMPTY_REVENUE: RevenueSummary = {
+  bookings: 0,
+  revenue: 0,
+  deposits: 0,
+  outstandingBalance: 0,
+  averageBookingValue: 0,
+};
+
+function weatherDisplay(value: unknown): string {
+  if (value == null) return '';
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  return '';
+}
+
+/** API may omit nested fields on errors or older backends — avoid render crashes. */
+function normalizeDashboardPayload(data: OpsDashboardPayload): DashboardPayload {
+  const raw = data as OpsDashboardPayload & Partial<DashboardPayload>;
+  const revenueRaw = raw.revenue as
+    | { today?: RevenueSummary; week?: RevenueSummary; month?: RevenueSummary }
+    | undefined;
+  return {
+    ...raw,
+    todayTrips: (raw.todayTrips ?? []) as DashboardPayload['todayTrips'],
+    actionRequired: raw.actionRequired ?? [],
+    schedule: raw.schedule ?? { boats: [], bookings: [] },
+    boatStatus: raw.boatStatus ?? [],
+    bookingSources: raw.bookingSources ?? {},
+    alerts: raw.alerts ?? [],
+    newBookingsGrouped: raw.newBookingsGrouped ?? [],
+    revenue: {
+      today: revenueRaw?.today ?? EMPTY_REVENUE,
+      week: revenueRaw?.week ?? EMPTY_REVENUE,
+      month: revenueRaw?.month ?? EMPTY_REVENUE,
+    },
+  };
+}
+
 function timeLabel(start: string, end?: string) {
   const opts: Intl.DateTimeFormatOptions = { hour: 'numeric', minute: '2-digit' };
   const s = new Date(start);
@@ -191,7 +230,7 @@ export default function AdminOperationsDashboard() {
         }
       }
       knownNewBookingIdsRef.current = new Set(incomingNew);
-      setPayload(data);
+      setPayload(normalizeDashboardPayload(data));
       setLastFetchedAt(Date.now());
     } catch (err) {
       setNotice(err instanceof Error ? err.message : 'Could not load operations dashboard.');
@@ -297,7 +336,10 @@ export default function AdminOperationsDashboard() {
   }, [todayTrips]);
 
   const paperworkMissing = useMemo(
-    () => todayTrips.filter((t) => !t.waiver_done || !t.insurance_done || !t.license_done).length,
+    () =>
+      todayTrips.filter(
+        (t) => !(t as OpsBooking).waiver_done || !(t as OpsBooking).insurance_done || !(t as OpsBooking).license_done
+      ).length,
     [todayTrips]
   );
 
@@ -894,10 +936,12 @@ export default function AdminOperationsDashboard() {
                         )}
                       </div>
                       <div className="flex flex-wrap gap-2">
-                        <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-bold capitalize">{trip.payment_status.replace(/_/g, ' ')}</span>
-                        {statusPill(trip.waiver_done, 'Waiver')}
-                        {statusPill(trip.insurance_done, 'Insurance')}
-                        {statusPill(trip.license_done, 'License')}
+                        <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-bold capitalize">
+                          {String(trip.payment_status || 'pending').replace(/_/g, ' ')}
+                        </span>
+                        {statusPill(Boolean(trip.waiver_done), 'Waiver')}
+                        {statusPill(Boolean(trip.insurance_done), 'Insurance')}
+                        {statusPill(Boolean(trip.license_done), 'License')}
                         <span className={`rounded-full px-2 py-1 text-xs font-bold ${trip.ready_for_departure ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'}`}>
                           Ready: {trip.ready_for_departure ? 'Yes' : 'No'}
                         </span>
@@ -931,14 +975,14 @@ export default function AdminOperationsDashboard() {
             <h2 className="text-2xl font-black">Today&apos;s Schedule</h2>
           </div>
           <div className="mt-4">
-            {(payload?.schedule.boats || []).length === 0 ? (
+            {(payload?.schedule?.boats || []).length === 0 ? (
               <p className="text-slate-500">No boats scheduled.</p>
             ) : (
               <AdminResponsiveList
                 desktop={
                   <div className="overflow-x-auto">
                     <div className="min-w-[760px] space-y-3">
-                      {(payload?.schedule.boats || []).map((boat) => (
+                      {(payload?.schedule?.boats || []).map((boat) => (
                         <div key={boat.id} className="grid grid-cols-[160px_1fr] items-stretch gap-3">
                           <div className="rounded-lg bg-slate-100 p-3 font-black">{boat.name}</div>
                           <div className="flex min-h-[56px] gap-2 rounded-lg border border-slate-200 bg-slate-50 p-2">
@@ -965,7 +1009,7 @@ export default function AdminOperationsDashboard() {
                 }
                 mobile={
                   <div className="space-y-3">
-                    {(payload?.schedule.boats || []).map((boat) => (
+                    {(payload?.schedule?.boats || []).map((boat) => (
                       <article key={boat.id} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
                         <div className="flex items-center justify-between gap-2">
                           <h3 className="text-base font-black text-slate-900">{boat.name}</h3>
@@ -1027,9 +1071,9 @@ export default function AdminOperationsDashboard() {
           </div>
 
           <div className="lg:col-span-2 grid gap-5 md:grid-cols-3">
-            {payload ? revenueCard('Today', payload.revenue.today) : null}
-            {payload ? revenueCard('This Week', payload.revenue.week) : null}
-            {payload ? revenueCard('This Month', payload.revenue.month) : null}
+            {payload?.revenue ? revenueCard('Today', payload.revenue.today) : null}
+            {payload?.revenue ? revenueCard('This Week', payload.revenue.week) : null}
+            {payload?.revenue ? revenueCard('This Month', payload.revenue.month) : null}
           </div>
           <p className="text-sm text-slate-600 lg:col-span-3">
             <Link to="/admin/analytics" className="font-semibold text-amber-800 underline">
@@ -1058,11 +1102,24 @@ export default function AdminOperationsDashboard() {
               <h2 className="text-2xl font-black">Weather Snapshot</h2>
             </div>
             <div className="mt-4 grid gap-2 text-sm">
-              <div><span className="font-bold">Conditions:</span> {weather.status || weather.shortForecast || weather.error || 'Unavailable'}</div>
+              <div>
+                <span className="font-bold">Conditions:</span>{' '}
+                {weatherDisplay(weather.status) ||
+                  weatherDisplay(weather.shortForecast) ||
+                  weatherDisplay(weather.error) ||
+                  'Unavailable'}
+              </div>
               <div><span className="font-bold">Wind:</span> {weather.windSpeed != null ? `${Math.round(Number(weather.windSpeed))} mph ${weather.windDirection || ''}` : 'Unavailable'}</div>
               <div><span className="font-bold">Temperature:</span> {weather.airTempF != null ? `${Math.round(Number(weather.airTempF))}°F` : 'Unavailable'}</div>
               <div><span className="font-bold">Wave Height:</span> {weather.waveHeightFt != null ? `${Number(weather.waveHeightFt).toFixed(1)} ft` : 'Unavailable'}</div>
-              <div><span className="font-bold">Rain Chance:</span> {weather.forecastPeriods?.[0]?.shortForecast || weather.shortForecast || 'Unavailable'}</div>
+              <div>
+                <span className="font-bold">Rain Chance:</span>{' '}
+                {weatherDisplay(
+                  Array.isArray(weather.forecastPeriods) ? weather.forecastPeriods[0]?.shortForecast : null
+                ) ||
+                  weatherDisplay(weather.shortForecast) ||
+                  'Unavailable'}
+              </div>
             </div>
           </div>
 

@@ -944,8 +944,13 @@ function buildNewBookingCards({
 }) {
   const zone = businessTimezone || getBusinessTimezone();
   const rawById = new Map((rawRows || []).map((r) => [String(r.id), r]));
-  const recentNormalized = (rawRows || []).map((r) => normalizeRow(r));
-  const scheduleForRecent = buildScheduleConflicts(recentNormalized, rawRows || [], zone);
+  let scheduleForRecent = [];
+  try {
+    const recentNormalized = (rawRows || []).map((r) => normalizeRow(r));
+    scheduleForRecent = buildScheduleConflicts(recentNormalized, rawRows || [], zone);
+  } catch (err) {
+    console.warn('[admin-ops] schedule conflicts for recent bookings:', err?.message || err);
+  }
   const conflictsByBooking = indexConflictsByBooking(scheduleForRecent, rawById);
   const ctx = {
     businessTimezone: zone,

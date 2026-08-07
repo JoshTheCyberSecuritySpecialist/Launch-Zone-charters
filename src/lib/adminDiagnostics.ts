@@ -50,6 +50,12 @@ export async function fetchJsonWithTimeout<T = unknown>(
 ): Promise<T> {
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  const outerSignal = init.signal;
+  const onOuterAbort = () => controller.abort();
+  if (outerSignal) {
+    if (outerSignal.aborted) controller.abort();
+    else outerSignal.addEventListener('abort', onOuterAbort, { once: true });
+  }
   const startedAt = performance.now();
   adminDebugLog(`${label}:start`, { url, method: init.method || 'GET' });
   try {
@@ -78,12 +84,17 @@ export async function fetchJsonWithTimeout<T = unknown>(
     }
     return payload as T;
   } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      adminDebugLog(`${label}:aborted`, {});
+      throw err;
+    }
     const message = err instanceof DOMException && err.name === 'AbortError'
       ? `${label} timed out after ${Math.round(timeoutMs / 1000)}s`
       : describeError(err);
     adminDebugLog(`${label}:error`, { message });
     throw new Error(message);
   } finally {
+    if (outerSignal) outerSignal.removeEventListener('abort', onOuterAbort);
     window.clearTimeout(timer);
   }
 }

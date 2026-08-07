@@ -303,6 +303,31 @@ test('filterNewBookings covers required filters', () => {
   assert.equal(filterNewBookings(cards, 'staff', zone).length, 1);
 });
 
+test('filterNewBookings week uses next 7 days in business TZ', () => {
+  const zone = 'America/New_York';
+  const todayStart = DateTime.now().setZone(zone).startOf('day').plus({ hours: 10 });
+  const inThreeDays = todayStart.plus({ days: 3 });
+  const inTenDays = todayStart.plus({ days: 10 });
+  const base = {
+    is_new: true,
+    conflictStatus: 'No conflict',
+    boatMissing: false,
+    captainMissing: false,
+    source_label: 'Direct Website',
+  };
+  const cards = [
+    { ...base, scheduledStart: todayStart.toUTC().toISO() },
+    { ...base, scheduledStart: inThreeDays.toUTC().toISO() },
+    { ...base, scheduledStart: inTenDays.toUTC().toISO() },
+  ];
+  const out = filterNewBookings(cards, 'week', zone);
+  assert.equal(out.length, 2);
+});
+
+test('validateOpsQuery accepts week filter', () => {
+  assert.equal(validateOpsQuery('trip_date', 'week').filter, 'week');
+});
+
 test('detectDuplicateBookingWarnings flags stripe session duplicates in batch', () => {
   const rows = [
     {

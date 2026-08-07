@@ -1,5 +1,12 @@
 import { env } from '../config/env.js';
-import { fetchJsonWithTimeout } from './adminDiagnostics';
+import { adminDebugLog, fetchJsonWithTimeout } from './adminDiagnostics';
+import {
+  buildOperationsDashboardPath,
+  normalizeOpsFilterFromApi,
+  normalizeOpsSortFromApi,
+  type OpsDashboardQueryParams,
+  type OpsDashboardSort,
+} from './adminOpsDashboardQuery';
 
 export type OpsDashboardCounts = {
   newBookings: number;
@@ -105,10 +112,10 @@ export type OpsDashboardPayload = {
   weather?: Record<string, unknown>;
 };
 
-export type OpsDashboardQuery = {
-  sort?: 'trip_date' | 'recently_booked' | 'customer_name';
-  filter?: string;
-};
+export type OpsDashboardQuery = OpsDashboardQueryParams;
+
+export { buildOperationsDashboardPath, normalizeOpsFilterFromApi, normalizeOpsSortFromApi };
+export type { OpsDashboardSort, OpsDashboardFilter } from './adminOpsDashboardQuery';
 
 async function adminFetch<T>(token: string, path: string, init?: RequestInit): Promise<T> {
   if (!env.apiUrlConfigured || !env.apiUrl) {
@@ -129,13 +136,16 @@ async function adminFetch<T>(token: string, path: string, init?: RequestInit): P
   );
 }
 
-export async function fetchOperationsDashboard(token: string, query?: OpsDashboardQuery) {
-  const params = new URLSearchParams();
-  if (query?.sort) params.set('sort', query.sort);
-  if (query?.filter) params.set('filter', query.filter);
-  const qs = params.toString();
-  const path = `/api/admin/operations-dashboard${qs ? `?${qs}` : ''}`;
-  return adminFetch<OpsDashboardPayload>(token, path);
+export async function fetchOperationsDashboard(
+  token: string,
+  query?: OpsDashboardQueryParams,
+  init?: RequestInit
+) {
+  const path = buildOperationsDashboardPath(query);
+  return adminFetch<OpsDashboardPayload>(token, path, {
+    cache: 'no-store',
+    ...init,
+  });
 }
 
 export async function markBookingReviewed(token: string, bookingId: string) {
@@ -178,6 +188,7 @@ export const OPS_FILTER_OPTIONS = [
   { id: '', label: 'All new' },
   { id: 'today', label: 'Today' },
   { id: 'tomorrow', label: 'Tomorrow' },
+  { id: 'week', label: 'This week' },
   { id: 'weekend', label: 'This weekend' },
   { id: 'new', label: 'New' },
   { id: 'conflict', label: 'Conflict' },

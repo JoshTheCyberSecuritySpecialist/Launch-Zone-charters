@@ -34,10 +34,14 @@ import {
   fetchOperationsDashboard,
   markAllBookingsReviewed,
   markBookingReviewed,
+  normalizeOpsFilterFromApi,
+  normalizeOpsSortFromApi,
   OPS_FILTER_OPTIONS,
   OPS_SORT_OPTIONS,
   type OpsDashboardPayload,
+  type OpsDashboardSort,
 } from '../lib/adminOpsDashboard';
+import { adminDebugLog } from '../lib/adminDiagnostics';
 import AdminOpsNewBookingCard from '../components/admin/AdminOpsNewBookingCard';
 
 type OpsBooking = {
@@ -193,32 +197,77 @@ export default function AdminOperationsDashboard() {
   const [notice, setNotice] = useState<string | null>(null);
   const [liveNotice, setLiveNotice] = useState<string | null>(null);
   const [lastFetchedAt, setLastFetchedAt] = useState<number | null>(null);
-  const [opsSort, setOpsSort] = useState<'trip_date' | 'recently_booked' | 'customer_name'>('trip_date');
+  const [opsSort, setOpsSort] = useState<OpsDashboardSort>('trip_date');
   const [opsFilter, setOpsFilter] = useState('');
+  const [appliedSort, setAppliedSort] = useState<OpsDashboardSort>('trip_date');
+  const [appliedFilter, setAppliedFilter] = useState('');
+  const [bookingsRefreshing, setBookingsRefreshing] = useState(false);
+  const [bookingsError, setBookingsError] = useState<string | null>(null);
   const knownNewBookingIdsRef = useRef<Set<string>>(new Set());
   const pollInFlightRef = useRef(false);
+  const opsSortRef = useRef(opsSort);
+  const opsFilterRef = useRef(opsFilter);
+  const fetchAbortRef = useRef<AbortController | null>(null);
+  const fetchGenerationRef = useRef(0);
+  const hasPayloadRef = useRef(false);
+  const queryEffectMountedRef = useRef(false);
   const POLL_MS = 45_000;
+
+  opsSortRef.current = opsSort;
+  opsFilterRef.current = opsFilter;
+  hasPayloadRef.current = payload != null;
+
+  const queryMatchesApplied =
+    opsSort === appliedSort && opsFilter === appliedFilter;
 
   const getAdminToken = useCallback(async () => {
     const { data } = await withTimeout('Admin session lookup', supabase.auth.getSession(), 12000);
     return data.session?.access_token || null;
   }, []);
 
-  const loadDashboard = useCallback(async () => {
+  const loadDashboard = useCallback(async (options?: { background?: boolean }) => {
     if (!isAdmin) {
       setLoading(false);
+      setBookingsRefreshing(false);
       return;
     }
-    setLoading(true);
-    setNotice(null);
+
+    const sort = opsSortRef.current;
+    const filter = opsFilterRef.current;
+    const generation = fetchGenerationRef.current + 1;
+    fetchGenerationRef.current = generation;
+
+    fetchAbortRef.current?.abort();
+    const controller = new AbortController();
+    fetchAbortRef.current = controller;
+
+    if (!options?.background && !hasPayloadRef.current) {
+      setLoading(true);
+    }
+    setBookingsRefreshing(true);
+    setBookingsError(null);
+
+    if (import.meta.env.DEV) {
+      adminDebugLog('ops-dashboard:fetch', { sort, filter: filter || '(all new)', generation });
+    }
+
     try {
       if (!env.apiUrlConfigured || !env.apiUrl) throw new Error('API URL is not configured.');
       const token = await getAdminToken();
       if (!token) throw new Error('Admin session expired.');
-      const data = await fetchOperationsDashboard(token, {
-        sort: opsSort,
-        filter: opsFilter || undefined,
-      });
+      const data = await fetchOperationsDashboard(
+        token,
+        {
+          sort,
+          filter: filter || undefined,
+        },
+        { signal: controller.signal }
+      );
+
+      if (generation !== fetchGenerationRef.current) {
+        return;
+      }
+
       const prevKnown = knownNewBookingIdsRef.current;
       const incomingNew = (data.newBookings || []).map((b) => b.id);
       if (prevKnown.size > 0) {
@@ -232,17 +281,57 @@ export default function AdminOperationsDashboard() {
       knownNewBookingIdsRef.current = new Set(incomingNew);
       setPayload(normalizeDashboardPayload(data));
       setLastFetchedAt(Date.now());
+      setAppliedSort(normalizeOpsSortFromApi(data.sort));
+      setAppliedFilter(normalizeOpsFilterFromApi(data.filter));
+      setBookingsError(null);
     } catch (err) {
-      setNotice(err instanceof Error ? err.message : 'Could not load operations dashboard.');
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        return;
+      }
+      if (generation !== fetchGenerationRef.current) {
+        return;
+      }
+      const message =
+        err instanceof Error ? err.message : 'Could not load operations dashboard.';
+      setBookingsError("Couldn't load bookings. Try again.");
+      if (!hasPayloadRef.current) {
+        setNotice(message);
+      }
+      if (import.meta.env.DEV) {
+        adminDebugLog('ops-dashboard:fetch-failed', {
+          sort,
+          filter: filter || '(all new)',
+          message,
+        });
+      }
     } finally {
-      setLoading(false);
+      if (generation === fetchGenerationRef.current) {
+        setLoading(false);
+        setBookingsRefreshing(false);
+      }
     }
-  }, [getAdminToken, isAdmin, opsSort, opsFilter]);
+  }, [getAdminToken, isAdmin]);
 
   useEffect(() => {
     if (authLoading || !isAdmin) return;
     void loadDashboard();
   }, [authLoading, isAdmin, loadDashboard]);
+
+  useEffect(() => {
+    if (authLoading || !isAdmin) return;
+    if (!queryEffectMountedRef.current) {
+      queryEffectMountedRef.current = true;
+      return;
+    }
+    void loadDashboard({ background: hasPayloadRef.current });
+  }, [opsSort, opsFilter, authLoading, isAdmin, loadDashboard]);
+
+  useEffect(
+    () => () => {
+      fetchAbortRef.current?.abort();
+    },
+    []
+  );
 
   const { counts: headCounts, countsLoading, reloadCounts } = useAdminQuickCounts(isAdmin && !authLoading);
   const lastBackgroundRefreshRef = useRef(0);
@@ -267,7 +356,7 @@ export default function AdminOperationsDashboard() {
     const tick = () => {
       if (document.hidden || pollInFlightRef.current) return;
       pollInFlightRef.current = true;
-      void loadDashboard().finally(() => {
+      void loadDashboard({ background: true }).finally(() => {
         pollInFlightRef.current = false;
       });
     };
@@ -599,7 +688,7 @@ export default function AdminOperationsDashboard() {
               <select
                 value={opsSort}
                 onChange={(e) =>
-                  setOpsSort(e.target.value as 'trip_date' | 'recently_booked' | 'customer_name')
+                  setOpsSort(e.target.value as OpsDashboardSort)
                 }
                 className="min-h-11 flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
               >
@@ -614,14 +703,20 @@ export default function AdminOperationsDashboard() {
 
           <div className="mt-2 flex gap-2 overflow-x-auto pb-1 [-webkit-overflow-scrolling:touch]">
             {OPS_FILTER_OPTIONS.map((f) => {
-              const active = opsFilter === f.id;
+              const active = opsFilter === f.id && queryMatchesApplied;
+              const pending = opsFilter === f.id && !queryMatchesApplied && bookingsRefreshing;
               return (
                 <button
                   key={f.id || 'all'}
                   type="button"
                   onClick={() => setOpsFilter(f.id)}
-                  className={`shrink-0 min-h-11 rounded-full px-4 py-2 text-sm font-semibold ${
-                    active ? 'bg-slate-900 text-white' : 'border border-slate-300 bg-white text-slate-800'
+                  aria-pressed={opsFilter === f.id}
+                  className={`shrink-0 min-h-11 rounded-full px-4 py-2 text-sm font-semibold touch-manipulation ${
+                    active
+                      ? 'bg-slate-900 text-white'
+                      : pending
+                        ? 'border border-slate-900 bg-slate-100 text-slate-900'
+                        : 'border border-slate-300 bg-white text-slate-800'
                   }`}
                 >
                   {f.label}
@@ -630,36 +725,58 @@ export default function AdminOperationsDashboard() {
             })}
           </div>
 
-          <div className="mt-4 space-y-6">
-            {(payload.newBookingsGrouped || []).length === 0 ? (
+          {bookingsError ? (
+            <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-950">
+              <p className="font-semibold">{bookingsError}</p>
+              <button
+                type="button"
+                onClick={() => void loadDashboard({ background: hasPayloadRef.current })}
+                className="mt-2 min-h-11 rounded-lg bg-red-900 px-4 py-2 text-sm font-bold text-white"
+              >
+                Retry
+              </button>
+            </div>
+          ) : null}
+
+          <div className="relative mt-4 space-y-6" aria-busy={bookingsRefreshing}>
+            {bookingsRefreshing && !queryMatchesApplied ? (
+              <p className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-4 text-base font-semibold text-slate-700">
+                Refreshing bookings…
+              </p>
+            ) : null}
+            {!bookingsRefreshing && queryMatchesApplied && (payload.newBookingsGrouped || []).length === 0 ? (
               <p className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-6 text-base text-slate-600">
                 No new bookings match this filter.
               </p>
-            ) : (
-              payload.newBookingsGrouped!.map((group) => (
-                <div key={group.groupKey}>
-                  <header className="border-b border-slate-200 pb-2">
-                    {group.headerRelative ? (
-                      <p className="text-sm font-black tracking-wide text-amber-800">{group.headerRelative}</p>
-                    ) : group.groupKey === 'needs-review' ? (
-                      <p className="text-sm font-black text-red-800">NEEDS SCHEDULING REVIEW</p>
-                    ) : (
-                      <p className="text-sm font-black text-slate-600">LATER</p>
-                    )}
-                    <p className="text-base font-bold text-slate-900">{group.headerDate}</p>
-                  </header>
-                  <div className="mt-3 space-y-3">
-                    {group.bookings.map((booking) => (
-                      <AdminOpsNewBookingCard
-                        key={booking.id}
-                        booking={booking}
-                        onMarkReviewed={(id) => void handleMarkReviewed(id)}
-                      />
-                    ))}
+            ) : null}
+            {queryMatchesApplied && (payload.newBookingsGrouped || []).length > 0
+              ? payload.newBookingsGrouped!.map((group) => (
+                  <div key={group.groupKey}>
+                    <header className="border-b border-slate-200 pb-2">
+                      {group.headerRelative ? (
+                        <p className="text-sm font-black tracking-wide text-amber-800">{group.headerRelative}</p>
+                      ) : group.groupKey === 'needs-review' ? (
+                        <p className="text-sm font-black text-red-800">NEEDS SCHEDULING REVIEW</p>
+                      ) : (
+                        <p className="text-sm font-black text-slate-600">LATER</p>
+                      )}
+                      <p className="text-base font-bold text-slate-900">{group.headerDate}</p>
+                    </header>
+                    <div className="mt-3 space-y-3">
+                      {group.bookings.map((booking) => (
+                        <AdminOpsNewBookingCard
+                          key={booking.id}
+                          booking={booking}
+                          onMarkReviewed={(id) => void handleMarkReviewed(id)}
+                        />
+                      ))}
+                    </div>
                   </div>
-                </div>
-              ))
-            )}
+                ))
+              : null}
+            {bookingsRefreshing && queryMatchesApplied ? (
+              <p className="text-center text-sm font-semibold text-slate-500">Refreshing bookings…</p>
+            ) : null}
           </div>
         </section>
 

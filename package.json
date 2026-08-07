@@ -10,6 +10,7 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.app.json",
     "test:admin-smoke": "node scripts/adminSmokeTest.mjs",
+    "test:admin-ops-query": "node scripts/adminOpsDashboardQuery.test.mjs",
     "test:admin-security": "node scripts/adminSecuritySmoke.mjs",
     "test:admin-live": "node scripts/adminLiveSmoke.mjs",
     "test:admin": "npm run test:admin-smoke && npm run test:admin-security && npm run test:admin-live",

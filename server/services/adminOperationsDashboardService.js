@@ -21,6 +21,7 @@ const ALLOWED_SORT = new Set(['trip_date', 'recently_booked', 'customer_name']);
 const ALLOWED_FILTER = new Set([
   'today',
   'tomorrow',
+  'week',
   'weekend',
   'new',
   'conflict',
@@ -869,6 +870,11 @@ function filterNewBookings(cards, filter, zone) {
         return start.isValid && start >= today && start < today.plus({ days: 1 });
       case 'tomorrow':
         return start.isValid && start >= tomorrow && start < tomorrow.plus({ days: 1 });
+      case 'week': {
+        if (!start.isValid) return false;
+        const weekEnd = today.plus({ days: 7 });
+        return start >= today && start < weekEnd;
+      }
       case 'weekend': {
         if (!start.isValid) return false;
         const d = start.weekday;

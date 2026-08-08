@@ -4849,9 +4849,13 @@ app.get('/api/admin/operations-dashboard', async (req, res) => {
     const recentCreatedRows =
       recentCreatedResult.status === 'fulfilled' ? recentCreatedResult.value : [];
 
-    const scheduleConflicts = adminOperationsDashboard.buildScheduleConflicts(
-      upcomingBookings,
-      upcomingRows,
+    const scheduleConflicts = adminOperationsDashboard.filterConflictsToOperational(
+      adminOperationsDashboard.buildScheduleConflicts(
+        upcomingBookings,
+        upcomingRows,
+        availabilityService.BUSINESS_TZ
+      ),
+      new Map([...upcomingRows, ...recentCreatedRows].map((r) => [String(r.id), r])),
       availabilityService.BUSINESS_TZ
     );
     const queryCheck = adminOperationsDashboard.validateOpsQuery(req.query.sort, req.query.filter);

@@ -12,6 +12,9 @@ const {
   parseScheduleStartEnd,
   validateOpsQuery,
   filterNewBookings,
+  isTripStillOperational,
+  filterConflictsToOperational,
+  buildNewBookingCards,
   sharedDepartureGroupKey,
   detectDuplicateBookingWarnings,
 } = require('../services/adminOperationsDashboardService');
@@ -262,6 +265,7 @@ test('filterNewBookings covers required filters', () => {
   const fri = todayStart.plus({ days: 7 }).set({ weekday: 5 });
   const base = {
     is_new: true,
+    opsEligible: true,
     conflictStatus: 'No conflict',
     boatMissing: false,
     captainMissing: false,
@@ -351,6 +355,167 @@ test('detectDuplicateBookingWarnings flags stripe session duplicates in batch', 
   ];
   const warnings = detectDuplicateBookingWarnings(rows, 'America/New_York');
   assert.ok(warnings.some((w) => w.type === 'duplicate_stripe_session'));
+});
+
+test('A old unreviewed booking with ended trip is not operational', () => {
+  const zone = 'America/New_York';
+  const now = DateTime.fromObject({ year: 2026, month: 8, day: 7, hour: 10 }, { zone });
+  const row = {
+    id: 'jul24',
+    status: 'confirmed',
+    booking_type: 'rental',
+    start_time: DateTime.fromObject({ year: 2026, month: 7, day: 24, hour: 15 }, { zone }).toUTC().toISO(),
+    end_time: DateTime.fromObject({ year: 2026, month: 7, day: 24, hour: 16 }, { zone }).toUTC().toISO(),
+  };
+  assert.equal(isTripStillOperational(row, zone, now), false);
+});
+
+test('B upcoming unreviewed booking is operational', () => {
+  const zone = 'America/New_York';
+  const now = DateTime.fromObject({ year: 2026, month: 8, day: 7, hour: 10 }, { zone });
+  const row = {
+    id: 'tom',
+    status: 'confirmed',
+    booking_type: 'rental',
+    start_time: DateTime.fromObject({ year: 2026, month: 8, day: 8, hour: 10 }, { zone }).toUTC().toISO(),
+    end_time: DateTime.fromObject({ year: 2026, month: 8, day: 8, hour: 14 }, { zone }).toUTC().toISO(),
+  };
+  assert.equal(isTripStillOperational(row, zone, now), true);
+});
+
+test('C underway booking remains operational until trip end', () => {
+  const zone = 'America/New_York';
+  const now = DateTime.fromObject({ year: 2026, month: 8, day: 7, hour: 12 }, { zone });
+  const row = {
+    id: 'live',
+    status: 'confirmed',
+    booking_type: 'rental',
+    start_time: DateTime.fromObject({ year: 2026, month: 8, day: 7, hour: 11 }, { zone }).toUTC().toISO(),
+    end_time: DateTime.fromObject({ year: 2026, month: 8, day: 7, hour: 14 }, { zone }).toUTC().toISO(),
+  };
+  assert.equal(isTripStillOperational(row, zone, now), true);
+});
+
+test('D overnight future bio trip is operational before end', () => {
+  const zone = 'America/New_York';
+  const now = DateTime.fromObject({ year: 2026, month: 8, day: 7, hour: 22 }, { zone });
+  const start = DateTime.fromObject({ year: 2026, month: 8, day: 7, hour: 23 }, { zone });
+  const end = DateTime.fromObject({ year: 2026, month: 8, day: 7, hour: 1 }, { zone });
+  const row = {
+    id: 'bio-future',
+    status: 'confirmed',
+    booking_type: 'charter',
+    charter_type: 'bio',
+    start_time: start.toUTC().toISO(),
+    end_time: end.toUTC().toISO(),
+  };
+  assert.equal(isTripStillOperational(row, zone, now), true);
+});
+
+test('E overnight bio trip hidden after end passes', () => {
+  const zone = 'America/New_York';
+  const now = DateTime.fromObject({ year: 2026, month: 8, day: 8, hour: 2 }, { zone });
+  const start = DateTime.fromObject({ year: 2026, month: 8, day: 7, hour: 23 }, { zone });
+  const end = DateTime.fromObject({ year: 2026, month: 8, day: 7, hour: 1 }, { zone });
+  const row = {
+    id: 'bio-past',
+    status: 'confirmed',
+    booking_type: 'charter',
+    charter_type: 'bio',
+    start_time: start.toUTC().toISO(),
+    end_time: end.toUTC().toISO(),
+  };
+  assert.equal(isTripStillOperational(row, zone, now), false);
+});
+
+test('F historical conflict is excluded from operational conflicts', () => {
+  const zone = 'America/New_York';
+  const now = DateTime.fromObject({ year: 2026, month: 8, day: 7, hour: 10 }, { zone });
+  const past = {
+    id: 'p1',
+    status: 'confirmed',
+    booking_type: 'rental',
+    start_time: DateTime.fromObject({ year: 2026, month: 7, day: 24, hour: 15 }, { zone }).toUTC().toISO(),
+    end_time: DateTime.fromObject({ year: 2026, month: 7, day: 24, hour: 16 }, { zone }).toUTC().toISO(),
+  };
+  const out = filterConflictsToOperational(
+    [{ type: 'missing_boat', label: 'Missing boat', booking_id: 'p1', urgency: 6 }],
+    new Map([['p1', past]]),
+    zone,
+    now
+  );
+  assert.equal(out.length, 0);
+});
+
+test('G upcoming conflict remains in operational conflicts', () => {
+  const zone = 'America/New_York';
+  const now = DateTime.fromObject({ year: 2026, month: 8, day: 7, hour: 10 }, { zone });
+  const upcoming = {
+    id: 'u1',
+    status: 'confirmed',
+    booking_type: 'rental',
+    start_time: DateTime.fromObject({ year: 2026, month: 8, day: 8, hour: 10 }, { zone }).toUTC().toISO(),
+    end_time: DateTime.fromObject({ year: 2026, month: 8, day: 8, hour: 14 }, { zone }).toUTC().toISO(),
+  };
+  const out = filterConflictsToOperational(
+    [{ type: 'missing_boat', label: 'Missing boat', booking_id: 'u1', urgency: 6 }],
+    new Map([['u1', upcoming]]),
+    zone,
+    now
+  );
+  assert.equal(out.length, 1);
+});
+
+test('buildNewBookingCards omits ended trips even when unreviewed', () => {
+  const zone = 'America/New_York';
+  const pastStart = DateTime.fromObject({ year: 2026, month: 7, day: 24, hour: 15 }, { zone });
+  const pastEnd = DateTime.fromObject({ year: 2026, month: 7, day: 24, hour: 16 }, { zone });
+  const futureStart = DateTime.fromObject({ year: 2026, month: 8, day: 15, hour: 15 }, { zone });
+  const futureEnd = DateTime.fromObject({ year: 2026, month: 8, day: 15, hour: 18 }, { zone });
+  const rawRows = [
+    {
+      id: 'old-unreviewed',
+      status: 'confirmed',
+      booking_type: 'rental',
+      start_time: pastStart.toUTC().toISO(),
+      end_time: pastEnd.toUTC().toISO(),
+      created_at: '2026-07-20T12:00:00.000Z',
+      customers: { full_name: 'Past Guest' },
+    },
+    {
+      id: 'new-upcoming',
+      status: 'confirmed',
+      booking_type: 'rental',
+      start_time: futureStart.toUTC().toISO(),
+      end_time: futureEnd.toUTC().toISO(),
+      created_at: new Date().toISOString(),
+      customers: { full_name: 'Future Guest' },
+    },
+  ];
+  const normalizeRow = (row) => ({
+    id: row.id,
+    customer_name: row.customers?.full_name || 'Guest',
+    status: row.status,
+    payment_status: 'pending',
+    outstanding: 0,
+    waiver_done: true,
+    insurance_done: true,
+    ready_for_departure: false,
+    boat_id: null,
+    booking_type: row.booking_type,
+  });
+  const { cards } = buildNewBookingCards({
+    rawRows,
+    normalizeRow,
+    lastReviewedAt: '1970-01-01T00:00:00.000Z',
+    acknowledgedIds: new Set(),
+    scheduleConflicts: [],
+    sort: 'trip_date',
+    filter: null,
+    businessTimezone: zone,
+  });
+  assert.ok(!cards.some((c) => c.id === 'old-unreviewed'));
+  assert.ok(cards.some((c) => c.id === 'new-upcoming'));
 });
 
 console.log('adminOperationsDashboard.test.js: all tests passed');

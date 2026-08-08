@@ -30,6 +30,7 @@ import { env } from '../config/env.js';
 import { adminCharterCapacityLines } from '../lib/charterCapacity';
 import { withTimeout } from '../lib/adminDiagnostics';
 import {
+  filterActiveOpsBookingGroups,
   formatRelativeTime,
   fetchOperationsDashboard,
   markAllBookingsReviewed,
@@ -546,6 +547,8 @@ export default function AdminOperationsDashboard() {
   const updatedLabel =
     lastFetchedAt != null ? formatRelativeTime(new Date(lastFetchedAt).toISOString()) : '';
 
+  const activeNewBookingGroups = filterActiveOpsBookingGroups(payload.newBookingsGrouped || []);
+
   const actionCenterItems = [
     {
       key: 'new',
@@ -744,13 +747,13 @@ export default function AdminOperationsDashboard() {
                 Refreshing bookings…
               </p>
             ) : null}
-            {!bookingsRefreshing && queryMatchesApplied && (payload.newBookingsGrouped || []).length === 0 ? (
+            {!bookingsRefreshing && queryMatchesApplied && activeNewBookingGroups.length === 0 ? (
               <p className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-6 text-base text-slate-600">
                 No new bookings match this filter.
               </p>
             ) : null}
-            {queryMatchesApplied && (payload.newBookingsGrouped || []).length > 0
-              ? payload.newBookingsGrouped!.map((group) => (
+            {queryMatchesApplied && activeNewBookingGroups.length > 0
+              ? activeNewBookingGroups.map((group) => (
                   <div key={group.groupKey}>
                     <header className="border-b border-slate-200 pb-2">
                       {group.headerRelative ? (

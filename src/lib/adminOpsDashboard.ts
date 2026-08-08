@@ -46,6 +46,8 @@ export type OpsNewBookingCard = {
   source_label: string;
   scheduledStart: string;
   scheduledEnd: string;
+  tripEndAt?: string | null;
+  opsEligible?: boolean;
   businessTimezone: string;
   tripDateLong: string;
   tripDateCompact: string;
@@ -175,6 +177,27 @@ export function formatRelativeTime(iso: string | null | undefined) {
   if (hrs < 48) return `${hrs} hr ago`;
   const days = Math.floor(hrs / 24);
   return `${days} day${days === 1 ? '' : 's'} ago`;
+}
+
+/** Defensive: hide ended trips if API ever returns them. */
+export function isOpsNewBookingActive(
+  booking: Pick<OpsNewBookingCard, 'opsEligible' | 'tripEndAt'>
+): boolean {
+  if (booking.opsEligible === false) return false;
+  if (booking.tripEndAt) {
+    const endMs = new Date(booking.tripEndAt).getTime();
+    if (Number.isFinite(endMs) && endMs < Date.now()) return false;
+  }
+  return true;
+}
+
+export function filterActiveOpsBookingGroups(groups: OpsNewBookingGroup[]): OpsNewBookingGroup[] {
+  return (groups || [])
+    .map((group) => ({
+      ...group,
+      bookings: group.bookings.filter(isOpsNewBookingActive),
+    }))
+    .filter((group) => group.bookings.length > 0);
 }
 
 export function sourceBadgeClass(sourceLabel: string) {

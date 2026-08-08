@@ -431,6 +431,7 @@ function computeUpcomingCounts(rows, zone) {
 
   for (const row of rows || []) {
     if (['cancelled', 'completed'].includes(String(row.status))) continue;
+    if (!isTripStillOperational(row, zone, now)) continue;
     const start = DateTime.fromISO(String(row.start_time), { zone: 'utc' }).setZone(zone);
     if (!start.isValid) continue;
     if (start >= todayStart && start < todayStart.plus({ days: 1 })) today += 1;
@@ -505,18 +506,67 @@ function parseScheduleStartEnd(row, zone) {
   return { valid: true, start, end, overnight, invalidRange: false };
 }
 
-function relativeTripLabel(startDt, zone, status) {
+/** Resolved trip end in business TZ (handles bio overnight). */
+function tripEndDateTime(row, zone) {
+  const sched = parseScheduleStartEnd(row, zone);
+  if (!sched.valid || !sched.end?.isValid) return null;
+  return sched.end;
+}
+
+/**
+ * Ops dashboard: trip has not ended yet (end >= now in business TZ).
+ * Includes underway trips (start < now < end).
+ */
+function isTripStillOperational(row, zone, nowInput) {
+  if (['cancelled', 'completed'].includes(String(row?.status))) return false;
+  const zoneId = zone || getBusinessTimezone();
+  const now = (nowInput || DateTime.now()).setZone(zoneId);
+  const end = tripEndDateTime(row, zoneId);
+  if (!end) return false;
+  return end.toMillis() >= now.toMillis();
+}
+
+function filterOperationalBookingRows(rows, zone, nowInput) {
+  return (rows || []).filter((row) => isTripStillOperational(row, zone, nowInput));
+}
+
+function filterConflictsToOperational(conflicts, rowsById, zone, nowInput) {
+  const map = rowsById instanceof Map ? rowsById : new Map();
+  return (conflicts || []).filter((c) => {
+    const primary = map.get(String(c.booking_id));
+    if (!primary || !isTripStillOperational(primary, zone, nowInput)) return false;
+    if (c.other_booking_id) {
+      const other = map.get(String(c.other_booking_id));
+      if (!other || !isTripStillOperational(other, zone, nowInput)) return false;
+    }
+    return true;
+  });
+}
+
+function relativeTripLabel(startDt, zone, status, options = {}) {
   if (!startDt || !startDt.isValid) return { label: null, invalid: true };
   const now = DateTime.now().setZone(zone);
   const today = now.startOf('day');
   const tripDay = startDt.startOf('day');
   const diffDays = Math.floor(tripDay.diff(today, 'days').days);
+  const opsDashboard = Boolean(options.opsDashboard);
+  const tripEnd = options.tripEnd;
+  const stillOperational =
+    opsDashboard && tripEnd?.isValid && tripEnd.toMillis() >= now.toMillis();
 
-  if (!['cancelled', 'completed'].includes(String(status)) && startDt < now.minus({ minutes: 30 })) {
+  if (
+    !opsDashboard &&
+    !['cancelled', 'completed'].includes(String(status)) &&
+    startDt < now.minus({ minutes: 30 })
+  ) {
     return { label: 'PAST DUE', invalid: false };
   }
+
   if (diffDays === 0) return { label: 'TODAY', invalid: false };
   if (diffDays === 1) return { label: 'TOMORROW', invalid: false };
+  if (stillOperational && diffDays < 0 && diffDays >= -1) {
+    return { label: 'TODAY', invalid: false };
+  }
   const dow = tripDay.weekday;
   const isWeekendDay = dow === 5 || dow === 6 || dow === 7;
   if (isWeekendDay && diffDays >= 0 && diffDays <= 6) {
@@ -767,7 +817,7 @@ function buildNewBookingCard(raw, norm, ctx) {
   const zone = ctx.businessTimezone;
   const sched = parseScheduleStartEnd(raw, zone);
   const rel = sched.valid
-    ? relativeTripLabel(sched.start, zone, raw.status)
+    ? relativeTripLabel(sched.start, zone, raw.status, { opsDashboard: true, tripEnd: sched.end })
     : { label: null, invalid: true };
   const captain = Array.isArray(raw.captains) ? raw.captains[0] : raw.captains;
   const captainName = captain?.full_name ? String(captain.full_name).trim() : null;
@@ -789,6 +839,8 @@ function buildNewBookingCard(raw, norm, ctx) {
     source_label: bookingSourceDisplay(raw),
     scheduledStart: raw.start_time,
     scheduledEnd: raw.end_time,
+    tripEndAt: sched.valid && sched.end?.isValid ? sched.end.toUTC().toISO() : null,
+    opsEligible: isTripStillOperational(raw, zone),
     businessTimezone: zone,
     tripDateLong: sched.valid ? formatTripDateLong(sched.start, false) : 'NEEDS SCHEDULING REVIEW',
     tripDateCompact: sched.valid ? formatTripDateLong(sched.start, true) : 'NEEDS SCHEDULING REVIEW',
@@ -881,7 +933,7 @@ function filterNewBookings(cards, filter, zone) {
         return d === 5 || d === 6 || d === 7;
       }
       case 'new':
-        return c.is_new;
+        return c.is_new && c.opsEligible !== false;
       case 'conflict':
         return c.conflictStatus !== 'No conflict';
       case 'missing_boat':
@@ -949,11 +1001,16 @@ function buildNewBookingCards({
   businessTimezone,
 }) {
   const zone = businessTimezone || getBusinessTimezone();
-  const rawById = new Map((rawRows || []).map((r) => [String(r.id), r]));
+  const operationalRaw = filterOperationalBookingRows(rawRows || [], zone);
+  const rawById = new Map(operationalRaw.map((r) => [String(r.id), r]));
   let scheduleForRecent = [];
   try {
-    const recentNormalized = (rawRows || []).map((r) => normalizeRow(r));
-    scheduleForRecent = buildScheduleConflicts(recentNormalized, rawRows || [], zone);
+    const recentNormalized = operationalRaw.map((r) => normalizeRow(r));
+    scheduleForRecent = filterConflictsToOperational(
+      buildScheduleConflicts(recentNormalized, operationalRaw, zone),
+      rawById,
+      zone
+    );
   } catch (err) {
     console.warn('[admin-ops] schedule conflicts for recent bookings:', err?.message || err);
   }
@@ -961,11 +1018,11 @@ function buildNewBookingCards({
   const ctx = {
     businessTimezone: zone,
     conflictsByBooking,
-    allRaw: rawRows || [],
+    allRaw: operationalRaw,
   };
 
   let cards = [];
-  for (const raw of rawRows || []) {
+  for (const raw of operationalRaw) {
     const norm = normalizeRow(raw);
     if (
       !isBookingNewForAdmin(
@@ -976,6 +1033,7 @@ function buildNewBookingCards({
     ) {
       continue;
     }
+    if (!isTripStillOperational(raw, zone)) continue;
     cards.push(buildNewBookingCard(raw, norm, ctx));
   }
 
@@ -1046,6 +1104,10 @@ module.exports = {
   loadReviewState,
   loadAcknowledgedBookingIds,
   isBookingNewForAdmin,
+  isTripStillOperational,
+  tripEndDateTime,
+  filterOperationalBookingRows,
+  filterConflictsToOperational,
   buildScheduleConflicts,
   computeUpcomingCounts,
   markBookingReviewed,

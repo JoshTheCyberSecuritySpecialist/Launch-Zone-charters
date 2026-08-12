@@ -29,6 +29,7 @@ const waiverContent = require('./content/waiverContent');
 const bookingReliability = require('./services/bookingReliability');
 const captainBookingService = require('./services/captainBookingService');
 const bookingCommunications = require('./services/bookingCommunications');
+const bookingConfirmationService = require('./services/bookingConfirmationService');
 const adminBookingUpdate = require('./services/adminBookingUpdate');
 const bookingDateTimeRange = require('./lib/bookingDateTimeRange');
 const { isSharedCharterBooking, formatCapacityMessage } = require('./lib/sharedCharterCapacity');
@@ -202,7 +203,7 @@ function computeExpectedBookingTotals({
 /** Unpaid Checkout holds expire with the Stripe Checkout Session. */
 const BOOKING_HOLD_TTL_MS = 30 * 60 * 1000;
 const SLOT_TAKEN_USER_MESSAGE =
-  'This time slot was just booked. Please select another time.';
+  'This departure is no longer available. Another reservation was made for this time. Please select another time.';
 const SLOT_TOO_SOON_USER_MESSAGE =
   'This time is no longer available. Please choose a later time.';
 
@@ -1099,11 +1100,20 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
     bookingMode === 'rental' ? roundMoney(expected.captainFee || 0) : Number(booking.captain_fee || 0);
   const basePriceStored = roundMoney(expected.basePrice != null ? expected.basePrice : Number(booking.base_price || 0));
 
+  const charterInsertFields = isCharterBooking
+    ? await availabilityService.prepareCharterBookingInsertFields({
+        charterType,
+        charterVariant,
+        bioPackage: expected.bioPackage || null,
+      })
+    : null;
+
   const bookingInsert = {
     customer_id: customerRow.id,
-    boat_id: isCharterBooking ? null : String(booking.boat_id),
+    boat_id: isCharterBooking ? charterInsertFields?.boat_id || null : String(booking.boat_id),
     booking_type: isCharterBooking ? 'charter' : 'rental',
     charter_type: isCharterBooking ? charterType || null : null,
+    charter_seating: isCharterBooking ? charterInsertFields?.charter_seating || null : null,
     guest_count: isCharterBooking ? passengerCount : 1,
     total_amount: expected.totalPrice,
     start_time: booking.start_time,
@@ -1157,11 +1167,15 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
         err.statusCode = 409;
         throw err;
       }
-        await availabilityService.assertCharterSlotAvailable({
+        await availabilityService.assertUnifiedCharterSlotAvailable({
           startTime: booking.start_time,
           endTime: bookingInsert.end_time,
           charterType,
+          charterVariant,
+          bioPackage: expected.bioPackage || null,
+          passengerCount,
           excludeBookingId: holdRow?.id || null,
+          bookingSource: 'stripe_finalize',
         });
     } else {
       assertBookingLeadTime(booking.start_time);
@@ -1234,6 +1248,20 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
         err.statusCode = 409;
         throw err;
       }
+      const sharedUpdMsg = sharedCharterErrorMessage(updErr);
+      if (sharedUpdMsg) {
+        const refund = await refundStripeCheckoutSession(session);
+        if (!refund.ok) {
+          await bookingReliability.enqueueRecovery(supabase, {
+            ...bookingReliability.recoveryPayloadFromSession(session),
+            reason: 'refund_failed',
+            error: refund.error || refund.reason || sharedUpdMsg,
+          });
+        }
+        const err = new Error(sharedUpdMsg);
+        err.statusCode = 409;
+        throw err;
+      }
       const refund = await refundStripeCheckoutSession(session);
       await bookingReliability.enqueueRecovery(supabase, {
         ...bookingReliability.recoveryPayloadFromSession(session),
@@ -1284,6 +1312,20 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
           });
         }
         const err = new Error(SLOT_TAKEN_USER_MESSAGE);
+        err.statusCode = 409;
+        throw err;
+      }
+      const sharedInsertMsg = sharedCharterErrorMessage(bookingError);
+      if (sharedInsertMsg) {
+        const refund = await refundStripeCheckoutSession(session);
+        if (!refund.ok) {
+          await bookingReliability.enqueueRecovery(supabase, {
+            ...bookingReliability.recoveryPayloadFromSession(session),
+            reason: 'refund_failed',
+            error: refund.error || refund.reason || sharedInsertMsg,
+          });
+        }
+        const err = new Error(sharedInsertMsg);
         err.statusCode = 409;
         throw err;
       }
@@ -2177,6 +2219,18 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
           comp_reason: compReason,
           staff_user_id: adminUser.id,
         },
+      });
+    }
+
+    const notifyCustomer = req.body?.notify_customer !== false && req.body?.notifyCustomer !== false;
+    if (notifyCustomer && status === 'confirmed' && customer.email) {
+      await sendBookingConfirmationInternal({
+        bookingId: booking.id,
+        email: customer.email,
+        source: 'staff_booking',
+        verifyEmailMatch: false,
+      }).catch((emailErr) => {
+        console.error('[admin-staff-bookings] confirmation email:', emailErr?.message || emailErr);
       });
     }
 
@@ -3483,8 +3537,15 @@ app.post('/api/admin/bookings/:id/actions', async (req, res) => {
       const detail = await loadAdminBookingDetail(id);
       const email = detail?.booking?.customers?.email || detail?.booking?.email || '';
       if (!email) return res.status(400).json({ error: 'Booking has no customer email.' });
-      const sendResult = await sendBookingConfirmationInternal({ bookingId: id, email, source: 'admin' });
-      return res.json({ ok: true, alreadySent: Boolean(sendResult?.alreadySent) });
+      const forceResend = Boolean(req.body?.forceResend || req.body?.force_resend);
+      const sendResult = await sendBookingConfirmationInternal({
+        bookingId: id,
+        email,
+        source: 'admin',
+        forceResend,
+        verifyEmailMatch: false,
+      });
+      return res.json({ ok: true, alreadySent: Boolean(sendResult?.alreadySent) && !forceResend });
     }
 
     if (action === 'delete_hold') {
@@ -6491,10 +6552,14 @@ app.post('/api/create-checkout-session', async (req, res) => {
           err.statusCode = 409;
           throw err;
         }
-        await availabilityService.assertCharterSlotAvailable({
+        await availabilityService.assertUnifiedCharterSlotAvailable({
           startTime: startTime.toISOString(),
           endTime: endTime.toISOString(),
           charterType,
+          charterVariant,
+          bioPackage: expected.bioPackage || null,
+          passengerCount,
+          bookingSource: 'stripe_checkout',
         });
       } else {
         assertBookingLeadTime(startTime.toISOString());
@@ -6583,11 +6648,20 @@ app.post('/api/create-checkout-session', async (req, res) => {
     );
     const expiresAt = new Date(Date.now() + BOOKING_HOLD_TTL_MS).toISOString();
 
+    const charterInsertFields = isCharterBooking
+      ? await availabilityService.prepareCharterBookingInsertFields({
+          charterType,
+          charterVariant,
+          bioPackage: expected.bioPackage || null,
+        })
+      : null;
+
     const holdInsert = {
       customer_id: customerRow.id,
-      boat_id: isCharterBooking ? null : String(authoritativeBooking.boat_id),
+      boat_id: isCharterBooking ? charterInsertFields?.boat_id || null : String(authoritativeBooking.boat_id),
       booking_type: isCharterBooking ? 'charter' : 'rental',
       charter_type: isCharterBooking ? charterType || null : null,
+      charter_seating: isCharterBooking ? charterInsertFields?.charter_seating || null : null,
       guest_count: isCharterBooking ? passengerCount : 1,
       total_amount: expected.totalPrice,
       start_time: authoritativeBooking.start_time,
@@ -6627,9 +6701,39 @@ app.post('/api/create-checkout-session', async (req, res) => {
         : {}),
     };
 
+    try {
+      if (isCharterBooking) {
+        await availabilityService.assertUnifiedCharterSlotAvailable({
+          startTime: authoritativeBooking.start_time,
+          endTime: holdInsert.end_time,
+          charterType,
+          charterVariant,
+          bioPackage: expected.bioPackage || null,
+          passengerCount,
+          bookingSource: 'stripe_checkout_hold',
+        });
+      } else {
+        await availabilityService.assertBookingSlotAvailable({
+          boatId: authoritativeBooking.boat_id,
+          startTime: authoritativeBooking.start_time,
+          endTime: authoritativeBooking.end_time,
+          location: authoritativeBooking.rentalLocation || authoritativeBooking.rental_location || null,
+        });
+      }
+    } catch (holdSlotErr) {
+      await stripe.checkout.sessions.expire(session.id).catch(() => {});
+      return res.status(holdSlotErr.statusCode || 409).json({
+        error: holdSlotErr.message || SLOT_TAKEN_USER_MESSAGE,
+      });
+    }
+
     const { error: holdErr } = await supabase.from('bookings').insert(holdInsert);
     if (holdErr) {
       await stripe.checkout.sessions.expire(session.id).catch(() => {});
+      const sharedMsg = sharedCharterErrorMessage(holdErr);
+      if (sharedMsg) {
+        return res.status(409).json({ error: sharedMsg });
+      }
       if (isOverlapConstraintError(holdErr)) {
         return res.status(409).json({ error: SLOT_TAKEN_USER_MESSAGE });
       }
@@ -7130,148 +7234,26 @@ function requireCronBearer(req, res) {
   return true;
 }
 
-async function sendBookingConfirmationInternal({ bookingId, email, source = 'server' }) {
-  const bookingIdSafe = String(bookingId || '').trim();
-  if (!bookingIdSafe || !isBookingUuidParam(bookingIdSafe)) {
-    const err = new Error('Valid bookingId is required');
-    err.statusCode = 400;
-    throw err;
-  }
-  if (!supabaseConfigured) {
-    const err = new Error('Server not configured');
-    err.statusCode = 503;
-    throw err;
-  }
-
-  const loaded = await bookingAccess.loadBookingWithCustomer(supabase, bookingIdSafe);
-  if (!loaded.ok) {
-    const err = new Error(loaded.message || 'Booking not found');
-    err.statusCode = loaded.statusCode || 404;
-    throw err;
-  }
-
-  const allowedStatuses = ['pending', 'pending_verification', 'confirmed', 'ready_for_departure'];
-  if (!allowedStatuses.includes(String(loaded.booking.status || ''))) {
-    const err = new Error('Booking is not eligible for confirmation email');
-    err.statusCode = 400;
-    throw err;
-  }
-
-  let emailSafe = email ? String(email).trim().toLowerCase() : '';
-  if (emailSafe && normalizeEmailParam(loaded.customer.email) !== emailSafe) {
-    const err = new Error('Email does not match this booking');
-    err.statusCode = 403;
-    throw err;
-  }
-  emailSafe = normalizeEmailParam(loaded.customer.email);
-  if (!emailSafe) {
-    const err = new Error('Could not resolve customer email');
-    err.statusCode = 400;
-    throw err;
-  }
-
-  if (loaded.booking.booking_confirmation_sent_at) {
-    return { ok: true, alreadySent: true };
-  }
-
-  if (!resend) {
-    const err = new Error('Email service not configured');
-    err.statusCode = 503;
-    throw err;
-  }
-
-  const emailHtml = documentUrlValidation.escapeHtml(emailSafe);
-  const customerSend = resend.emails.send({
-    from: resendFrom,
-    to: emailSafe,
-    subject: 'Your Launch Zone Booking Confirmation',
-    html: `
-      <p>Thank you for booking with Launch Zone Rentals.</p>
-      <p><strong>Booking ID:</strong> ${documentUrlValidation.escapeHtml(bookingIdSafe)}</p>
-      <p>We will follow up with pickup details and next steps.</p>
-      <p>If you have questions, call <a href="tel:803-542-1761">803-542-1761</a>.</p>
-    `,
+async function sendBookingConfirmationInternal({
+  bookingId,
+  email,
+  source = 'server',
+  forceResend = false,
+  verifyEmailMatch = true,
+}) {
+  return bookingConfirmationService.sendBookingConfirmation({
+    supabase,
+    resend,
+    resendFrom,
+    bookingId,
+    email,
+    source,
+    forceResend,
+    verifyEmailMatch,
+    bookingReliability,
+    verificationReminder,
+    verificationSms,
   });
-
-  const adminTo = (process.env.ADMIN_EMAIL || '').trim();
-  const adminSend =
-    adminTo.length > 0
-      ? resend.emails.send({
-          from: resendFrom,
-          to: adminTo,
-          subject: 'New Booking Received',
-          html: `
-            <p>A new booking was submitted.</p>
-            <p><strong>Booking ID:</strong> ${documentUrlValidation.escapeHtml(bookingIdSafe)}</p>
-            <p><strong>Customer email:</strong> ${emailHtml}</p>
-            <p><strong>Source:</strong> ${documentUrlValidation.escapeHtml(source)}</p>
-          `,
-        })
-      : Promise.resolve({ data: null, error: null });
-
-  const [customerResult, adminResult] = await Promise.all([customerSend, adminSend]);
-  if (customerResult.error) {
-    const err = new Error(customerResult.error.message || 'Failed to send customer email');
-    err.statusCode = 500;
-    throw err;
-  }
-  if (adminResult.error) {
-    console.error('[send-booking-confirmation] admin notify Resend error:', adminResult.error);
-  }
-
-  await bookingCommunications.logAutomatedCommunication(supabase, {
-    bookingId: bookingIdSafe,
-    channel: 'email',
-    messageType: 'automated_booking_confirmation',
-    recipient: emailSafe,
-    subject: 'Your Launch Zone Booking Confirmation',
-    body: [
-      'Thank you for booking with Launch Zone Rentals.',
-      `Booking ID: ${bookingIdSafe}`,
-      'We will follow up with pickup details and next steps.',
-      'If you have questions, call 803-542-1761.',
-    ].join('\n'),
-    providerMessageId: customerResult.data?.id || null,
-  });
-
-  try {
-    await verificationReminder.maybeSendVerificationReminder({
-      supabaseAdmin: supabase,
-      resend,
-      resendFrom,
-      bookingId: bookingIdSafe,
-      email: emailSafe,
-    });
-  } catch (remErr) {
-    console.error('[send-booking-confirmation] verification reminder:', remErr);
-  }
-
-  try {
-    const publicBase = verificationReminder.publicAppBase();
-    await verificationSms.maybeSendVerificationSms({
-      supabaseAdmin: supabase,
-      bookingId: bookingIdSafe,
-      email: emailSafe,
-      publicAppBase: publicBase,
-    });
-  } catch (_smsErr) {
-    /* fail silently — do not affect booking */
-  }
-
-  await supabase
-    .from('bookings')
-    .update({ booking_confirmation_sent_at: new Date().toISOString() })
-    .eq('id', bookingIdSafe)
-    .is('booking_confirmation_sent_at', null);
-
-  await bookingReliability.insertActivity(supabase, {
-    booking_id: bookingIdSafe,
-    event_type: 'emails_sent',
-    message: 'Booking confirmation email sent.',
-    payload: { source, email: emailSafe },
-  });
-
-  return { ok: true };
 }
 
 app.post('/api/send-booking-confirmation', async (req, res) => {
@@ -7290,113 +7272,17 @@ app.post('/api/send-booking-confirmation', async (req, res) => {
       return res.status(503).json({ error: 'Server not configured' });
     }
 
-    const loaded = await bookingAccess.loadBookingWithCustomer(supabase, String(bookingId));
-    if (!loaded.ok) {
-      return res.status(loaded.statusCode || 404).json({ error: 'Booking not found' });
-    }
-
-    const allowedStatuses = ['pending', 'pending_verification', 'confirmed'];
-    if (!allowedStatuses.includes(String(loaded.booking.status || ''))) {
-      return res.status(400).json({ error: 'Booking is not eligible for confirmation email' });
-    }
-
-    let emailSafe = email ? String(email).trim().toLowerCase() : '';
-    if (emailSafe && normalizeEmailParam(loaded.customer.email) !== emailSafe) {
-      return res.status(403).json({ error: 'Email does not match this booking' });
-    }
-    emailSafe = normalizeEmailParam(loaded.customer.email);
-    if (!emailSafe) {
-      return res.status(400).json({ error: 'Could not resolve customer email' });
-    }
-
-    if (loaded.booking.booking_confirmation_sent_at) {
-      return res.json({ ok: true, alreadySent: true });
-    }
-
-    if (!resend) {
-      console.warn('[send-booking-confirmation] RESEND_API_KEY not set; skipping send');
-      return res.status(503).json({ error: 'Email service not configured' });
-    }
-
-    const bookingIdSafe = String(bookingId);
-    const emailHtml = documentUrlValidation.escapeHtml(emailSafe);
-
-    const customerSend = resend.emails.send({
-      from: resendFrom,
-      to: emailSafe,
-      subject: 'Your Launch Zone Booking Confirmation',
-      html: `
-        <p>Thank you for booking with Launch Zone Rentals.</p>
-        <p><strong>Booking ID:</strong> ${documentUrlValidation.escapeHtml(bookingIdSafe)}</p>
-        <p>We will follow up with pickup details and next steps.</p>
-        <p>If you have questions, call <a href="tel:803-542-1761">803-542-1761</a>.</p>
-      `,
+    const sendResult = await sendBookingConfirmationInternal({
+      bookingId: String(bookingId),
+      email,
+      source: 'public_api',
+      verifyEmailMatch: true,
     });
 
-    const adminTo = (process.env.ADMIN_EMAIL || '').trim();
-    const adminSend =
-      adminTo.length > 0
-        ? resend.emails.send({
-            from: resendFrom,
-            to: adminTo,
-            subject: 'New Booking Received',
-            html: `
-              <p>A new booking was submitted.</p>
-              <p><strong>Booking ID:</strong> ${documentUrlValidation.escapeHtml(bookingIdSafe)}</p>
-              <p><strong>Customer email:</strong> ${emailHtml}</p>
-            `,
-          })
-        : Promise.resolve({ data: null, error: null });
-
-    const [customerResult, adminResult] = await Promise.all([customerSend, adminSend]);
-
-    if (customerResult.error) {
-      console.error('[send-booking-confirmation] customer Resend error:', customerResult.error);
-      return res.status(500).json({ error: 'Failed to send email' });
-    }
-
-    if (adminResult.error) {
-      console.error('[send-booking-confirmation] admin notify Resend error:', adminResult.error);
-    } else if (adminTo.length === 0) {
-      console.warn('[send-booking-confirmation] ADMIN_EMAIL not set; admin notify skipped');
-    }
-
-    if (supabaseConfigured) {
-      try {
-        await verificationReminder.maybeSendVerificationReminder({
-          supabaseAdmin: supabase,
-          resend,
-          resendFrom,
-          bookingId: bookingIdSafe,
-          email: emailSafe,
-        });
-      } catch (remErr) {
-        console.error('[send-booking-confirmation] verification reminder:', remErr);
-      }
-
-      try {
-        const publicBase = verificationReminder.publicAppBase();
-        await verificationSms.maybeSendVerificationSms({
-          supabaseAdmin: supabase,
-          bookingId: bookingIdSafe,
-          email: emailSafe,
-          publicAppBase: publicBase,
-        });
-      } catch (_smsErr) {
-        /* fail silently — do not affect booking / response */
-      }
-
-      await supabase
-        .from('bookings')
-        .update({ booking_confirmation_sent_at: new Date().toISOString() })
-        .eq('id', bookingIdSafe)
-        .is('booking_confirmation_sent_at', null);
-    }
-
-    return res.json({ ok: true });
+    return res.json({ ok: true, alreadySent: Boolean(sendResult?.alreadySent) });
   } catch (err) {
     console.error('[send-booking-confirmation]', err);
-    return res.status(500).json({ error: 'Failed to send email' });
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Failed to send email' });
   }
 });
 

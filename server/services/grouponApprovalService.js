@@ -93,11 +93,14 @@ async function checkGrouponApprovalConflicts(supabase, booking, { excludeBooking
 
   try {
     if (String(booking.booking_type || '') === 'charter') {
-      await availabilityService.assertCharterSlotAvailable({
+      await availabilityService.assertUnifiedCharterSlotAvailable({
         startTime,
         endTime,
         charterType: booking.charter_type || 'bio',
+        charterVariant: booking.charter_seating === 'private' ? 'private' : 'shared',
+        passengerCount: guestCount,
         excludeBookingId: bookingId,
+        bookingSource: 'groupon_approval',
       });
     } else if (booking.boat_id) {
       if (isSharedCharterBooking(booking)) {

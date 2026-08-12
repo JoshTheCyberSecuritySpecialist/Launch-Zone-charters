@@ -46,7 +46,9 @@ function isSharedCharterBooking(row) {
   const seating = normalizeCharterSeating(row.charter_seating);
   if (seating === 'shared') return true;
   if (seating === 'private') return false;
-  return String(row.charter_type || '').trim().toLowerCase() === 'captain_charter' && row.boat_id != null;
+  const charterType = String(row.charter_type || '').trim().toLowerCase();
+  if (charterType === 'bio') return true;
+  return charterType === 'captain_charter' && row.boat_id != null;
 }
 
 function isExclusiveBoatBooking(row) {

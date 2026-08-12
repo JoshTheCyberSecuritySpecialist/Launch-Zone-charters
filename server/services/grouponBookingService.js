@@ -165,6 +165,14 @@ async function createGrouponBooking(supabase, deps, input) {
     throw err;
   }
 
+  let charterInsertFields = null;
+  if (isCharter) {
+    charterInsertFields = await availabilityService.prepareCharterBookingInsertFields({
+      charterType: mapping.charter_type,
+      charterVariant: 'shared',
+    });
+  }
+
   try {
     if (isCharter) {
       if (!availabilityService.isStartTimeAllowed(startTime.toISOString())) {
@@ -172,10 +180,13 @@ async function createGrouponBooking(supabase, deps, input) {
         err.statusCode = 409;
         throw err;
       }
-      await availabilityService.assertCharterSlotAvailable({
+      await availabilityService.assertUnifiedCharterSlotAvailable({
         startTime: startTime.toISOString(),
         endTime: endTime.toISOString(),
         charterType: mapping.charter_type,
+        charterVariant: 'shared',
+        passengerCount: coveredGuestCount,
+        bookingSource: 'groupon',
       });
     } else {
       if (!availabilityService.isStartTimeAllowed(startTime.toISOString())) {
@@ -221,9 +232,10 @@ async function createGrouponBooking(supabase, deps, input) {
 
   const bookingInsert = {
     customer_id: customerRow.id,
-    boat_id: isCharter ? null : boatId,
+    boat_id: isCharter ? charterInsertFields?.boat_id || null : boatId,
     booking_type: isCharter ? 'charter' : 'rental',
     charter_type: isCharter ? mapping.charter_type : null,
+    charter_seating: isCharter ? charterInsertFields?.charter_seating || null : null,
     guest_count: coveredGuestCount,
     total_amount: totals.totalPrice,
     start_time: startTime.toISOString(),
@@ -274,9 +286,14 @@ async function createGrouponBooking(supabase, deps, input) {
     .single();
 
   if (bookingError || !bookingRow) {
-    const err = new Error(bookingError?.message || 'Could not create booking.');
-    err.statusCode = bookingError?.code === '23P01' ? 409 : 500;
-    if (err.statusCode === 409) err.message = 'That departure time is no longer available.';
+    const sharedMsg = String(bookingError?.message || '').match(/shared_charter_capacity_exceeded:(\d+)/i);
+    const err = new Error(
+      sharedMsg
+        ? `This charter only has ${sharedMsg[1]} passenger spot(s) remaining for the selected time.`
+        : bookingError?.message || 'Could not create booking.'
+    );
+    err.statusCode = bookingError?.code === '23P01' || sharedMsg ? 409 : 500;
+    if (err.statusCode === 409 && !sharedMsg) err.message = 'That departure time is no longer available.';
     throw err;
   }
 

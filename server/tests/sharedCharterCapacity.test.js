@@ -30,6 +30,18 @@ function run() {
   assert.strictEqual(isSharedCharterBooking(bookingRow({ charter_seating: 'shared' })), true);
   assert.strictEqual(isSharedCharterBooking(bookingRow({ charter_seating: 'private' })), false);
   assert.strictEqual(isSharedCharterBooking(bookingRow({ booking_type: 'rental' })), false);
+  assert.strictEqual(
+    isSharedCharterBooking(
+      bookingRow({ charter_type: 'bio', charter_seating: null, boat_id: 'boat-1' })
+    ),
+    true
+  );
+  assert.strictEqual(
+    isSharedCharterBooking(
+      bookingRow({ charter_type: 'bio', charter_seating: 'private', boat_id: 'boat-1' })
+    ),
+    false
+  );
 
   const fiveSingles = Array.from({ length: 5 }, (_, i) =>
     bookingRow({ id: String(i + 1), guest_count: 1, start_time: friStart, end_time: friEnd })

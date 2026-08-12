@@ -14,6 +14,8 @@ const {
 } = require('../lib/captainNightSchedule');
 const {
   evaluateSharedCharterCapacity,
+  formatCapacityMessage,
+  normalizeCharterSeating,
 } = require('../lib/sharedCharterCapacity');
 const boatCapacityService = require('./boatCapacityService');
 
@@ -33,9 +35,11 @@ const NON_BIO_LATE_NIGHT_MESSAGE =
   'Late-night times are only available for bioluminescence night tours.';
 
 const SLOT_TAKEN_USER_MESSAGE =
-  'This time slot was just booked. Please select another time.';
+  'This departure is no longer available. Another reservation was made for this time. Please select another time.';
 const SLOT_TOO_SOON_USER_MESSAGE =
   'This departure is too soon. Please choose a later time or call us for help.';
+const DEPARTURE_FULL_MESSAGE =
+  'This departure is now full. Please select another available time.';
 
 const BLOCKING_BOOKING_STATUSES = new Set([
   'hold',
@@ -480,6 +484,101 @@ function isCaptainLedStaffCharter(charterType) {
   return normalizeCharterType(charterType) === 'captain_charter';
 }
 
+function isSharedCharterBookingRequest({
+  charterType = null,
+  charterSeating = null,
+  charterVariant = null,
+  bioPackage = null,
+} = {}) {
+  const seating = normalizeCharterSeating(charterSeating);
+  if (seating === 'private') return false;
+  if (seating === 'shared') return true;
+  const variant = String(charterVariant || '').trim().toLowerCase();
+  if (variant === 'private') return false;
+  if (variant === 'shared') return true;
+  if (bioPackage) return true;
+  return normalizeCharterType(charterType) === 'bio';
+}
+
+function resolveCharterSeatingForInsert(input) {
+  return isSharedCharterBookingRequest(input) ? 'shared' : 'private';
+}
+
+async function resolveCharterBoatId(charterType) {
+  const normalized = normalizeCharterType(charterType);
+  const tripType =
+    normalized === 'bio' || normalized === 'captain_charter' ? 'captain_charter' : 'captain_charter';
+  return boatCapacityService.resolveBoatIdForTripType(supabase, tripType);
+}
+
+async function prepareCharterBookingInsertFields(input) {
+  const boatId = await resolveCharterBoatId(input.charterType);
+  const charter_seating = resolveCharterSeatingForInsert(input);
+  return { boat_id: boatId, charter_seating };
+}
+
+function formatDepartureFullMessage(startIso) {
+  const start = DateTime.fromISO(String(startIso || ''), { zone: 'utc' }).setZone(BUSINESS_TZ);
+  if (!start.isValid) return DEPARTURE_FULL_MESSAGE;
+  return `The ${start.toFormat('h:mm a')} departure is now full. Please select another available time.`;
+}
+
+function charterUnavailableUserMessage(result, startIso = null) {
+  if (result?.reason === 'charter_capacity') {
+    return result.message || formatDepartureFullMessage(startIso);
+  }
+  if (result?.reason === 'invalid_passenger_count') {
+    return result.message;
+  }
+  if (result?.message) return result.message;
+  return SLOT_TAKEN_USER_MESSAGE;
+}
+
+function logBookingConflictDecision(payload) {
+  const safe = {
+    bookingSource: payload.bookingSource || null,
+    requestedDate: payload.requestedDate || null,
+    requestedStart: payload.requestedStart || null,
+    requestedEnd: payload.requestedEnd || null,
+    normalizedStart: payload.normalizedStart || null,
+    normalizedEnd: payload.normalizedEnd || null,
+    businessTimezone: BUSINESS_TZ,
+    boatId: payload.boatId || null,
+    guestCount: payload.guestCount ?? null,
+    existingGuestCount: payload.existingGuestCount ?? null,
+    capacity: payload.capacity ?? null,
+    conflictingBookingIds: payload.conflictingBookingIds || [],
+    decision: payload.decision || null,
+    reason: payload.reason || null,
+    charterType: payload.charterType || null,
+    charterSeating: payload.charterSeating || null,
+    shared: payload.shared ?? null,
+  };
+  console.info('[booking-conflict]', JSON.stringify(safe));
+}
+
+function conflictDecisionPayload(result, slot, input, boatId, shared) {
+  const conflictingBookingIds = [];
+  if (result.conflict?.id) conflictingBookingIds.push(String(result.conflict.id));
+  return {
+    bookingSource: input.bookingSource || null,
+    requestedStart: input.startTime || null,
+    requestedEnd: input.endTime || null,
+    normalizedStart: slot?.startIso || null,
+    normalizedEnd: slot?.endIso || null,
+    boatId: boatId || null,
+    guestCount: input.passengerCount ?? null,
+    existingGuestCount: result.capacity?.used ?? null,
+    capacity: result.capacity?.max ?? null,
+    conflictingBookingIds,
+    decision: result.available ? 'allow' : 'deny',
+    reason: result.reason || null,
+    charterType: input.charterType || null,
+    charterSeating: shared ? 'shared' : 'private',
+    shared,
+  };
+}
+
 function charterStartHoursForType(charterType) {
   return normalizeCharterType(charterType) === 'bio'
     ? BIO_CHARTER_START_HOURS
@@ -599,6 +698,171 @@ async function loadCharterBlockingIntervals(rangeStartIso, rangeEndIso) {
   return toIntervals(charters, 'start_time', 'end_time').concat(externalBlocks);
 }
 
+async function checkUnifiedCharterSlotAvailability({
+  startTime,
+  endTime,
+  charterType = null,
+  charterSeating = null,
+  charterVariant = null,
+  bioPackage = null,
+  passengerCount = 1,
+  excludeBookingId = null,
+  bookingSource = null,
+} = {}) {
+  const slot = parseSlotRange(startTime, endTime);
+  const windowCheck = validateCharterSlotWindow({
+    charterType,
+    startIso: slot.startIso,
+    endIso: slot.endIso,
+  });
+  if (!windowCheck.valid) {
+    const result = {
+      available: false,
+      reason: 'captain_window',
+      conflict: null,
+      message: windowCheck.message,
+      boatId: null,
+      charterSeating: null,
+    };
+    logBookingConflictDecision(
+      conflictDecisionPayload(result, slot, { startTime, endTime, charterType, bookingSource }, null, false)
+    );
+    return result;
+  }
+  if (!isStartTimeAllowed(slot.startIso)) {
+    const result = {
+      available: false,
+      reason: 'lead_time',
+      conflict: null,
+      message: SLOT_TOO_SOON_USER_MESSAGE,
+      boatId: null,
+      charterSeating: null,
+    };
+    logBookingConflictDecision(
+      conflictDecisionPayload(result, slot, { startTime, endTime, charterType, bookingSource }, null, false)
+    );
+    return result;
+  }
+
+  const shared = isSharedCharterBookingRequest({
+    charterType,
+    charterSeating,
+    charterVariant,
+    bioPackage,
+  });
+  const boatId = await resolveCharterBoatId(charterType);
+  const charterSeatingResolved = shared ? 'shared' : 'private';
+
+  if (shared) {
+    if (!boatId) {
+      const result = {
+        available: false,
+        reason: 'no_boat',
+        conflict: null,
+        message: 'Charter boat is not available for this departure. Please call us for help.',
+        boatId: null,
+        charterSeating: charterSeatingResolved,
+      };
+      logBookingConflictDecision(
+        conflictDecisionPayload(
+          result,
+          slot,
+          { startTime, endTime, charterType, passengerCount, bookingSource },
+          null,
+          true
+        )
+      );
+      return result;
+    }
+    const result = await checkSharedCharterSlotAvailability({
+      boatId,
+      startTime: slot.startIso,
+      endTime: slot.endIso,
+      passengerCount,
+      excludeBookingId,
+    });
+    const unified = {
+      ...result,
+      boatId,
+      charterSeating: charterSeatingResolved,
+      message:
+        result.reason === 'charter_capacity'
+          ? formatDepartureFullMessage(slot.startIso)
+          : result.message,
+    };
+    logBookingConflictDecision(
+      conflictDecisionPayload(
+        unified,
+        slot,
+        { startTime, endTime, charterType, passengerCount, bookingSource },
+        boatId,
+        true
+      )
+    );
+    return unified;
+  }
+
+  if (boatId) {
+    const result = await checkBookingSlotAvailability({
+      boatId,
+      startTime: slot.startIso,
+      endTime: slot.endIso,
+      excludeBookingId,
+    });
+    const unified = {
+      ...result,
+      boatId,
+      charterSeating: charterSeatingResolved,
+      message: result.available ? null : SLOT_TAKEN_USER_MESSAGE,
+    };
+    logBookingConflictDecision(
+      conflictDecisionPayload(
+        unified,
+        slot,
+        { startTime, endTime, charterType, passengerCount, bookingSource },
+        boatId,
+        false
+      )
+    );
+    return unified;
+  }
+
+  const result = await checkCharterSlotAvailability({
+    startTime: slot.startIso,
+    endTime: slot.endIso,
+    charterType,
+    excludeBookingId,
+  });
+  const unified = {
+    ...result,
+    boatId: null,
+    charterSeating: charterSeatingResolved,
+    message: result.available ? null : SLOT_TAKEN_USER_MESSAGE,
+  };
+  logBookingConflictDecision(
+    conflictDecisionPayload(
+      unified,
+      slot,
+      { startTime, endTime, charterType, passengerCount, bookingSource },
+      null,
+      false
+    )
+  );
+  return unified;
+}
+
+async function assertUnifiedCharterSlotAvailable(input) {
+  const result = await checkUnifiedCharterSlotAvailability(input);
+  if (result.available) return result;
+
+  const err = new Error(charterUnavailableUserMessage(result, input?.startTime));
+  err.statusCode =
+    result.reason === 'captain_window' || result.reason === 'invalid_passenger_count' ? 400 : 409;
+  err.code = result.reason || 'slot_unavailable';
+  err.availability = result;
+  throw err;
+}
+
 async function checkCharterSlotAvailability({
   startTime,
   endTime,
@@ -680,7 +944,7 @@ async function assertCharterSlotAvailable(input) {
   throw err;
 }
 
-async function listCharterSlotsForDay(dateStr, charterType) {
+async function listCharterSlotsForDay(dateStr, charterType, options = {}) {
   const day = parseDateOnlyInZone(dateStr, BUSINESS_TZ);
   if (!day) return [];
 
@@ -688,9 +952,20 @@ async function listCharterSlotsForDay(dateStr, charterType) {
   const durMs = duration * 60 * 60 * 1000;
   const rangeStartIso = day.startOf('day').toUTC().toISO();
   const rangeEndIso = day.plus({ days: 1 }).toUTC().toISO();
-  const intervals = await loadCharterBlockingIntervals(rangeStartIso, rangeEndIso);
+  const normalizedType = normalizeCharterType(charterType);
+  const sharedListing = isSharedCharterBookingRequest({
+    charterType: normalizedType,
+    charterVariant: options.charterVariant,
+    bioPackage: options.bioPackage,
+  });
+  const boatId = sharedListing ? await resolveCharterBoatId(charterType) : null;
+  const intervals =
+    sharedListing && boatId
+      ? await loadCharterExternalBlockingIntervals(rangeStartIso, rangeEndIso)
+      : await loadCharterBlockingIntervals(rangeStartIso, rangeEndIso);
   const starts = enumerateCharterStartsForDay(day, charterType);
   const minStartMs = minBookableStartMs();
+  const minGuests = Math.max(1, Number(options.passengerCount || options.minGuests || 1) || 1);
   const out = [];
 
   for (const startDt of starts) {
@@ -704,13 +979,33 @@ async function listCharterSlotsForDay(dateStr, charterType) {
       endIso: endDt.toUTC().toISO(),
     });
     if (!windowCheck.valid) continue;
-    if (!slotConflicts(startMs, endMs, intervals)) {
+
+    let available = false;
+    let capacity = null;
+    if (sharedListing && boatId) {
+      const availability = await checkSharedCharterSlotAvailability({
+        boatId,
+        startTime: startDt.toUTC().toISO(),
+        endTime: endDt.toUTC().toISO(),
+        passengerCount: minGuests,
+      });
+      available = availability.available;
+      capacity = availability.capacity || null;
+      if (available && slotConflicts(startMs, endMs, intervals)) {
+        available = false;
+      }
+    } else if (!slotConflicts(startMs, endMs, intervals)) {
+      available = true;
+    }
+
+    if (available) {
       out.push({
         start: new Date(startMs).toISOString(),
         end: endDt.toUTC().toISO(),
         label: startDt.setZone(BUSINESS_TZ).toFormat('h:mm a'),
         startHHMM: startDt.setZone(BUSINESS_TZ).toFormat('HH:mm'),
         available: true,
+        capacity,
       });
     }
   }
@@ -927,19 +1222,28 @@ module.exports = {
   BLOCKING_BOOKING_STATUSES,
   SLOT_TAKEN_USER_MESSAGE,
   SLOT_TOO_SOON_USER_MESSAGE,
+  DEPARTURE_FULL_MESSAGE,
   defaultFromTo,
   normalizeSlotRows,
   resolveRentalBoatForLocation,
+  resolveCharterBoatId,
+  resolveCharterSeatingForInsert,
+  prepareCharterBookingInsertFields,
+  isSharedCharterBookingRequest,
   listRentalSlotsForLocation,
   rentalTripTypeForLocation,
   assertCharterSlotAvailable,
+  assertUnifiedCharterSlotAvailable,
   assertCharterSlotWindow,
   assertBookingSlotAvailable,
   checkCharterSlotAvailability,
+  checkUnifiedCharterSlotAvailability,
   checkBookingSlotAvailability,
   checkStaffBookingAvailability,
   checkSharedCharterSlotAvailability,
   assertSharedCharterSlotAvailable,
+  charterUnavailableUserMessage,
+  logBookingConflictDecision,
   isStartTimeAllowed,
   listDatesAvailability,
   listSlotsForDay,

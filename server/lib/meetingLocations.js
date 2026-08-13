@@ -9,6 +9,7 @@ const TITUSVILLE_MEETING_LOCATION = {
   city: 'Titusville',
   state: 'FL',
   postalCode: '32796',
+  meetingInstructions: 'Meet us by the docks/boat ramp where the boats are launched.',
 };
 
 const PORT_ORANGE_MEETING_LOCATION = {
@@ -75,9 +76,6 @@ function resolveMeetingLocation(booking) {
   const bookingType = normalizeLocationKey(booking.booking_type);
   if (bookingType === 'charter') {
     if (isBioOrNightCharter(booking) || isTitusvilleCharterProduct(booking) || isTitusvilleArea(booking)) {
-      return { ...TITUSVILLE_MEETING_LOCATION };
-    }
-    if (isTitusvilleArea(booking)) {
       return { ...TITUSVILLE_MEETING_LOCATION };
     }
     return { ...PORT_ORANGE_MEETING_LOCATION };

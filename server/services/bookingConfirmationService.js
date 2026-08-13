@@ -147,6 +147,7 @@ function buildConfirmationContent({ booking, customer, boat, source = 'server' }
     meeting?.address1
       ? `${meeting.city}, ${meeting.state} ${meeting.postalCode}`
       : meeting?.directionsNote || `${meeting?.city || ''}, ${meeting?.state || ''}`.trim(),
+    meeting?.meetingInstructions || null,
     mapsUrl ? `Get Directions: ${mapsUrl}` : null,
     '',
     'Arrival',
@@ -207,6 +208,11 @@ function buildConfirmationContent({ booking, customer, boat, source = 'server' }
             <p style="margin:0 0 12px;font-size:13px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:#0f766e;">Meeting Point</p>
             <p style="margin:0 0 8px;font-size:18px;line-height:1.4;font-weight:700;color:#0f172a;">${escapeHtml(meeting?.name || 'Launch Zone Charters')}</p>
             ${meetingAddressHtml}
+            ${
+              meeting?.meetingInstructions
+                ? `<p style="margin:12px 0 0;font-size:15px;line-height:1.6;color:#334155;">${escapeHtml(meeting.meetingInstructions)}</p>`
+                : ''
+            }
             ${directionsButton}
           </div>
           <div style="margin-bottom:20px;">

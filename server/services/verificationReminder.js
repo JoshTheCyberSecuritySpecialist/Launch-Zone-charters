@@ -19,6 +19,30 @@ function publicAppBase() {
     .replace(/\/$/, '');
 }
 
+function bookingRequirementsComplete(booking) {
+  const waiverOk = Boolean(booking.waiver_signed);
+  const licenseOk = String(booking.license_status || '').trim().toLowerCase() === 'verified';
+  const insuranceOk =
+    Boolean(booking.captain_included) ||
+    String(booking.insurance_status || '').trim().toLowerCase() === 'verified';
+  return waiverOk && licenseOk && insuranceOk;
+}
+
+function missingRequirementLabels(booking) {
+  const missing = [];
+  if (!booking.waiver_signed) missing.push('waiver');
+  if (String(booking.booking_type || '') === 'rental' && !booking.captain_included) {
+    if (String(booking.license_status || '').trim().toLowerCase() !== 'verified') {
+      missing.push("driver's license / ID");
+    }
+    const insuranceOk = ['verified', 'submitted'].includes(
+      String(booking.insurance_status || '').trim().toLowerCase()
+    );
+    if (!insuranceOk) missing.push('Buoy rental insurance');
+  }
+  return missing;
+}
+
 /**
  * @param {object} opts
  * @param {import('@supabase/supabase-js').SupabaseClient} opts.supabaseAdmin
@@ -45,7 +69,9 @@ async function maybeSendVerificationReminder(opts) {
 
   const { data: booking, error: fetchErr } = await supabaseAdmin
     .from('bookings')
-    .select('id, status, verification_reminder_sent_at, customer_id')
+    .select(
+      'id, status, verification_reminder_sent_at, customer_id, booking_type, captain_included, waiver_signed, license_status, insurance_status, payment_status'
+    )
     .eq('id', id)
     .maybeSingle();
 
@@ -73,11 +99,25 @@ async function maybeSendVerificationReminder(opts) {
     return { sent: false, reason: 'email_mismatch' };
   }
 
+  const paymentStatus = String(booking.payment_status || '').trim().toLowerCase();
+  if (!['paid', 'deposit_paid'].includes(paymentStatus)) {
+    return { sent: false, reason: 'unpaid' };
+  }
+
   if (booking.status !== 'pending_verification') {
     return { sent: false, reason: 'not_pending_verification' };
   }
   if (booking.verification_reminder_sent_at) {
     return { sent: false, reason: 'already_sent' };
+  }
+
+  if (bookingRequirementsComplete(booking)) {
+    return { sent: false, reason: 'requirements_complete' };
+  }
+
+  const missing = missingRequirementLabels(booking);
+  if (missing.length === 0) {
+    return { sent: false, reason: 'nothing_missing' };
   }
 
   const base = publicAppBase();
@@ -86,26 +126,19 @@ async function maybeSendVerificationReminder(opts) {
     return { sent: false, reason: 'no_public_base' };
   }
   const verifyUrl = `${base}/waivers-insurance?bookingId=${encodeURIComponent(id)}`;
-  const subject = 'Complete Your Pre-Trip Requirements - Launch Zone Charters';
+  const missingText = missing.join(', ');
+  const subject = 'Complete your pre-trip requirements — Launch Zone Charters';
 
-  const textBody = `You're almost set!
+  const textBody = `Your Launch Zone Charters reservation is paid and saved.
 
-Please complete your pre-trip requirements:
-- Waiver
-- License / ID
-- Buoy insurance (rentals)
+Please complete before your trip: ${missingText}.
 
 Finish here:
 ${verifyUrl}`;
 
   const htmlBody = `
-    <p>You're almost set!</p>
-    <p><strong>Please complete your pre-trip requirements:</strong></p>
-    <ul>
-      <li>Waiver</li>
-      <li>License / ID</li>
-      <li>Buoy insurance (rentals)</li>
-    </ul>
+    <p>Your Launch Zone Charters reservation is <strong>paid and saved</strong>.</p>
+    <p>Please complete before your trip: <strong>${escapeHtml(missingText)}</strong>.</p>
     <p><a href="${escapeHtml(verifyUrl)}">Open Waivers &amp; Insurance</a></p>
     <p>If you have questions, call <a href="tel:803-542-1761">803-542-1761</a>.</p>
   `;
@@ -163,4 +196,9 @@ ${verifyUrl}`;
   }
 }
 
-module.exports = { maybeSendVerificationReminder, publicAppBase };
+module.exports = {
+  bookingRequirementsComplete,
+  maybeSendVerificationReminder,
+  missingRequirementLabels,
+  publicAppBase,
+};

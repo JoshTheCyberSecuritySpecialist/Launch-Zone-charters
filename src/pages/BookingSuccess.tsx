@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { CheckCircle, ExternalLink, Hash } from 'lucide-react';
+import { CheckCircle, ExternalLink, Hash, MapPin } from 'lucide-react';
 import BookingFlowStepIndicator from '../components/BookingFlowStepIndicator';
 import {
   PONTOON_INSURANCE,
@@ -15,12 +15,40 @@ interface BookingSuccessProps {
   onNavigate: (page: string) => void;
 }
 
+interface ConfirmationSummary {
+  bookingId: string;
+  bookingType: string | null;
+  charterType: string | null;
+  status: string | null;
+  paymentStatus: string | null;
+  waiverSigned: boolean;
+  confirmationEmailSent: boolean;
+  customerEmail: string | null;
+  dateLabel: string;
+  timeRange: string;
+  guests: number;
+  experience: string;
+  boatName: string | null;
+  meeting: {
+    name: string;
+    address1: string | null;
+    city: string;
+    state: string;
+    postalCode: string | null;
+    fullAddress: string;
+    instructions: string | null;
+    directionsNote: string | null;
+    mapsUrl: string | null;
+  } | null;
+}
+
 export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const sessionId = (searchParams.get('session_id') || '').trim();
   const bookingIdParam = (searchParams.get('bookingId') || '').trim();
   const [bookingId, setBookingId] = useState(bookingIdParam);
+  const [summary, setSummary] = useState<ConfirmationSummary | null>(null);
   const [insuranceStatus, setInsuranceStatus] = useState<string | null>(null);
   const [bookingStatus, setBookingStatus] = useState<string | null>(null);
   const [insuranceConfig, setInsuranceConfig] = useState<BuoyInsuranceConfig>(PONTOON_INSURANCE);
@@ -30,6 +58,15 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
   const finalizedRef = useRef(false);
 
   const activeBookingId = bookingId || bookingIdParam;
+
+  const loadConfirmationSummary = async (api: string, id: string) => {
+    const res = await fetch(`${api}/api/public/booking-confirmation-summary?bookingId=${encodeURIComponent(id)}`);
+    const payload = (await res.json().catch(() => ({}))) as ConfirmationSummary & { error?: string };
+    if (!res.ok) return null;
+    setSummary(payload);
+    if (payload.status) setBookingStatus(payload.status);
+    return payload;
+  };
 
   useEffect(() => {
     if (!env.apiUrlConfigured || !env.apiUrl) {
@@ -49,6 +86,7 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
       if (!statusRes.ok) return false;
       if (statusPayload.bookingId) {
         setBookingId(statusPayload.bookingId);
+        await loadConfirmationSummary(api, statusPayload.bookingId);
         setStatusMessage('Payment received. Your reservation is confirmed.');
         return true;
       }
@@ -92,7 +130,7 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
           }
 
           setBookingId(payload.bookingId);
-          setStatusMessage('Payment confirmed. Your confirmation email is being sent by our booking system.');
+          await loadConfirmationSummary(api, payload.bookingId);
 
           try {
             const insRes = await fetch(
@@ -137,6 +175,7 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
 
     void (async () => {
       try {
+        await loadConfirmationSummary(api, bookingIdParam);
         const res = await fetch(
           `${api}/api/public/booking-insurance-status?bookingId=${encodeURIComponent(bookingIdParam)}`
         );
@@ -145,9 +184,7 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
           status?: string;
           error?: string;
         };
-        if (!res.ok) {
-          setInsuranceStatus(null);
-        } else {
+        if (res.ok) {
           if (payload.insurance_status) setInsuranceStatus(payload.insurance_status);
           if (payload.status) setBookingStatus(payload.status);
         }
@@ -201,8 +238,11 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
     [navigate, activeBookingId]
   );
 
-  const showInsuranceNudge = insuranceStatus !== null && insuranceStatus !== 'verified';
+  const isCharter = summary?.bookingType === 'charter';
+  const showInsuranceNudge = !isCharter && insuranceStatus !== null && insuranceStatus !== 'verified';
   const showReadyForDeparture = bookingStatus === 'ready_for_departure';
+  const meeting = summary?.meeting;
+  const emailForDisplay = summary?.customerEmail || null;
 
   const shell = (inner: ReactNode) => (
     <div className="relative min-h-screen px-4 py-16">
@@ -259,7 +299,7 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
             <span aria-hidden>🚤</span> Ready for departure
           </p>
           <p className="mt-1 text-xs text-emerald-100/90 md:text-sm">
-            Your booking is approved and cleared for pickup. See your confirmation email for ramp details.
+            Your booking is approved and cleared for pickup.
           </p>
         </div>
       ) : null}
@@ -283,15 +323,43 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
           <CheckCircle className="h-8 w-8 text-emerald-300" aria-hidden />
         </div>
         <h1 className="font-display text-2xl font-bold uppercase tracking-[0.1em] text-white md:text-3xl">
-          Deposit received
+          {isCharter ? "You're booked!" : 'Deposit received'}
         </h1>
         <p className="mt-3 text-sm leading-relaxed text-slate-300 md:text-base">
-          Your booking is submitted and pending approval. We&apos;ll review your reservation and documents
-          shortly.
+          {isCharter
+            ? 'Your charter reservation is confirmed. Save the meeting location below — you do not need to wait for email to know where to meet us.'
+            : 'Your booking is submitted. Complete rental insurance below before your trip.'}
         </p>
+        {summary?.confirmationEmailSent && emailForDisplay ? (
+          <p className="mt-3 text-sm text-emerald-100">
+            We sent your booking confirmation and trip details to{' '}
+            <span className="font-semibold text-white">{emailForDisplay}</span>.
+          </p>
+        ) : emailForDisplay ? (
+          <p className="mt-3 text-sm text-slate-400">
+            Your confirmation email to {emailForDisplay} is being processed. Trip details are shown below.
+          </p>
+        ) : null}
         {statusMessage ? <p className="mt-3 text-sm font-semibold text-emerald-100">{statusMessage}</p> : null}
       </div>
-      <div className="mt-8 rounded-[var(--lz-radius)] border border-white/10 bg-slate-950/50 p-4 text-left">
+
+      {summary ? (
+        <div className="mt-8 rounded-[var(--lz-radius)] border border-white/10 bg-slate-950/50 p-4 text-left">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Trip details</p>
+          <p className="mt-2 text-lg font-bold text-white">{summary.dateLabel}</p>
+          <p className="mt-1 text-base font-semibold text-cyan-200">{summary.timeRange}</p>
+          <p className="mt-3 text-sm text-slate-300">
+            {summary.experience} · {summary.guests} guest{summary.guests === 1 ? '' : 's'}
+          </p>
+          {summary.waiverSigned ? (
+            <p className="mt-2 text-sm text-emerald-200">Waiver: complete</p>
+          ) : (
+            <p className="mt-2 text-sm text-amber-200">Waiver: still needed before arrival</p>
+          )}
+        </div>
+      ) : null}
+
+      <div className="mt-6 rounded-[var(--lz-radius)] border border-white/10 bg-slate-950/50 p-4 text-left">
         <div className="flex items-start gap-3">
           <Hash className="mt-0.5 h-5 w-5 shrink-0 text-cyan-400/80" aria-hidden />
           <div>
@@ -300,6 +368,49 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
           </div>
         </div>
       </div>
+
+      {meeting ? (
+        <div className="mt-8 rounded-[var(--lz-radius)] border border-cyan-400/25 bg-cyan-950/20 p-5 text-left">
+          <div className="flex items-start gap-3">
+            <MapPin className="mt-0.5 h-5 w-5 shrink-0 text-cyan-300" aria-hidden />
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-semibold uppercase tracking-wide text-cyan-200/80">Meeting location</p>
+              <p className="mt-2 text-lg font-bold text-white">{meeting.name}</p>
+              {meeting.address1 ? (
+                <>
+                  <p className="mt-1 text-sm text-slate-200">{meeting.address1}</p>
+                  <p className="text-sm text-slate-300">
+                    {meeting.city}, {meeting.state} {meeting.postalCode}
+                  </p>
+                </>
+              ) : (
+                <p className="mt-1 text-sm text-slate-300">
+                  {meeting.directionsNote || 'Contact us for exact ramp details before departure.'}
+                </p>
+              )}
+              {meeting.instructions ? (
+                <p className="mt-3 text-sm leading-relaxed text-slate-300">{meeting.instructions}</p>
+              ) : null}
+              {meeting.mapsUrl ? (
+                <div className="mt-4">
+                  <a
+                    href={meeting.mapsUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={wrapSyncClick('booking_success_get_directions', () => {
+                      /* href */
+                    })}
+                    className="lz-btn-primary inline-flex items-center justify-center gap-2 text-sm !normal-case !tracking-wide"
+                  >
+                    Get Directions
+                    <ExternalLink className="h-4 w-4 shrink-0" aria-hidden />
+                  </a>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {showInsuranceNudge ? (
         <div className="mt-8 rounded-[var(--lz-radius)] border border-white/15 bg-white p-4 md:p-5">
@@ -333,47 +444,52 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
         </div>
       ) : null}
 
-      <div className="mt-8 border-t border-white/10 pt-8 text-left">
-        <h2 className="text-sm font-bold uppercase tracking-widest text-cyan-200/90">
-          Step 4 — Complete your booking
-        </h2>
-        <p className="mt-2 text-sm text-slate-400">
-          You must obtain short-term rental insurance before your trip. This is required for approval.
-        </p>
-        <p className="mt-2 text-xs font-semibold text-cyan-100/90">{insuranceConfig.label}</p>
-        <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+      {!isCharter ? (
+        <div className="mt-8 border-t border-white/10 pt-8 text-left">
+          <h2 className="text-sm font-bold uppercase tracking-widest text-cyan-200/90">
+            Step 4 — Complete your booking
+          </h2>
+          <p className="mt-2 text-sm text-slate-400">
+            You must obtain short-term rental insurance before your trip. This is required for approval.
+          </p>
+          <p className="mt-2 text-xs font-semibold text-cyan-100/90">{insuranceConfig.label}</p>
+          <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+            <button
+              type="button"
+              onClick={goWaiversInsurance}
+              className="lz-btn-primary inline-flex justify-center text-center text-sm !normal-case !tracking-wide"
+            >
+              Waivers &amp; insurance
+            </button>
+            <a
+              href={insuranceConfig.checkoutUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={wrapSyncClick('booking_success_external_buoy', () => {
+                /* navigation via href */
+              })}
+              className="inline-flex items-center justify-center gap-2 rounded-[var(--lz-radius)] border border-white/15 bg-slate-950/60 px-4 py-2.5 text-sm font-semibold text-white transition hover:border-cyan-400/30 hover:bg-slate-900/80"
+            >
+              Get Insurance
+              <ExternalLink className="h-4 w-4 shrink-0" aria-hidden />
+            </a>
+          </div>
+        </div>
+      ) : !summary?.waiverSigned ? (
+        <div className="mt-8 border-t border-white/10 pt-8 text-left">
+          <h2 className="text-sm font-bold uppercase tracking-widest text-cyan-200/90">Waiver still needed</h2>
+          <p className="mt-2 text-sm text-slate-400">
+            Your payment is confirmed. Please complete your waiver before arrival.
+          </p>
           <button
             type="button"
             onClick={goWaiversInsurance}
-            className="lz-btn-primary inline-flex justify-center text-center text-sm !normal-case !tracking-wide"
+            className="lz-btn-primary mt-5 inline-flex justify-center text-center text-sm !normal-case !tracking-wide"
           >
-            Waivers &amp; insurance
-          </button>
-          <a
-            href={insuranceConfig.checkoutUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={wrapSyncClick('booking_success_external_buoy', () => {
-              /* navigation via href */
-            })}
-            className="inline-flex items-center justify-center gap-2 rounded-[var(--lz-radius)] border border-white/15 bg-slate-950/60 px-4 py-2.5 text-sm font-semibold text-white transition hover:border-cyan-400/30 hover:bg-slate-900/80"
-          >
-            Get Insurance
-            <ExternalLink className="h-4 w-4 shrink-0" aria-hidden />
-          </a>
-          <button
-            type="button"
-            onClick={goWaiversInsurance}
-            className="lz-btn-primary inline-flex justify-center text-center text-sm !normal-case !tracking-wide"
-          >
-            Upload insurance proof
+            Complete waiver
           </button>
         </div>
-        <p className="mt-3 text-xs text-slate-500">
-          Continue on Waivers &amp; Insurance to confirm your phone, sign your waiver, and upload your
-          documents — same place as your confirmation email link.
-        </p>
-      </div>
+      ) : null}
 
       <div className="mt-8 flex justify-center">
         <button

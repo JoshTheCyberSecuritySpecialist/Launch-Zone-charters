@@ -46,6 +46,7 @@ const { getLaunchSchedulePreview } = require('./services/rocketScheduleService')
 const { getWeeklyForecast } = require('./services/weeklyForecastService');
 const { getMarineConditions } = require('./services/marineConditionsService');
 const availabilityService = require('./services/availabilityService');
+const { buildPublicConfirmationSummary, resolvePaidBookingStatus } = require('./lib/bookingLifecycle');
 const captainCharterAvailability = require('./services/captainCharterAvailability');
 const charterCapacity = require('./charterCapacity');
 const {
@@ -810,6 +811,37 @@ async function resolveCustomerEmail(customerId) {
  * Shared finalization path used by both webhook and success-page API.
  * Idempotent: if a booking already exists for this Stripe session, returns existing booking.
  */
+async function ensureBookingConfirmationSent(bookingId, email, source, session = null) {
+  const { data: row } = await supabase
+    .from('bookings')
+    .select('booking_confirmation_sent_at')
+    .eq('id', bookingId)
+    .maybeSingle();
+  if (row?.booking_confirmation_sent_at) return;
+  await sendBookingConfirmationInternal({
+    bookingId,
+    email,
+    source,
+  }).catch(async (emailErr) => {
+    console.error('[finalizeBookingFromSession] confirmation email (idempotent):', emailErr?.message || emailErr);
+    if (session) {
+      await bookingReliability.enqueueRecovery(supabase, {
+        ...bookingReliability.recoveryPayloadFromSession(session),
+        booking_id: bookingId,
+        customer_email: email,
+        reason: 'email_failed',
+        error: emailErr?.message || 'Booking confirmation email failed',
+      });
+    }
+  });
+}
+
+async function finalizeAlreadyFinalizedBooking(bookingId, customerId, options = {}) {
+  const email = await resolveCustomerEmail(customerId);
+  await ensureBookingConfirmationSent(bookingId, email, options.source || 'finalize_idempotent', options.session || null);
+  return { bookingId, email, alreadyFinalized: true };
+}
+
 async function finalizeBookingFromSession(sessionId, options = {}) {
   if (!supabaseConfigured) {
     const err = new Error('Server not configured');
@@ -854,11 +886,10 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
     )
     .maybeSingle();
   if (existingBySession?.id) {
-    return {
-      bookingId: existingBySession.id,
-      email: await resolveCustomerEmail(existingBySession.customer_id),
-      alreadyFinalized: true,
-    };
+    return finalizeAlreadyFinalizedBooking(existingBySession.id, existingBySession.customer_id, {
+      source: options.source || 'finalize_idempotent',
+      session,
+    });
   }
 
   if (paymentIntentId) {
@@ -868,11 +899,10 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
       .or(`stripe_payment_id.eq.${paymentIntentId},payment_intent_id.eq.${paymentIntentId}`)
       .maybeSingle();
     if (existingByPi?.id) {
-      return {
-        bookingId: existingByPi.id,
-        email: await resolveCustomerEmail(existingByPi.customer_id),
-        alreadyFinalized: true,
-      };
+      return finalizeAlreadyFinalizedBooking(existingByPi.id, existingByPi.customer_id, {
+        source: options.source || 'finalize_idempotent',
+        session,
+      });
     }
   }
 
@@ -1108,6 +1138,9 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
       })
     : null;
 
+  const licenseStatusForInsert = isCharterBooking ? 'verified' : booking.license_status || 'pending';
+  const insuranceStatusForInsert = isCharterBooking ? 'verified' : booking.insurance_status || 'pending';
+
   const bookingInsert = {
     customer_id: customerRow.id,
     boat_id: isCharterBooking ? charterInsertFields?.boat_id || null : String(booking.boat_id),
@@ -1132,11 +1165,18 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
     deposit_paid: paidDeposit,
     balance_due: roundMoney(expected.totalPrice - paidDeposit),
     payment_status: paymentStatus,
-    status: 'pending_verification',
+    status: resolvePaidBookingStatus({
+      isCharterBooking,
+      waiverAccepted,
+      waiverSignature,
+      captainIncluded: Boolean(booking.captain_included),
+      licenseStatus: licenseStatusForInsert,
+      insuranceStatus: insuranceStatusForInsert,
+    }),
     is_night_tour: Boolean(booking.is_night_tour),
     is_rocket_tour: Boolean(booking.is_rocket_tour),
-    license_status: isCharterBooking ? 'verified' : booking.license_status || 'pending',
-    insurance_status: isCharterBooking ? 'verified' : booking.insurance_status || 'pending',
+    license_status: licenseStatusForInsert,
+    insurance_status: insuranceStatusForInsert,
     waiver_signed: waiverAccepted && waiverSignature.length > 0,
     waiver_signed_at: legalAcceptedAt,
     terms_accepted: true,
@@ -1228,11 +1268,10 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
           )
           .maybeSingle();
         if (existing?.id) {
-          return {
-            bookingId: existing.id,
-            email: await resolveCustomerEmail(existing.customer_id),
-            alreadyFinalized: true,
-          };
+          return finalizeAlreadyFinalizedBooking(existing.id, existing.customer_id, {
+            source: options.source || 'finalize_idempotent',
+            session,
+          });
         }
       }
       if (isOverlapConstraintError(updErr)) {
@@ -1295,11 +1334,10 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
           )
           .maybeSingle();
         if (existing?.id) {
-          return {
-            bookingId: existing.id,
-            email: await resolveCustomerEmail(existing.customer_id),
-            alreadyFinalized: true,
-          };
+          return finalizeAlreadyFinalizedBooking(existing.id, existing.customer_id, {
+            source: options.source || 'finalize_idempotent',
+            session,
+          });
         }
       }
       if (isOverlapConstraintError(bookingError)) {
@@ -8534,6 +8572,23 @@ app.get('/api/public/booking-insurance-status', async (req, res) => {
   } catch (err) {
     console.error('[booking-insurance-status]', err);
     return res.status(500).json({ error: 'Failed' });
+  }
+});
+
+/** Public read: post-payment confirmation summary for success page (UUID is the capability token). */
+app.get('/api/public/booking-confirmation-summary', async (req, res) => {
+  try {
+    if (!supabaseConfigured) return res.status(503).json({ error: 'Server not configured' });
+    const bookingId = String(req.query.bookingId || '').trim();
+    if (!isBookingUuidParam(bookingId)) return res.status(400).json({ error: 'Invalid booking id' });
+    const { booking, customer, boat } = await bookingConfirmationService.loadBookingForConfirmation(
+      supabase,
+      bookingId
+    );
+    return res.json(buildPublicConfirmationSummary({ booking, customer, boat }));
+  } catch (err) {
+    console.error('[booking-confirmation-summary]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Failed' });
   }
 });
 

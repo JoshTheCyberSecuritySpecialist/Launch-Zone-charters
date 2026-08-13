@@ -63,6 +63,7 @@ function run() {
   assert.ok(content.textBody.includes('Parrish Park Boat Ramp'), content.textBody);
   assert.ok(content.textBody.includes('1 A. Max Brewer Memorial Pkwy'), content.textBody);
   assert.ok(content.textBody.includes('Titusville, FL 32796'), content.textBody);
+  assert.ok(content.textBody.includes('Meet us by the docks/boat ramp'), content.textBody);
   assert.ok(content.textBody.includes('8:00 PM'), content.textBody);
   assert.ok(content.textBody.includes('Guests: 2'), content.textBody);
   assert.ok(content.htmlBody.includes('Get Directions'), content.htmlBody);

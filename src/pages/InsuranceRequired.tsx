@@ -30,7 +30,6 @@ export default function InsuranceRequired({ onNavigate }: InsuranceRequiredProps
   /** True only while finalizing a paid Stripe session (session_id in URL). */
   const [loading, setLoading] = useState(() => Boolean(sessionId));
   const finalizedRef = useRef(false);
-  const emailSentRef = useRef(false);
 
   const hasBookingRef = Boolean(bookingId);
 
@@ -72,19 +71,6 @@ export default function InsuranceRequired({ onNavigate }: InsuranceRequiredProps
         setBookingId(payload.bookingId);
         if (payload.email) setCustomerEmail(payload.email);
         setLoading(false);
-
-        if (!emailSentRef.current) {
-          emailSentRef.current = true;
-          void fetch(`${api}/api/send-booking-confirmation`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ bookingId: payload.bookingId, email: payload.email || '' }),
-          }).catch((err) => {
-            if (import.meta.env.DEV) {
-              console.warn('[send-booking-confirmation]', err);
-            }
-          });
-        }
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Could not finalize booking.');
         setLoading(false);

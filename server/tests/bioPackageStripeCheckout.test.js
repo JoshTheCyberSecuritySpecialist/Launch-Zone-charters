@@ -17,9 +17,14 @@ function stripeCentsFromPackageId(id) {
 }
 
 function run() {
-  assert.strictEqual(stripeCentsFromPackageId('bio_solo'), 4000);
-  assert.strictEqual(stripeCentsFromPackageId('bio_two'), 7800);
-  assert.strictEqual(stripeCentsFromPackageId('bio_four'), 15000);
+  assert.strictEqual(stripeCentsFromPackageId('bio_solo'), 5850);
+  assert.strictEqual(stripeCentsFromPackageId('bio_two'), 12000);
+  assert.strictEqual(stripeCentsFromPackageId('bio_four'), 24000);
+
+  const twoPkg = getBioluminescencePackage('bio_two');
+  const twoTotals = bioPackageExpectedTotals(twoPkg);
+  assert.strictEqual(Math.round(twoTotals.amountDueToday * 100), 12000);
+  assert.strictEqual(twoPkg.priceCents, 12000);
 
   const solo = getBioluminescencePackage('bio_solo');
   assert.match(stripeLineItemNameForBioPackage(solo), /1 Guest/);

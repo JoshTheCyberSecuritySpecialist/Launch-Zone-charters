@@ -4,6 +4,7 @@ import { Headphones, ListChecks, MessageSquare, ClipboardList } from 'lucide-rea
 import {
   BIO_PACKAGE_DISPLAY,
   bioBookingUrl,
+  formatBioPackagePriceUsd,
 } from '../../lib/bioluminescencePackages';
 import { trackDirectBookingEvent } from '../../lib/directBookingMarketing';
 import { wrapRouterNavigate } from '../../lib/clickPerf';
@@ -98,7 +99,7 @@ export default function WhyBookDirectSection() {
 
         <div className="lz-card-glass mx-auto mt-10 max-w-3xl border border-cyan-400/20 p-6 md:p-8">
           <p className="text-center font-display text-lg font-bold text-white md:text-xl">
-            Bioluminescence tours starting at ${startingAtUsd.toFixed(0)} when booked directly
+            Bioluminescence tours starting at {formatBioPackagePriceUsd(startingAtUsd)} when booked directly
           </p>
           <ul className="mt-6 space-y-3">
             {BIO_PACKAGE_DISPLAY.map((pkg) => (
@@ -108,8 +109,9 @@ export default function WhyBookDirectSection() {
               >
                 <span className="text-sm font-semibold text-slate-100">{pkg.cardTitle}</span>
                 <span className="text-sm text-slate-300">
-                  {pkg.guestCount} guest{pkg.guestCount === 1 ? '' : 's'} · $
-                  {pkg.directPriceUsd.toFixed(2)} total
+                  {pkg.guestCount === 1 ? '1 Person' : `${pkg.guestCount} People`} ·{' '}
+                  {formatBioPackagePriceUsd(pkg.directPriceUsd)} total
+                  {pkg.guestCount > 1 ? ` · ${formatBioPackagePriceUsd(pkg.perGuestUsd)}/person` : ''}
                 </span>
               </li>
             ))}

@@ -11,7 +11,7 @@ import {
 } from '../content/securityDeposit';
 import { supabase } from '../lib/supabase';
 import { wrapNavigateClick, wrapSyncClick } from '../lib/clickPerf';
-import { bioBookingUrl } from '../lib/bioluminescencePackages';
+import { bioBookingUrl, BIO_PACKAGE_DISPLAY, formatBioPackagePriceUsd } from '../lib/bioluminescencePackages';
 
 interface PricingProps {
   onNavigate: (page: string) => void;
@@ -177,29 +177,40 @@ export default function Pricing({ onNavigate }: PricingProps) {
               <h3 className="text-xl font-bold text-white">Bioluminescence package pricing</h3>
               <p className="mt-2 text-sm text-slate-400">Captain and fuel included · night tour on the Indian River Lagoon</p>
               <ul className="mt-4 space-y-3 text-sm text-slate-200">
-                <li className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3">
-                  <span>1 guest</span>
-                  <span className="text-lg font-bold text-lz-cta">$40</span>
-                </li>
-                <li className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3">
-                  <span>2 guests</span>
-                  <span className="text-lg font-bold text-lz-cta">$78</span>
-                </li>
-                <li className="flex flex-wrap items-center justify-between gap-2 pb-1">
-                  <span>4 guests</span>
-                  <span className="text-lg font-bold text-lz-cta">$150</span>
-                </li>
+                {BIO_PACKAGE_DISPLAY.map((pkg) => (
+                  <li
+                    key={pkg.id}
+                    className={`flex flex-wrap items-center justify-between gap-2 ${
+                      pkg.id === 'bio_four' ? 'pb-1' : 'border-b border-white/10 pb-3'
+                    }`}
+                  >
+                    <span>
+                      {pkg.guestCount === 1 ? '1 person' : `${pkg.guestCount} people`}
+                      {pkg.guestCount > 1 ? (
+                        <span className="block text-xs text-slate-400">
+                          {formatBioPackagePriceUsd(pkg.perGuestUsd)}/person
+                        </span>
+                      ) : null}
+                    </span>
+                    <span className="text-lg font-bold text-lz-cta">{formatBioPackagePriceUsd(pkg.directPriceUsd)}</span>
+                  </li>
+                ))}
               </ul>
               <div className="mt-6 flex flex-col gap-2">
-                <Link to={bioBookingUrl('bio_solo')} className="lz-btn-secondary justify-center text-center text-sm">
-                  Book solo — $40
-                </Link>
-                <Link to={bioBookingUrl('bio_two')} className="lz-btn-secondary justify-center text-center text-sm">
-                  Book for two — $78
-                </Link>
-                <Link to={bioBookingUrl('bio_four')} className="lz-btn-primary justify-center text-center text-sm">
-                  Book for four — $150
-                </Link>
+                {BIO_PACKAGE_DISPLAY.map((pkg) => (
+                  <Link
+                    key={pkg.id}
+                    to={bioBookingUrl(pkg.id)}
+                    className={
+                      pkg.id === 'bio_four'
+                        ? 'lz-btn-primary justify-center text-center text-sm'
+                        : 'lz-btn-secondary justify-center text-center text-sm'
+                    }
+                  >
+                    Book {pkg.guestCount === 1 ? 'solo' : pkg.guestCount === 2 ? 'for two' : 'for four'} —{' '}
+                    {formatBioPackagePriceUsd(pkg.directPriceUsd)}
+                  </Link>
+                ))}
               </div>
             </article>
             <article className="lz-card-glass border border-white/10 p-6 md:p-8">

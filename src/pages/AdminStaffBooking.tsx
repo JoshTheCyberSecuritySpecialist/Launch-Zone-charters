@@ -892,7 +892,7 @@ export default function AdminStaffBooking() {
                     ))}
                   </select>
                   <span className="mt-1 block text-xs font-normal text-slate-500">
-                    Solo $40 · Two $78 · Four $150 — guest count is set by the package.
+                    Solo $58.50 · Two $120 · Four $240 — guest count is set by the package.
                   </span>
                   <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-950">
                     Direct packages cover 1, 2, or 4 guests only. For five guests, use a general captain charter with

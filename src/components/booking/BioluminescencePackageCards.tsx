@@ -42,7 +42,7 @@ function PackageCard({
         ) : null}
       </div>
       <p className="mt-1 text-sm text-slate-400">
-        {pkg.guestCount} guest{pkg.guestCount === 1 ? '' : 's'}
+        {pkg.guestCount === 1 ? '1 Person' : `${pkg.guestCount} People`}
       </p>
       <div className="mt-4">
         <p className="text-sm text-slate-400">
@@ -50,10 +50,13 @@ function PackageCard({
           <span className="text-base text-slate-500 line-through">{formatUsd(pkg.standardValueUsd)}</span>
         </p>
         <p className="mt-2 text-3xl font-bold text-white md:text-4xl">{formatUsd(pkg.directPriceUsd)}</p>
+        {pkg.guestCount > 1 ? (
+          <p className="mt-1 text-xs font-medium uppercase tracking-wide text-slate-400">Total</p>
+        ) : null}
         <p className="mt-1 text-sm font-medium text-emerald-300/95">
           Save {formatUsd(pkg.savingsUsd)} · {pkg.discountPercentLabel}
         </p>
-        <p className="mt-1 text-sm text-cyan-100/85">{formatUsd(pkg.perGuestUsd)} per guest</p>
+        <p className="mt-1 text-sm text-cyan-100/85">{formatUsd(pkg.perGuestUsd)} per person</p>
       </div>
       <ul className="mt-4 space-y-2 text-sm text-slate-300">
         {pkg.included.map((line) => (

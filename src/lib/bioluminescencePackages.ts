@@ -26,10 +26,10 @@ export const BIO_PACKAGE_DISPLAY: BioPackageDisplay[] = [
     cardTitle: 'Solo Glow Tour',
     guestCount: 1,
     standardValueUsd: 75,
-    directPriceUsd: 40,
-    perGuestUsd: 40,
-    savingsUsd: 35,
-    discountPercentLabel: '47% off',
+    directPriceUsd: 58.5,
+    perGuestUsd: 58.5,
+    savingsUsd: 16.5,
+    discountPercentLabel: '22% off',
     badge: null,
     ctaLabel: 'Select Solo Tour',
     included: ['Captain included', 'Fuel included'],
@@ -39,10 +39,10 @@ export const BIO_PACKAGE_DISPLAY: BioPackageDisplay[] = [
     cardTitle: 'Glow Tour for Two',
     guestCount: 2,
     standardValueUsd: 150,
-    directPriceUsd: 78,
-    perGuestUsd: 39,
-    savingsUsd: 72,
-    discountPercentLabel: '48% off',
+    directPriceUsd: 120,
+    perGuestUsd: 60,
+    savingsUsd: 30,
+    discountPercentLabel: '20% off',
     badge: null,
     ctaLabel: 'Select Tour for Two',
     included: ['Captain included', 'Fuel included'],
@@ -52,10 +52,10 @@ export const BIO_PACKAGE_DISPLAY: BioPackageDisplay[] = [
     cardTitle: 'Glow Tour for Four',
     guestCount: 4,
     standardValueUsd: 300,
-    directPriceUsd: 150,
-    perGuestUsd: 37.5,
-    savingsUsd: 150,
-    discountPercentLabel: '50% off',
+    directPriceUsd: 240,
+    perGuestUsd: 60,
+    savingsUsd: 60,
+    discountPercentLabel: '20% off',
     badge: 'Best Value',
     ctaLabel: 'Select Tour for Four',
     included: ['Captain included', 'Fuel included'],
@@ -87,9 +87,23 @@ export const BIO_LEGACY_PRICING_LABEL = 'Legacy bioluminescence pricing';
 /** Admin staff booking — labels must match server package prices. */
 export const BIO_STAFF_PACKAGE_OPTIONS = BIO_PACKAGE_DISPLAY.map((p) => ({
   id: p.id,
-  label: `${p.cardTitle} — $${p.directPriceUsd}`,
+  label: `${p.cardTitle} — $${Number.isInteger(p.directPriceUsd) ? p.directPriceUsd : p.directPriceUsd.toFixed(2)}`,
   guestCount: p.guestCount,
   standardValueUsd: p.standardValueUsd,
   directPriceUsd: p.directPriceUsd,
   savingsUsd: p.savingsUsd,
+}));
+
+export function formatBioPackagePriceUsd(amount: number): string {
+  return Number.isInteger(amount) ? `$${amount}` : `$${amount.toFixed(2)}`;
+}
+
+export const BIO_PACKAGE_PRICE_SUMMARY = BIO_PACKAGE_DISPLAY.map((p) => ({
+  id: p.id,
+  guestLabel: p.guestCount === 1 ? '1 Person' : `${p.guestCount} People`,
+  totalLabel: formatBioPackagePriceUsd(p.directPriceUsd),
+  perGuestLabel:
+    p.guestCount === 1
+      ? `${formatBioPackagePriceUsd(p.perGuestUsd)}/person`
+      : `${formatBioPackagePriceUsd(p.directPriceUsd)} total · ${formatBioPackagePriceUsd(p.perGuestUsd)}/person`,
 }));

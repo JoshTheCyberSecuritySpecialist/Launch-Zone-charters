@@ -29,15 +29,15 @@ function bookingRow(partial) {
 function runPackageLookupTests() {
   const solo = getBioluminescencePackage('bio_solo');
   assert.strictEqual(solo.guestCount, 1);
-  assert.strictEqual(solo.priceCents, 4000);
+  assert.strictEqual(solo.priceCents, 5850);
 
   const two = getBioluminescencePackage('bio_two');
   assert.strictEqual(two.guestCount, 2);
-  assert.strictEqual(two.priceCents, 7800);
+  assert.strictEqual(two.priceCents, 12000);
 
   const four = getBioluminescencePackage('bio_four');
   assert.strictEqual(four.guestCount, 4);
-  assert.strictEqual(four.priceCents, 15000);
+  assert.strictEqual(four.priceCents, 24000);
 
   assert.throws(() => getBioluminescencePackage('bio_five'), /Unknown bioluminescence package/);
 }
@@ -79,14 +79,14 @@ function runTamperingTests() {
 
 function runStripeTotalsTests() {
   const soloTotals = bioPackageExpectedTotals(getBioluminescencePackage('bio_solo'));
-  assert.strictEqual(Math.round(soloTotals.amountDueToday * 100), 4000);
+  assert.strictEqual(Math.round(soloTotals.amountDueToday * 100), 5850);
   assert.strictEqual(stripeLineItemNameForBioPackage(getBioluminescencePackage('bio_solo')), 'Solo Bioluminescence Night Tour — 1 Guest');
 
   const twoTotals = bioPackageExpectedTotals(getBioluminescencePackage('bio_two'));
-  assert.strictEqual(Math.round(twoTotals.amountDueToday * 100), 7800);
+  assert.strictEqual(Math.round(twoTotals.amountDueToday * 100), 12000);
 
   const fourTotals = bioPackageExpectedTotals(getBioluminescencePackage('bio_four'));
-  assert.strictEqual(Math.round(fourTotals.amountDueToday * 100), 15000);
+  assert.strictEqual(Math.round(fourTotals.amountDueToday * 100), 24000);
 }
 
 function runCapacityTests() {
@@ -144,7 +144,7 @@ function runStaffBioResolveTest() {
   assert.strictEqual(resolved.ok, true);
   assert.strictEqual(resolved.charterType, 'bio');
   assert.strictEqual(resolved.passengerCount, 1);
-  assert.strictEqual(resolved.package?.priceCents, 4000);
+  assert.strictEqual(resolved.package?.priceCents, 5850);
 
   const bad = resolveStaffBioCharterPackage({
     body: { charter_type: 'bio', pricing_package_id: 'bio_two', booking_source: 'admin' },

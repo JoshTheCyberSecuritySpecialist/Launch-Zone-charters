@@ -7848,7 +7848,7 @@ const PRE_TRIP_TYPES = new Set(['pontoon_rental', 'center_console_rental', 'capt
 const PRE_TRIP_REG_BY_TYPE = {
   pontoon_rental: 'FL0278PU',
   center_console_rental: 'FL3827TT',
-  captain_charter: 'FL3827TT',
+  captain_charter: 'FL0278PU',
 };
 
 /**

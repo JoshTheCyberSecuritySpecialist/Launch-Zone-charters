@@ -332,10 +332,11 @@ export default function BioluminescentTours({ onNavigate }: BioluminescentToursP
       >
         <div className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
           <h2 id="bio-packages-heading" className="font-display text-center text-2xl font-bold text-white md:text-3xl">
-            Choose Your Bioluminescence Package
+            Choose Your Group Size
           </h2>
           <p className="mx-auto mt-3 max-w-2xl text-center text-sm text-slate-400 md:text-base">
-            Same package pricing available when you book directly. {BIO_PACKAGE_PRICING_DISCLAIMER}
+            Guest packages for 1, 2, or 4 people — not boat selection. Launch Zone assigns your vessel.{' '}
+            {BIO_PACKAGE_PRICING_DISCLAIMER}
           </p>
           <ul className="mx-auto mt-4 max-w-xl list-inside list-disc text-left text-sm text-slate-400 md:text-center md:list-none md:space-y-1">
             <li>Book in one step · live availability · instant confirmation</li>

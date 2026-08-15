@@ -3,19 +3,19 @@ const boatSafetyCapacity = require('../lib/boatSafetyCapacity');
 const TRIP_TYPE_BOAT_TYPE = {
   pontoon_rental: 'standard',
   center_console_rental: 'premium',
-  captain_charter: 'premium',
+  captain_charter: 'standard',
 };
 
 const TRIP_TYPE_REGISTRATION = {
   pontoon_rental: 'FL0278PU',
   center_console_rental: 'FL3827TT',
-  captain_charter: 'FL3827TT',
+  captain_charter: 'FL0278PU',
 };
 
 const TRIP_TYPE_NAME_PATTERNS = {
   pontoon_rental: ['pontoon', 'suncatcher', 'sun catcher', 'sea breeze', 'ocean vista'],
   center_console_rental: ['key largo', 'center console', '3827'],
-  captain_charter: ['key largo', 'center console', 'captain', '3827'],
+  captain_charter: ['suncatcher', 'sun catcher', 'pontoon', '0278'],
 };
 
 function normalizeRegistration(value) {
@@ -136,9 +136,9 @@ async function resolveBoatIdForTripType(supabase, tripType, options = {}) {
   }
 
   if (normalized === 'captain_charter') {
-    attempted.push('fallback:premium');
-    const premium = await selectActiveBoatByType(supabase, 'premium');
-    if (premium) return premium;
+    attempted.push('fallback:standard');
+    const standard = await selectActiveBoatByType(supabase, 'standard');
+    if (standard) return standard;
   }
 
   if (normalized === 'pontoon_rental') {

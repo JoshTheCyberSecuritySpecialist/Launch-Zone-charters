@@ -483,6 +483,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
       }
       if (mode === 'charter') {
         setBookingMode('charter');
+        setSelectedBoat(null);
         setStep(1);
         next.captainIncluded = true;
       }
@@ -505,6 +506,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
       }
       if (charterType === 'bio' || charterType === 'night_bio') {
         setBookingMode('charter');
+        setSelectedBoat(null);
         setStep(1);
         next.charterType = 'night_bio';
         next.time = '20:00';
@@ -515,6 +517,18 @@ export default function BookNow({ onNavigate }: BookNowProps) {
           setBioPackageId(pkgFromUrl.id);
           next.passengerCount = pkgFromUrl.guestCount;
         }
+      }
+      const packageOnly = getBioPackageDisplay(searchParams.get('package'));
+      if (!charterType && packageOnly && mode !== 'rental') {
+        setBookingMode('charter');
+        setSelectedBoat(null);
+        setStep(1);
+        next.captainIncluded = true;
+        next.charterType = 'night_bio';
+        next.time = '20:00';
+        next.hours = 1;
+        setBioPackageId(packageOnly.id);
+        next.passengerCount = packageOnly.guestCount;
       }
       if (charterType === 'sunset' || charterType === 'sunset_cruise') {
         setBookingMode('charter');
@@ -581,6 +595,10 @@ export default function BookNow({ onNavigate }: BookNowProps) {
 
   useEffect(() => {
     if (bookingMode !== 'rental') setRentalDurationPreset(null);
+  }, [bookingMode]);
+
+  useEffect(() => {
+    if (bookingMode === 'charter') setSelectedBoat(null);
   }, [bookingMode]);
 
   const loadBoats = useCallback(async () => {
@@ -762,6 +780,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
   const handleSelectCharterExperience = useCallback(
     (charterType: CharterType) => {
       setBookingMode('charter');
+      setSelectedBoat(null);
       if (charterType === 'night_bio') {
         const pkg = getBioPackageDisplay(bioPackageId);
         setBookingData((prev) => ({
@@ -1908,9 +1927,9 @@ export default function BookNow({ onNavigate }: BookNowProps) {
           <h1 className="lz-page-hero-heading font-display text-white">{pageHeroTitle}</h1>
           <p className="mx-auto mt-4 max-w-2xl text-base leading-relaxed text-slate-300 md:text-lg">
             {showNeutralChooser
-              ? 'Choose a captain-led charter or a self-drive rental, then pick your boat and schedule. Charters and rentals use different pricing and requirements — your selections below set the right path.'
+              ? 'Choose a captain-led charter or a self-drive rental. Charters: pick date, time, and guest count — we assign the vessel. Rentals: pick your boat and schedule. Pricing and requirements differ by path.'
               : bookingMode === 'charter'
-                ? 'Choose date, time, and passengers, then check out. Captain & fuel included; no security deposit.'
+                ? 'Choose date, time, and guest count, then check out. We assign your vessel — captain & fuel included; no security deposit.'
                 : 'Pick your boat and schedule, add options, then check out with Stripe: today you pay 50% of your reservation total (which includes the refundable $300 security deposit). After checkout we verify compliance details and approvals.'}
           </p>
           {!directProductBooking ? (
@@ -2099,7 +2118,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                 </h2>
                 <p className="mt-2 text-sm text-slate-400">
                   {bookingMode === 'charter'
-                    ? 'Choose date, time, and passengers for your charter.'
+                    ? 'Choose date, time, and guest count for your charter. We assign your vessel — you do not pick a boat here.'
                     : 'Select a vessel, rental length, and when you want to go.'}
                 </p>
 
@@ -2391,7 +2410,11 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                       {isBioPackageFlow ? (
                         <div className="space-y-4">
                           <div>
-                            <h3 className={bookingSectionTitle}>Choose your package</h3>
+                            <h3 className={bookingSectionTitle}>Choose your group size</h3>
+                            <p className="mt-2 text-sm text-slate-300">
+                              These are guest packages — not boats. Launch Zone assigns your vessel based on
+                              availability.
+                            </p>
                             <p className="mt-2 text-sm text-slate-400">
                               {BIO_PACKAGE_PRICING_DISCLAIMER}
                             </p>

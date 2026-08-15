@@ -96,6 +96,18 @@ type StaffBookingRow = {
   boats?: { name?: string | null } | null;
 };
 
+/** Default captain-led charter vessel — SunCatcher pontoon (FL0278PU). */
+function pickDefaultCharterBoatId(boats: BoatRow[]): string {
+  const name = (boat: BoatRow) => String(boat.name || '').toLowerCase();
+  const suncatcher = boats.find(
+    (boat) => name(boat).includes('suncatcher') || name(boat).includes('sun catcher')
+  );
+  if (suncatcher?.id) return suncatcher.id;
+  const pontoon = boats.find((boat) => boat.type === 'standard');
+  if (pontoon?.id) return pontoon.id;
+  return boats[0]?.id || '';
+}
+
 const todayYmd = () => new Date().toISOString().slice(0, 10);
 
 const blankForm = () => {
@@ -335,6 +347,11 @@ export default function AdminStaffBooking() {
         if (cancelled) return;
         const rows = Array.isArray(payload.boats) ? payload.boats : [];
         setBoats(rows);
+        setForm((prev) => {
+          if (prev.boatId || prev.bookingType !== 'captain_charter') return prev;
+          const defaultBoatId = pickDefaultCharterBoatId(rows);
+          return defaultBoatId ? { ...prev, boatId: defaultBoatId } : prev;
+        });
       })
       .catch((err) => {
         if (!cancelled) setNotice({ variant: 'error', text: err instanceof Error ? err.message : 'Could not load boats.' });
@@ -832,6 +849,10 @@ export default function AdminStaffBooking() {
                     setForm((p) => ({
                       ...p,
                       bookingType: nextType,
+                      boatId:
+                        nextType === 'captain_charter'
+                          ? pickDefaultCharterBoatId(boats) || p.boatId
+                          : p.boatId,
                       charterProduct: nextType === 'rental' ? 'general' : p.charterProduct,
                       bioPackageId: nextType === 'rental' ? '' : p.bioPackageId,
                       captainId: nextType === 'rental' ? '' : p.captainId,

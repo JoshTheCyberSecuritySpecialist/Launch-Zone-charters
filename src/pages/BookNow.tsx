@@ -80,6 +80,13 @@ interface ApiTimeSlot {
   label: string;
   startHHMM?: string;
   rocketDepartureLabel?: string | null;
+  launchId?: string;
+  launchName?: string;
+  launchNetIso?: string;
+  launchTimeLabel?: string;
+  launchDateLabel?: string;
+  launchStatus?: string | null;
+  externalReference?: string;
   capacity?: {
     used?: number;
     remaining?: number;
@@ -112,6 +119,13 @@ function normalizeApiTimeSlots(
       label: String(slot.label || '').trim(),
       startHHMM: slot.startHHMM,
       rocketDepartureLabel: slot.rocketDepartureLabel || null,
+      launchId: slot.launchId,
+      launchName: slot.launchName,
+      launchNetIso: slot.launchNetIso,
+      launchTimeLabel: slot.launchTimeLabel,
+      launchDateLabel: slot.launchDateLabel,
+      launchStatus: slot.launchStatus,
+      externalReference: slot.externalReference,
       capacity: slot.capacity || null,
     }))
     .filter((slot) => Boolean(slot.start));
@@ -183,10 +197,14 @@ function timeLabelFromHHMM(time: string): string {
   });
 }
 
-function isNextMorningBioStart(charterType: CharterType, time: string) {
+function isNextMorningNightCharterStart(charterType: CharterType, time: string) {
   if (charterType !== 'night_bio') return false;
   const hour = Number(String(time || '').split(':')[0]);
   return Number.isFinite(hour) && hour >= 0 && hour <= 4;
+}
+
+function isNextMorningBioStart(charterType: CharterType, time: string) {
+  return isNextMorningNightCharterStart(charterType, time);
 }
 
 function buildSelectedStartDateTime({
@@ -268,6 +286,8 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     specialRequests: '',
     /** When set, start_time at checkout uses this ISO instant (server availability slot). */
     slotStartIso: '',
+    /** Launch Library 2 launch id for rocket charter bookings. */
+    launchId: '',
   });
   const [bioPackageId, setBioPackageId] = useState<BioPackageId | null>(null);
   const [rocketPackageId, setRocketPackageId] = useState<RocketPackageId | null>(null);
@@ -1270,10 +1290,11 @@ export default function BookNow({ onNavigate }: BookNowProps) {
               ...prev,
               slotStartIso: slot.start,
               time: slot.startHHMM || prev.time,
+              launchId: slot.launchId || prev.launchId || '',
             };
           });
         } else {
-          setBookingData((prev) => ({ ...prev, slotStartIso: '', time: '' }));
+          setBookingData((prev) => ({ ...prev, slotStartIso: '', time: '', launchId: '' }));
         }
       })
       .catch(() => {
@@ -1337,7 +1358,14 @@ export default function BookNow({ onNavigate }: BookNowProps) {
       !timesManualFallback &&
       Boolean(bookingData.date) &&
       !bookingData.time &&
-      !bookingData.slotStartIso);
+      !bookingData.slotStartIso) ||
+    (bookingMode === 'charter' &&
+      isRocketCharter &&
+      apiAvailEnabled &&
+      Boolean(bookingData.date) &&
+      !bookingData.launchId &&
+      !timesManualFallback &&
+      !availTimesLoading);
 
   const CHARTER_EXPERIENCE_LABEL: Record<CharterType, string> = {
     rocket_launch: 'Rocket launch charter',
@@ -1579,7 +1607,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
           hour: 'numeric',
           minute: '2-digit',
         })
-      : isBioCharter && isNextMorningBioStart(bookingData.charterType, bookingData.time)
+      : isBioCharter && isNextMorningNightCharterStart(bookingData.charterType, bookingData.time)
         ? `${bookingData.date} night · ${timeLabelFromHHMM(bookingData.time)} next morning`
         : `${bookingData.date || '-'} · ${timeLabelFromHHMM(bookingData.time)}`;
 
@@ -1707,8 +1735,13 @@ export default function BookNow({ onNavigate }: BookNowProps) {
       return;
     }
     if (bookingMode === 'charter' && !bookingData.time && !bookingData.slotStartIso) {
-      setCheckoutError('Choose your time.');
+      setCheckoutError(isRocketCharter ? 'Choose a scheduled rocket launch.' : 'Choose your time.');
       checkoutPerf.end('aborted_no_time');
+      return;
+    }
+    if (isRocketCharter && !bookingData.launchId) {
+      setCheckoutError('Choose a scheduled rocket launch to continue.');
+      checkoutPerf.end('aborted_no_launch');
       return;
     }
     if (bookingMode === 'charter') {
@@ -1874,6 +1907,10 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                     : null,
               sharedCharterMinimumAcknowledged: requiresRocketSharedAck
                 ? rocketSharedMinimumAcknowledged
+                : null,
+              launchId: isRocketCharter ? bookingData.launchId || null : null,
+              external_reference: isRocketCharter && bookingData.launchId
+                ? `ll2:${bookingData.launchId}`
                 : null,
               special_requests:
                 bookingMode === 'charter'
@@ -2586,21 +2623,81 @@ export default function BookNow({ onNavigate }: BookNowProps) {
 
                       <div>
                         <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-400">
-                          Choose your time
+                          {isRocketCharter ? 'Choose your launch' : 'Choose your time'}
                         </label>
                         {isBioCharter && (
                           <p className="mb-3 rounded-lg border border-cyan-400/25 bg-cyan-950/25 px-3 py-2 text-xs font-semibold text-cyan-100">
-                            Late-night bio tours are available during peak glowing conditions. Times after midnight are
-                            booked as the next morning for the selected night.
+                            Late-night bio tours are available during peak glowing conditions. Times after midnight are booked as the next morning for the selected night.
                           </p>
                         )}
+                        {isRocketCharter && (
+                          <p className="mb-3 rounded-lg border border-amber-400/25 bg-amber-950/25 px-3 py-2 text-xs font-semibold text-amber-100">
+                            Charter departure is scheduled from the actual launch time — morning, afternoon, evening, and overnight launches each get an appropriate on-water window.
+                          </p>
+                        )}
+                        {isRocketCharter ? (
+                          <div className="space-y-3">
+                            {timeSlots.map((slot) => {
+                              const active =
+                                Boolean(bookingData.slotStartIso && slot.start === bookingData.slotStartIso) ||
+                                Boolean(bookingData.launchId && slot.launchId === bookingData.launchId);
+                              return (
+                                <button
+                                  key={slot.launchId || slot.start}
+                                  type="button"
+                                  onClick={() => {
+                                    setBookingData({
+                                      ...bookingData,
+                                      slotStartIso: slot.start,
+                                      time: slot.startHHMM || bookingData.time,
+                                      launchId: slot.launchId || '',
+                                    });
+                                  }}
+                                  className={`w-full rounded-xl border px-4 py-4 text-left transition ${
+                                    active ? bookingSlotChipActive : `border ${bookingChoiceIdle}`
+                                  }`}
+                                >
+                                  <p className="text-sm font-bold text-white">
+                                    {slot.launchName || 'Rocket launch'}
+                                  </p>
+                                  <p className="mt-1 text-xs text-slate-400">
+                                    {slot.launchDateLabel || bookingData.date}
+                                  </p>
+                                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                                    <div className="rounded-lg bg-slate-950/50 px-3 py-2">
+                                      <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                                        Launch time
+                                      </p>
+                                      <p className="mt-1 text-sm font-semibold text-cyan-100">
+                                        {slot.launchTimeLabel || 'TBD'}
+                                      </p>
+                                    </div>
+                                    <div className="rounded-lg bg-slate-950/50 px-3 py-2">
+                                      <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                                        Charter departure
+                                      </p>
+                                      <p className="mt-1 text-sm font-semibold text-amber-100">
+                                        {slot.label || timeLabelFromHHMM(slot.startHHMM || '')}
+                                      </p>
+                                    </div>
+                                  </div>
+                                  {slot.rocketDepartureLabel ? (
+                                    <p className="mt-3 text-xs text-amber-100/90">{slot.rocketDepartureLabel}</p>
+                                  ) : null}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        ) : (
                         <div className="flex flex-wrap gap-3">
                           {charterTimeOptions.map((time) => {
                             const slot = timeSlots.find((row) => row.startHHMM === time);
                             const available = !charterTimesFromApi || availableCharterTimes.has(time);
-                            const slotLabel = isBioCharter && isNextMorningBioStart(bookingData.charterType, time)
-                              ? `${timeLabelFromHHMM(time)} next morning`
-                              : timeLabelFromHHMM(time);
+                            const slotLabel =
+                              isBioCharter &&
+                              isNextMorningNightCharterStart(bookingData.charterType, time)
+                                ? `${timeLabelFromHHMM(time)} next morning`
+                                : timeLabelFromHHMM(time);
                             const active =
                               (bookingData.time === time && !bookingData.slotStartIso) ||
                               Boolean(slot && bookingData.slotStartIso === slot.start);
@@ -2616,6 +2713,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                                     ...bookingData,
                                     time,
                                     slotStartIso: slot?.start || '',
+                                    launchId: '',
                                   });
                                   measurePaintAfterSync('booknow_charter_time_slot', t0, performance.now());
                                 }}
@@ -2632,12 +2730,15 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                             );
                           })}
                         </div>
+                        )}
                         {charterTimesFromApi && availTimesLoading && (
                           <p className="mt-2 text-xs text-slate-500">Checking captain availability…</p>
                         )}
                         {charterTimesFromApi && !availTimesLoading && bookingData.date && timeSlots.length === 0 && (
                           <p className="mt-2 text-sm text-amber-200">
-                            No captain availability that night. Try another evening start (5:00 PM or later).
+                            {isRocketCharter
+                              ? 'No bookable rocket launches on this date. Try another day or check the launch schedule.'
+                              : 'No captain availability that night. Try another evening start (5:00 PM or later).'}
                           </p>
                         )}
                         {isRocketPackageFlow && selectedRocketDepartureLabel ? (

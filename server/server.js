@@ -1025,6 +1025,10 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
   const passengerCountRaw = Number(booking.passengerCount);
   let passengerCount = Number.isFinite(passengerCountRaw) ? Math.max(1, Math.round(passengerCountRaw)) : NaN;
   const isCharterBooking = bookingMode === 'charter';
+  const rocketLaunchId =
+    isCharterBooking && rocketLaunchPackagePricing.normalizeRocketCharterType(charterType) === 'rocket'
+      ? extractRocketLaunchIdFromBooking(booking)
+      : null;
   if (isCharterBooking) {
     if (bioPackagePricing.normalizeBioCharterType(charterType) === 'bio') {
       const bioCheck = bioPackagePricing.validateDirectBioPackageCheckout({
@@ -1276,6 +1280,13 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
             passengerCount
           )
         : {}),
+    ...(rocketLaunchId
+      ? {
+          external_reference: require('./services/rocketLaunchAvailabilityService').formatExternalLaunchRef(
+            rocketLaunchId
+          ),
+        }
+      : {}),
     ...rocketDepartureFields,
   };
 
@@ -1297,6 +1308,7 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
           passengerCount,
           excludeBookingId: holdRow?.id || null,
           bookingSource: 'stripe_finalize',
+          launchId: rocketLaunchId,
         });
     } else {
       assertBookingLeadTime(booking.start_time);
@@ -2121,8 +2133,9 @@ app.post('/api/admin/staff-bookings/check', async (req, res) => {
       return res.status(400).json({ error: 'Boat, date, start time, and duration are required.' });
     }
     let passengerCount = Math.max(1, Math.floor(Number(req.body?.passenger_count ?? req.body?.passengerCount ?? 1) || 1));
+    let charterResolved = { ok: false };
     if (bookingType === 'captain_charter') {
-      const charterResolved = resolveStaffCaptainCharterContext(req.body || {}, passengerCount);
+      charterResolved = resolveStaffCaptainCharterContext(req.body || {}, passengerCount);
       if (!charterResolved.ok) {
         return res.status(charterResolved.statusCode || 400).json({
           error: charterResolved.error,
@@ -2143,6 +2156,12 @@ app.post('/api/admin/staff-bookings/check', async (req, res) => {
       location: cleanText(req.body?.rental_location || req.body?.location, 80) || null,
       excludeBookingId: cleanText(req.body?.exclude_booking_id || req.body?.excludeBookingId, 80) || null,
       passengerCount: bookingType === 'captain_charter' ? passengerCount : 1,
+      charterType:
+        bookingType === 'captain_charter' && charterResolved.ok ? charterResolved.charterType : null,
+      launchId:
+        bookingType === 'captain_charter' && charterResolved.ok
+          ? extractRocketLaunchIdFromBooking(req.body || {})
+          : null,
     });
     return res.json(staffAvailabilityConflictPayload(result));
   } catch (err) {
@@ -2214,6 +2233,18 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
     if (!boatId) return res.status(400).json({ error: 'Boat is required.' });
     if (!times || durationHours == null) return res.status(400).json({ error: 'Date, start time, and duration are required.' });
 
+    const staffLaunchId =
+      bookingType === 'captain_charter' && staffCharterType === 'rocket'
+        ? extractRocketLaunchIdFromBooking(body)
+        : null;
+    if (bookingType === 'captain_charter' && staffCharterType === 'rocket' && !staffLaunchId) {
+      const rocketLaunchAvailability = require('./services/rocketLaunchAvailabilityService');
+      return res.status(400).json({
+        error: rocketLaunchAvailability.ROCKET_LAUNCH_REQUIRED_MESSAGE,
+        code: 'rocket_launch_required',
+      });
+    }
+
     const availability = await availabilityService.checkStaffBookingAvailability({
       boatId,
       startTime: times.startIso,
@@ -2221,6 +2252,8 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
       bookingType,
       location: location || null,
       passengerCount: bookingType === 'captain_charter' ? passengerCount : 1,
+      charterType: bookingType === 'captain_charter' ? staffCharterType : null,
+      launchId: staffLaunchId,
     });
     if (!availability.available) {
       if (availability.reason === 'captain_window') {
@@ -2381,6 +2414,13 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
         : staffRocketPackage
           ? rocketLaunchPackagePricing.rocketPackageBookingFields(staffRocketPackage, passengerCount)
           : {}),
+      ...(staffLaunchId
+        ? {
+            external_reference: require('./services/rocketLaunchAvailabilityService').formatExternalLaunchRef(
+              staffLaunchId
+            ),
+          }
+        : {}),
       ...staffRocketDepartureFields,
     };
 
@@ -5770,6 +5810,7 @@ app.get('/api/availability/times', async (req, res) => {
  */
 function parseCharterAvailabilityOptions(query = {}) {
   const { getRocketLaunchPackage } = require('./config/rocketLaunchPackages');
+  const rocketLaunchAvailability = require('./services/rocketLaunchAvailabilityService');
   const packageId = cleanText(query.package || query.pricing_package_id || query.pricingPackageId, 80);
   let rocketPackage = null;
   if (packageId && rocketLaunchPackagePricing.isRocketLaunchPackageId(packageId)) {
@@ -5784,7 +5825,23 @@ function parseCharterAvailabilityOptions(query = {}) {
   const passengerCount = Number.isFinite(passengerCountRaw)
     ? Math.max(1, Math.round(passengerCountRaw))
     : undefined;
-  return { rocketPackage, charterVariant, passengerCount };
+  const launchIdRaw = cleanText(query.launchId || query.launch_id, 120);
+  const launchId = launchIdRaw
+    ? rocketLaunchAvailability.parseLaunchIdFromExternalRef(launchIdRaw) || launchIdRaw
+    : undefined;
+  return { rocketPackage, charterVariant, passengerCount, launchId };
+}
+
+function extractRocketLaunchIdFromBooking(booking = {}) {
+  const rocketLaunchAvailability = require('./services/rocketLaunchAvailabilityService');
+  const raw =
+    booking.launchId ||
+    booking.launch_id ||
+    booking.external_reference ||
+    booking.externalReference ||
+    null;
+  if (!raw) return null;
+  return rocketLaunchAvailability.parseLaunchIdFromExternalRef(raw) || cleanText(raw, 120) || null;
 }
 
 /**
@@ -5850,11 +5907,45 @@ app.get('/api/availability/charter/times', async (req, res) => {
       durationHours: 1,
       minLeadHours: availabilityService.MIN_LEAD_HOURS,
       packageId: availabilityOptions.rocketPackage?.id || null,
+      schedulingMode:
+        cleanText(charterType, 40).toLowerCase() === 'rocket' ||
+        cleanText(charterType, 40).toLowerCase() === 'rocket_launch'
+          ? 'launch_event'
+          : 'charter_window',
       slots,
     });
   } catch (err) {
     console.error('[api/availability/charter/times]', err);
     return res.status(500).json({ error: err.message || 'Charter availability times failed' });
+  }
+});
+
+/**
+ * Upcoming rocket launches with computed charter departure windows (booking UI).
+ * GET /api/availability/rocket/launches?from=YYYY-MM-DD&to=YYYY-MM-DD
+ */
+app.get('/api/availability/rocket/launches', async (req, res) => {
+  try {
+    const rocketLaunchAvailability = require('./services/rocketLaunchAvailabilityService');
+    let from = String(req.query.from || '').trim();
+    let to = String(req.query.to || '').trim();
+    if (!from || !to) {
+      const d = availabilityService.defaultFromTo();
+      if (!from) from = d.from;
+      if (!to) to = d.to;
+    }
+    const launches = await rocketLaunchAvailability.listLaunchPreviewsForRange(from, to);
+    return res.json({
+      timezone: availabilityService.BUSINESS_TZ,
+      from,
+      to,
+      preLaunchBufferMinutes: require('./config/rocketLaunchTiming').ROCKET_PRE_LAUNCH_BUFFER_MINUTES,
+      charterDurationHours: require('./config/rocketLaunchTiming').ROCKET_CHARTER_DURATION_HOURS,
+      launches,
+    });
+  } catch (err) {
+    console.error('[api/availability/rocket/launches]', err);
+    return res.status(500).json({ error: err.message || 'Rocket launch availability failed' });
   }
 });
 
@@ -6686,6 +6777,10 @@ app.post('/api/create-checkout-session', async (req, res) => {
 
     const charterType = String(booking.charterType || '').trim().toLowerCase();
     let charterVariant = String(booking.charterVariant || '').trim().toLowerCase();
+    const rocketLaunchId =
+      isCharterBooking && rocketLaunchPackagePricing.normalizeRocketCharterType(charterType) === 'rocket'
+        ? extractRocketLaunchIdFromBooking(booking)
+        : null;
     const rentalType = String(booking.rental_type || '').trim().toLowerCase();
     const startTime = new Date(String(booking.start_time || ''));
     const endTime = new Date(String(booking.end_time || ''));
@@ -6787,6 +6882,16 @@ app.post('/api/create-checkout-session', async (req, res) => {
         return res.status(400).json({ error: validation.error });
       }
       passengerCount = validation.count;
+
+      if (rocketLaunchPackagePricing.normalizeRocketCharterType(charterType) === 'rocket') {
+        const rocketLaunchAvailability = require('./services/rocketLaunchAvailabilityService');
+        if (!rocketLaunchId) {
+          return res.status(400).json({
+            error: rocketLaunchAvailability.ROCKET_LAUNCH_REQUIRED_MESSAGE,
+            code: 'rocket_launch_required',
+          });
+        }
+      }
     } else {
       passengerCount = 1;
     }
@@ -6954,6 +7059,7 @@ app.post('/api/create-checkout-session', async (req, res) => {
           rocketPackage: expected.rocketPackage || null,
           passengerCount,
           bookingSource: 'stripe_checkout',
+          launchId: rocketLaunchId,
         });
       } else {
         assertBookingLeadTime(startTime.toISOString());
@@ -7122,6 +7228,13 @@ app.post('/api/create-checkout-session', async (req, res) => {
               passengerCount
             )
           : {}),
+      ...(rocketLaunchId
+        ? {
+            external_reference: require('./services/rocketLaunchAvailabilityService').formatExternalLaunchRef(
+              rocketLaunchId
+            ),
+          }
+        : {}),
       ...holdRocketDepartureFields,
     };
 
@@ -7136,6 +7249,7 @@ app.post('/api/create-checkout-session', async (req, res) => {
           rocketPackage: expected.rocketPackage || null,
           passengerCount,
           bookingSource: 'stripe_checkout_hold',
+          launchId: rocketLaunchId,
         });
       } else {
         await availabilityService.assertBookingSlotAvailable({

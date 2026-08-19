@@ -138,6 +138,7 @@ const blankForm = () => {
     charterProduct: 'general' as CharterProduct,
     bioPackageId: '' as '' | BioPackageId,
     rocketPackageId: '' as '' | RocketPackageId,
+    launchId: '',
     location: 'Port Orange' as LocationValue,
     boatId: '',
     date: todayYmd(),
@@ -167,6 +168,18 @@ function formatPhone(value: string): string {
 
 function money(value: number): string {
   return (Number.isFinite(value) ? value : 0).toFixed(2);
+}
+
+function staffHHMMFromIso(iso: string): string {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(new Date(iso));
+  const h = parts.find((p) => p.type === 'hour')?.value ?? '00';
+  const m = parts.find((p) => p.type === 'minute')?.value ?? '00';
+  return `${h}:${m}`;
 }
 
 function timeLabel(start: string, end: string): string {
@@ -207,6 +220,18 @@ export default function AdminStaffBooking() {
   const [todayLoading, setTodayLoading] = useState(false);
   const [createSuccess, setCreateSuccess] = useState<{ id: string; kind: 'hold' | 'booking' } | null>(null);
   const [postCreateBusy, setPostCreateBusy] = useState<string | null>(null);
+  const [rocketLaunchOptions, setRocketLaunchOptions] = useState<
+    Array<{
+      id: string;
+      name: string;
+      calendarDate: string | null;
+      launchTimeLabel: string | null;
+      departureTimeLabel: string | null;
+      departureStartIso: string | null;
+      launchDateLabel?: string | null;
+    }>
+  >([]);
+  const [rocketLaunchesLoading, setRocketLaunchesLoading] = useState(false);
   const availabilityCheckSeq = useRef(0);
   const lastSavedScheduleRef = useRef<ScheduleSnapshot | null>(null);
 
@@ -217,11 +242,17 @@ export default function AdminStaffBooking() {
   );
 
   const captainWindowPreview = useMemo(() => {
-    if (form.bookingType !== 'captain_charter' || !form.date || !form.startTime || durationHours <= 0) {
+    if (
+      form.bookingType !== 'captain_charter' ||
+      (form.charterProduct === 'rocket_launch' && form.launchId) ||
+      !form.date ||
+      !form.startTime ||
+      durationHours <= 0
+    ) {
       return null;
     }
     return previewCaptainCharterWindow(form.date, form.startTime, durationHours);
-  }, [durationHours, form.bookingType, form.date, form.startTime]);
+  }, [durationHours, form.bookingType, form.charterProduct, form.date, form.launchId, form.startTime]);
 
   const staffBioPackageSummary = useMemo(() => {
     if (form.charterProduct !== 'bio_night' || !form.bioPackageId) return null;
@@ -313,6 +344,28 @@ export default function AdminStaffBooking() {
       };
     });
   }, [searchParams]);
+
+  useEffect(() => {
+    if (form.charterProduct !== 'rocket_launch' || !env.apiUrlConfigured || !env.apiUrl) {
+      setRocketLaunchOptions([]);
+      return;
+    }
+    const ac = new AbortController();
+    setRocketLaunchesLoading(true);
+    fetch(`${env.apiUrl}/api/availability/rocket/launches`, { signal: ac.signal })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error('rocket launches'))))
+      .then((data: { launches?: typeof rocketLaunchOptions }) => {
+        const rows = Array.isArray(data.launches) ? data.launches : [];
+        setRocketLaunchOptions(rows.filter((row) => row.id && row.departureStartIso));
+      })
+      .catch(() => {
+        if (!ac.signal.aborted) setRocketLaunchOptions([]);
+      })
+      .finally(() => {
+        if (!ac.signal.aborted) setRocketLaunchesLoading(false);
+      });
+    return () => ac.abort();
+  }, [form.charterProduct, env.apiUrl, env.apiUrlConfigured]);
 
   const authedFetch = useCallback(
     async (path: string, init: RequestInit = {}) => {
@@ -476,6 +529,7 @@ export default function AdminStaffBooking() {
             passenger_count:
               form.bookingType === 'captain_charter' ? Math.floor(Number(form.passengerCount) || 1) : 1,
             ...staffCharterApiFields(form),
+            launchId: form.charterProduct === 'rocket_launch' ? form.launchId || null : null,
           }),
         });
         const payload = (await res.json().catch(() => ({}))) as {
@@ -566,6 +620,9 @@ export default function AdminStaffBooking() {
         !form.rocketPackageId
       ) {
         blockers.push('Select a rocket launch package.');
+      }
+      if (form.charterProduct === 'rocket_launch' && !form.launchId.trim()) {
+        blockers.push('Select a scheduled rocket launch.');
       }
       if (
         form.charterProduct === 'bio_night' &&
@@ -694,6 +751,7 @@ export default function AdminStaffBooking() {
           durationHours,
           passenger_count: form.bookingType === 'captain_charter' ? form.passengerCount : 1,
           ...staffCharterApiFields(form),
+          launchId: form.charterProduct === 'rocket_launch' ? form.launchId || null : null,
           original_price: form.originalPrice,
           discount: form.discount,
           final_price: form.finalPrice,
@@ -974,6 +1032,42 @@ export default function AdminStaffBooking() {
                       the trip is fully confirmed. Customers receive a reservation email until the minimum is reached.
                     </p>
                   ) : null}
+                </label>
+              ) : null}
+              {form.bookingType === 'captain_charter' && form.charterProduct === 'rocket_launch' ? (
+                <label className={labelClass}>
+                  Scheduled launch *
+                  <select
+                    className={inputClass}
+                    value={form.launchId}
+                    onChange={(e) => {
+                      const id = e.target.value;
+                      const launch = rocketLaunchOptions.find((row) => row.id === id);
+                      setForm((p) => ({
+                        ...p,
+                        launchId: id,
+                        date: launch?.calendarDate || p.date,
+                        startTime: launch?.departureStartIso
+                          ? staffHHMMFromIso(launch.departureStartIso)
+                          : p.startTime,
+                        durationPreset: 'custom',
+                        customDuration: '1',
+                      }));
+                    }}
+                  >
+                    <option value="">
+                      {rocketLaunchesLoading ? 'Loading launches…' : 'Select launch'}
+                    </option>
+                    {rocketLaunchOptions.map((launch) => (
+                      <option key={launch.id} value={launch.id}>
+                        {launch.name} · {launch.launchDateLabel || launch.calendarDate || 'TBD'} · launch{' '}
+                        {launch.launchTimeLabel || 'TBD'} · depart {launch.departureTimeLabel || 'TBD'}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="mt-1 block text-xs font-normal text-slate-500">
+                    Staff rocket bookings use the launch schedule — not the bio 8 PM–4 AM window.
+                  </span>
                 </label>
               ) : null}
               {form.bookingType === 'captain_charter' &&

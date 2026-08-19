@@ -21,10 +21,10 @@
     "test:groupon-import": "node --test tests/grouponImportService.test.js",
     "test:groupon-booking": "node --test tests/grouponImportService.test.js tests/grouponVoucherEligibility.test.js tests/grouponRequestNotifications.test.js tests/grouponApprovalService.test.js tests/adminSupportService.test.js tests/availabilityService.test.js",
     "test:bio-packages": "node tests/bioluminescencePackages.test.js && node tests/bioPackageCapacityCombinations.test.js && node tests/bioPackageLegacy.test.js && node tests/bioPackageStripeCheckout.test.js",
-    "test:rocket-packages": "node tests/rocketLaunchPackages.test.js && node tests/rocketDepartureCapacity.test.js && node tests/rocketLaunchEmailService.test.js && node tests/rocketDepartureAdmin.test.js",
+    "test:rocket-packages": "node tests/rocketLaunchPackages.test.js && node tests/rocketDepartureCapacity.test.js && node tests/rocketLaunchEmailService.test.js && node tests/rocketDepartureAdmin.test.js && node tests/rocketLaunchAvailability.test.js",
     "test:admin-ops": "node tests/adminOperationsDashboard.test.js",
     "test:admin-ops-query": "node ../scripts/adminOpsDashboardQuery.test.mjs",
-    "test:eight-pm-availability": "node tests/eightPmAvailability.test.js && node tests/sharedCharterCapacity.test.js && node tests/captainNightAvailability.test.js",
+    "test:eight-pm-availability": "node tests/eightPmAvailability.test.js && node tests/sharedCharterCapacity.test.js && node tests/captainNightAvailability.test.js && node tests/rocketLaunchAvailability.test.js",
     "test:booking-confirmation": "node tests/bookingConfirmationService.test.js && node tests/bookingConfirmationFlow.test.js",
     "test:admin-smoke": "node ../scripts/adminSmokeTest.mjs",
     "test:ollama": "node --test tests/ollamaClient.test.js"

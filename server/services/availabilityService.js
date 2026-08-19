@@ -33,7 +33,7 @@ const DEFAULT_CHARTER_START_HOURS = new Set([17, 18, 19, 20, 21]);
 const BIO_CHARTER_TIME_MESSAGE =
   'Bioluminescence night tours are available from 8:00 PM through 4:00 AM.';
 const NON_BIO_LATE_NIGHT_MESSAGE =
-  'Late-night times are only available for bioluminescence night tours.';
+  'Late-night times are only available for bioluminescence and rocket launch night charters.';
 
 const SLOT_TAKEN_USER_MESSAGE =
   'This departure is no longer available. Another reservation was made for this time. Please select another time.';
@@ -52,13 +52,27 @@ const BLOCKING_BOOKING_STATUSES = new Set([
 ]);
 
 function normalizeSlotRows(slots) {
-  return (slots || []).map((slot) => ({
-    startIso: slot.startIso || slot.start,
-    endIso: slot.endIso || slot.end,
-    label: slot.label,
-    startHHMM: slot.startHHMM,
-    available: slot.available !== false,
-  }));
+  return (slots || []).map((slot) => {
+    const row = {
+      start: slot.start || slot.startIso,
+      end: slot.end || slot.endIso,
+      startIso: slot.startIso || slot.start,
+      endIso: slot.endIso || slot.end,
+      label: slot.label,
+      startHHMM: slot.startHHMM,
+      available: slot.available !== false,
+    };
+    if (slot.capacity) row.capacity = slot.capacity;
+    if (slot.rocketDepartureLabel) row.rocketDepartureLabel = slot.rocketDepartureLabel;
+    if (slot.launchId) row.launchId = slot.launchId;
+    if (slot.launchName) row.launchName = slot.launchName;
+    if (slot.launchNetIso) row.launchNetIso = slot.launchNetIso;
+    if (slot.launchTimeLabel) row.launchTimeLabel = slot.launchTimeLabel;
+    if (slot.launchDateLabel) row.launchDateLabel = slot.launchDateLabel;
+    if (slot.launchStatus) row.launchStatus = slot.launchStatus;
+    if (slot.externalReference) row.externalReference = slot.externalReference;
+    return row;
+  });
 }
 
 function rentalTripTypeForLocation(location) {
@@ -359,22 +373,46 @@ async function checkStaffBookingAvailability({
   location = null,
   excludeBookingId = null,
   passengerCount = 1,
+  charterType = null,
+  launchId = null,
 } = {}) {
   if (String(bookingType || '').trim().toLowerCase() === 'captain_charter') {
-    const windowCheck = validateCharterSlotWindow({
-      charterType: 'captain_charter',
-      startIso: startTime,
-      endIso: endTime,
-    });
-    if (!windowCheck.valid) {
-      return {
-        available: false,
-        reason: 'captain_window',
-        message: windowCheck.message || CAPTAIN_NIGHT_UNAVAILABLE_MESSAGE,
-        conflict: null,
-        capacity: null,
-        location,
-      };
+    const normalizedCharterType = normalizeCharterType(charterType);
+    if (normalizedCharterType === 'rocket' && launchId) {
+      const rocketLaunchAvailability = require('./rocketLaunchAvailabilityService');
+      const rocketCheck = await rocketLaunchAvailability.validateRocketLaunchBooking({
+        launchId,
+        startIso: startTime,
+        endIso: endTime,
+        minBookableStartMs: minBookableStartMs(),
+      });
+      if (!rocketCheck.valid) {
+        return {
+          available: false,
+          reason: 'captain_window',
+          message: rocketCheck.message,
+          conflict: null,
+          capacity: null,
+          location,
+        };
+      }
+    } else {
+      const windowCheck = validateCharterSlotWindow({
+        charterType: normalizedCharterType === 'rocket' ? 'rocket' : 'captain_charter',
+        startIso: startTime,
+        endIso: endTime,
+        launchId,
+      });
+      if (!windowCheck.valid) {
+        return {
+          available: false,
+          reason: 'captain_window',
+          message: windowCheck.message || CAPTAIN_NIGHT_UNAVAILABLE_MESSAGE,
+          conflict: null,
+          capacity: null,
+          location,
+        };
+      }
     }
 
     return checkSharedCharterSlotAvailability({
@@ -582,8 +620,12 @@ function conflictDecisionPayload(result, slot, input, boatId, shared) {
   };
 }
 
+function usesBioNightCharterHours(charterType) {
+  return normalizeCharterType(charterType) === 'bio';
+}
+
 function charterStartHoursForType(charterType) {
-  return normalizeCharterType(charterType) === 'bio'
+  return usesBioNightCharterHours(charterType)
     ? BIO_CHARTER_START_HOURS
     : DEFAULT_CHARTER_START_HOURS;
 }
@@ -609,7 +651,7 @@ function getCaptainNightWindowEnd(localStart) {
   });
 }
 
-function validateCharterSlotWindow({ charterType, startIso, endIso }) {
+function validateCharterSlotWindow({ charterType, startIso, endIso, launchId = null }) {
   const start = DateTime.fromISO(String(startIso || ''), { zone: 'utc' }).setZone(BUSINESS_TZ);
   const end = DateTime.fromISO(String(endIso || ''), { zone: 'utc' }).setZone(BUSINESS_TZ);
   if (!start.isValid || !end.isValid) {
@@ -619,32 +661,51 @@ function validateCharterSlotWindow({ charterType, startIso, endIso }) {
     return { valid: false, message: 'End time must be after start time.' };
   }
 
-  const anchorDay = getCaptainNightAnchorDay(start);
-  const windowEnd = getCaptainNightWindowEnd(start);
-  const windowStart = anchorDay ? getCaptainNightWindowStart(anchorDay) : null;
-  if (!anchorDay || !windowEnd || !windowStart) {
-    return { valid: false, message: captainNightUnavailableMessage(start) };
-  }
-
-  if (start < windowStart || start >= windowEnd) {
-    return { valid: false, message: captainNightUnavailableMessage(start) };
-  }
-  if (end > windowEnd || end <= windowStart) {
+  const type = normalizeCharterType(charterType);
+  if (type === 'rocket' && launchId) {
     return {
       valid: false,
-      message: end > windowEnd ? CHARTER_END_TOO_LATE_MESSAGE : captainNightUnavailableMessage(start),
+      message: 'Rocket launch validation must use async launch schedule checks.',
     };
   }
 
-  const endAnchor = getCaptainNightAnchorDay(end);
-  if (!endAnchor || endAnchor.toMillis() !== anchorDay.toMillis()) {
-    return { valid: false, message: captainNightUnavailableMessage(start) };
+  if (type !== 'rocket') {
+    const anchorDay = getCaptainNightAnchorDay(start);
+    const windowEnd = getCaptainNightWindowEnd(start);
+    const windowStart = anchorDay ? getCaptainNightWindowStart(anchorDay) : null;
+    if (!anchorDay || !windowEnd || !windowStart) {
+      return { valid: false, message: captainNightUnavailableMessage(start) };
+    }
+
+    if (start < windowStart || start >= windowEnd) {
+      return { valid: false, message: captainNightUnavailableMessage(start) };
+    }
+    if (end > windowEnd || end <= windowStart) {
+      return {
+        valid: false,
+        message: end > windowEnd ? CHARTER_END_TOO_LATE_MESSAGE : captainNightUnavailableMessage(start),
+      };
+    }
+
+    const endAnchor = getCaptainNightAnchorDay(end);
+    if (!endAnchor || endAnchor.toMillis() !== anchorDay.toMillis()) {
+      return { valid: false, message: captainNightUnavailableMessage(start) };
+    }
   }
 
-  const type = normalizeCharterType(charterType);
   if (type === 'bio') {
     if (start.minute !== 0 || !BIO_CHARTER_START_HOURS.has(start.hour)) {
-      return { valid: false, message: BIO_CHARTER_TIME_MESSAGE };
+      return {
+        valid: false,
+        message: BIO_CHARTER_TIME_MESSAGE,
+      };
+    }
+  } else if (type === 'rocket') {
+    // Legacy rocket bookings without a launch ID: keep permissive hour validation only.
+    const expectedDurationMs = CHARTER_DURATION_HOURS * 60 * 60 * 1000;
+    const actualDurationMs = end.toUTC().toMillis() - start.toUTC().toMillis();
+    if (Math.abs(actualDurationMs - expectedDurationMs) > 60 * 1000) {
+      return { valid: false, message: 'Invalid rocket charter duration.' };
     }
   } else if (!isCaptainLedStaffCharter(charterType)) {
     if (start.hour <= CAPTAIN_NIGHT_END_HOUR || start.hour < CAPTAIN_NIGHT_START_HOUR) {
@@ -712,26 +773,60 @@ async function checkUnifiedCharterSlotAvailability({
   passengerCount = 1,
   excludeBookingId = null,
   bookingSource = null,
+  launchId = null,
 } = {}) {
   const slot = parseSlotRange(startTime, endTime);
-  const windowCheck = validateCharterSlotWindow({
-    charterType,
-    startIso: slot.startIso,
-    endIso: slot.endIso,
-  });
-  if (!windowCheck.valid) {
-    const result = {
-      available: false,
-      reason: 'captain_window',
-      conflict: null,
-      message: windowCheck.message,
-      boatId: null,
-      charterSeating: null,
-    };
-    logBookingConflictDecision(
-      conflictDecisionPayload(result, slot, { startTime, endTime, charterType, bookingSource }, null, false)
-    );
-    return result;
+  const normalizedType = normalizeCharterType(charterType);
+
+  if (normalizedType === 'rocket' && launchId) {
+    const rocketLaunchAvailability = require('./rocketLaunchAvailabilityService');
+    const rocketCheck = await rocketLaunchAvailability.validateRocketLaunchBooking({
+      launchId,
+      startIso: slot.startIso,
+      endIso: slot.endIso,
+      minBookableStartMs: minBookableStartMs(),
+    });
+    if (!rocketCheck.valid) {
+      const result = {
+        available: false,
+        reason: 'captain_window',
+        conflict: null,
+        message: rocketCheck.message,
+        boatId: null,
+        charterSeating: null,
+      };
+      logBookingConflictDecision(
+        conflictDecisionPayload(
+          result,
+          slot,
+          { startTime, endTime, charterType, passengerCount, bookingSource, launchId },
+          null,
+          false
+        )
+      );
+      return result;
+    }
+  } else {
+    const windowCheck = validateCharterSlotWindow({
+      charterType,
+      startIso: slot.startIso,
+      endIso: slot.endIso,
+      launchId,
+    });
+    if (!windowCheck.valid) {
+      const result = {
+        available: false,
+        reason: 'captain_window',
+        conflict: null,
+        message: windowCheck.message,
+        boatId: null,
+        charterSeating: null,
+      };
+      logBookingConflictDecision(
+        conflictDecisionPayload(result, slot, { startTime, endTime, charterType, bookingSource, launchId }, null, false)
+      );
+      return result;
+    }
   }
   if (!isStartTimeAllowed(slot.startIso)) {
     const result = {
@@ -873,20 +968,42 @@ async function checkCharterSlotAvailability({
   endTime,
   charterType = null,
   excludeBookingId = null,
+  launchId = null,
 } = {}) {
   const slot = parseSlotRange(startTime, endTime);
-  const windowCheck = validateCharterSlotWindow({
-    charterType,
-    startIso: slot.startIso,
-    endIso: slot.endIso,
-  });
-  if (!windowCheck.valid) {
-    return {
-      available: false,
-      reason: 'captain_window',
-      conflict: null,
-      message: windowCheck.message,
-    };
+  const normalizedType = normalizeCharterType(charterType);
+
+  if (normalizedType === 'rocket' && launchId) {
+    const rocketLaunchAvailability = require('./rocketLaunchAvailabilityService');
+    const rocketCheck = await rocketLaunchAvailability.validateRocketLaunchBooking({
+      launchId,
+      startIso: slot.startIso,
+      endIso: slot.endIso,
+      minBookableStartMs: minBookableStartMs(),
+    });
+    if (!rocketCheck.valid) {
+      return {
+        available: false,
+        reason: 'captain_window',
+        conflict: null,
+        message: rocketCheck.message,
+      };
+    }
+  } else {
+    const windowCheck = validateCharterSlotWindow({
+      charterType,
+      startIso: slot.startIso,
+      endIso: slot.endIso,
+      launchId,
+    });
+    if (!windowCheck.valid) {
+      return {
+        available: false,
+        reason: 'captain_window',
+        conflict: null,
+        message: windowCheck.message,
+      };
+    }
   }
   if (!isStartTimeAllowed(slot.startIso)) {
     return {
@@ -949,15 +1066,88 @@ async function assertCharterSlotAvailable(input) {
   throw err;
 }
 
+async function listRocketLaunchCharterSlotsForDay(dateStr, options = {}) {
+  const rocketLaunchAvailability = require('./rocketLaunchAvailabilityService');
+  const rocketScheduleService = require('./rocketScheduleService');
+  const day = parseDateOnlyInZone(dateStr, BUSINESS_TZ);
+  if (!day) return [];
+
+  const launches = await rocketScheduleService.getLaunches();
+  const candidates = rocketLaunchAvailability.candidateSlotsForLaunchesOnDate(launches, dateStr);
+  if (candidates.length === 0) return [];
+
+  const rangeStartIso = day.startOf('day').toUTC().toISO();
+  const rangeEndIso = day.plus({ days: 1 }).toUTC().toISO();
+  const sharedListing = isSharedCharterBookingRequest({
+    charterType: 'rocket',
+    charterVariant: options.charterVariant,
+    rocketPackage: options.rocketPackage,
+  });
+  const boatId = sharedListing ? await resolveCharterBoatId('rocket') : null;
+  const intervals =
+    sharedListing && boatId
+      ? await loadCharterExternalBlockingIntervals(rangeStartIso, rangeEndIso)
+      : await loadCharterBlockingIntervals(rangeStartIso, rangeEndIso);
+  const minStartMs = minBookableStartMs();
+  const minGuests = Math.max(1, Number(options.passengerCount || options.minGuests || 1) || 1);
+  const out = [];
+
+  for (const candidate of candidates) {
+    const startMs = DateTime.fromISO(candidate.window.departureStartIso, { zone: 'utc' }).toMillis();
+    const endMs = DateTime.fromISO(candidate.window.departureEndIso, { zone: 'utc' }).toMillis();
+    if (startMs < minStartMs) continue;
+
+    let available = false;
+    let capacity = null;
+    if (sharedListing && boatId) {
+      const availability = await checkSharedCharterSlotAvailability({
+        boatId,
+        startTime: candidate.window.departureStartIso,
+        endTime: candidate.window.departureEndIso,
+        passengerCount: minGuests,
+      });
+      available = availability.available;
+      capacity = availability.capacity || null;
+      if (available && slotConflicts(startMs, endMs, intervals)) {
+        available = false;
+      }
+    } else if (!slotConflicts(startMs, endMs, intervals)) {
+      available = true;
+    }
+
+    if (available) {
+      const enrichedCapacity = rocketDepartureService.enrichCapacityWithRocketDeparture(capacity, {
+        charterType: 'rocket',
+        rocketPackage: options.rocketPackage || null,
+      });
+      out.push(
+        rocketLaunchAvailability.buildSlotRowFromCandidate(candidate, {
+          available: true,
+          capacity: enrichedCapacity,
+          rocketDepartureLabel: rocketDepartureService.formatRocketDepartureSlotLabel(
+            enrichedCapacity?.rocketDeparture || null
+          ),
+        })
+      );
+    }
+  }
+
+  return normalizeSlotRows(out);
+}
+
 async function listCharterSlotsForDay(dateStr, charterType, options = {}) {
   const day = parseDateOnlyInZone(dateStr, BUSINESS_TZ);
   if (!day) return [];
+
+  const normalizedType = normalizeCharterType(charterType);
+  if (normalizedType === 'rocket') {
+    return listRocketLaunchCharterSlotsForDay(dateStr, options);
+  }
 
   const duration = CHARTER_DURATION_HOURS;
   const durMs = duration * 60 * 60 * 1000;
   const rangeStartIso = day.startOf('day').toUTC().toISO();
   const rangeEndIso = day.plus({ days: 1 }).toUTC().toISO();
-  const normalizedType = normalizeCharterType(charterType);
   const sharedListing = isSharedCharterBookingRequest({
     charterType: normalizedType,
     charterVariant: options.charterVariant,

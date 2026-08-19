@@ -105,8 +105,26 @@ async function getLaunchSchedulePreview() {
   };
 }
 
+async function getLaunchById(launchId) {
+  const id = String(launchId || '').trim();
+  if (!id) return null;
+  const launches = await getLaunches();
+  return launches.find((row) => String(row?.id) === id) || null;
+}
+
+function clearLaunchCacheForTests() {
+  launchCache = { at: 0, results: [] };
+}
+
+function setLaunchCacheForTests(launches) {
+  launchCache = { at: Date.now(), results: Array.isArray(launches) ? launches : [] };
+}
+
 module.exports = {
   getLaunches,
+  getLaunchById,
   getLaunchSchedulePreview,
+  clearLaunchCacheForTests,
+  setLaunchCacheForTests,
   DEFAULT_ROCKET_URL,
 };

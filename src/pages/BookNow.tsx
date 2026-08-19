@@ -52,12 +52,23 @@ import {
 import type { RentalLocation } from '../lib/grouponPromo';
 import WaiverBlock, { waiverFormComplete } from '../components/booking/WaiverBlock';
 import BioluminescencePackageCards from '../components/booking/BioluminescencePackageCards';
+import RocketLaunchPackageCards from '../components/booking/RocketLaunchPackageCards';
 import {
   BIO_PACKAGE_PRICING_DISCLAIMER,
   getBioPackageDisplay,
   isDirectBioPackagePricingEnabled,
   type BioPackageId,
 } from '../lib/bioluminescencePackages';
+import {
+  getRocketPackageDisplay,
+  isDirectRocketPackagePricingEnabled,
+  isSharedRocketPackage,
+  ROCKET_LAUNCH_MIN_GUESTS,
+  ROCKET_SCHEDULE_NOTICE,
+  ROCKET_SHARED_ACK_LABEL,
+  ROCKET_SHARED_CHARTER_DISCLOSURE,
+  type RocketPackageId,
+} from '../lib/rocketLaunchPackages';
 
 interface BookNowProps {
   onNavigate: (page: string) => void;
@@ -68,11 +79,31 @@ interface ApiTimeSlot {
   end: string;
   label: string;
   startHHMM?: string;
+  rocketDepartureLabel?: string | null;
+  capacity?: {
+    used?: number;
+    remaining?: number;
+    max?: number;
+    rocketDeparture?: {
+      guestsBooked?: number;
+      guestsMax?: number;
+      minimumGuests?: number;
+      guestsNeededForMinimum?: number;
+      minimumReached?: boolean;
+      seatsRemaining?: number;
+    };
+  } | null;
 }
 
 /** API rows use `startIso`; BookNow historically used `start`. */
 function normalizeApiTimeSlots(
-  raw: Array<Partial<ApiTimeSlot> & { startIso?: string; endIso?: string }> | undefined
+  raw: Array<
+    Partial<ApiTimeSlot> & {
+      startIso?: string;
+      endIso?: string;
+      rocketDepartureLabel?: string | null;
+    }
+  > | undefined
 ): ApiTimeSlot[] {
   return (raw || [])
     .map((slot) => ({
@@ -80,6 +111,8 @@ function normalizeApiTimeSlots(
       end: String(slot.end || slot.endIso || '').trim(),
       label: String(slot.label || '').trim(),
       startHHMM: slot.startHHMM,
+      rocketDepartureLabel: slot.rocketDepartureLabel || null,
+      capacity: slot.capacity || null,
     }))
     .filter((slot) => Boolean(slot.start));
 }
@@ -237,8 +270,13 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     slotStartIso: '',
   });
   const [bioPackageId, setBioPackageId] = useState<BioPackageId | null>(null);
+  const [rocketPackageId, setRocketPackageId] = useState<RocketPackageId | null>(null);
+  const [rocketSharedMinimumAcknowledged, setRocketSharedMinimumAcknowledged] = useState(false);
   /** From GET /api/public/booking-config — enables package UI when Vite flag was not baked into the build. */
   const [serverDirectBioPackagesEnabled, setServerDirectBioPackagesEnabled] = useState<boolean | null>(
+    null
+  );
+  const [serverDirectRocketPackagesEnabled, setServerDirectRocketPackagesEnabled] = useState<boolean | null>(
     null
   );
   const [waiverData, setWaiverData] = useState({
@@ -503,6 +541,13 @@ export default function BookNow({ onNavigate }: BookNowProps) {
         setStep(1);
         next.charterType = 'rocket_launch';
         next.hours = 1;
+        const packageParam = searchParams.get('package');
+        const pkgFromUrl = packageParam ? getRocketPackageDisplay(packageParam) : null;
+        if (pkgFromUrl) {
+          setRocketPackageId(pkgFromUrl.id);
+          next.passengerCount = pkgFromUrl.id === 'rocket_private' ? 1 : pkgFromUrl.guestCount;
+          next.charterVariant = pkgFromUrl.seating === 'private' ? 'private' : 'shared';
+        }
       }
       if (charterType === 'bio' || charterType === 'night_bio') {
         setBookingMode('charter');
@@ -529,6 +574,19 @@ export default function BookNow({ onNavigate }: BookNowProps) {
         next.hours = 1;
         setBioPackageId(packageOnly.id);
         next.passengerCount = packageOnly.guestCount;
+      }
+      const rocketPackageOnly = getRocketPackageDisplay(searchParams.get('package'));
+      if (!charterType && rocketPackageOnly && mode !== 'rental' && !packageOnly) {
+        setBookingMode('charter');
+        setSelectedBoat(null);
+        setStep(1);
+        next.captainIncluded = true;
+        next.charterType = 'rocket_launch';
+        next.hours = 1;
+        setRocketPackageId(rocketPackageOnly.id);
+        next.passengerCount =
+          rocketPackageOnly.id === 'rocket_private' ? 1 : rocketPackageOnly.guestCount;
+        next.charterVariant = rocketPackageOnly.seating === 'private' ? 'private' : 'shared';
       }
       if (charterType === 'sunset' || charterType === 'sunset_cruise') {
         setBookingMode('charter');
@@ -666,10 +724,14 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     const ac = new AbortController();
     fetch(`${env.apiUrl}/api/public/booking-config`, { signal: ac.signal })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error('booking-config'))))
-      .then((data: { directBioPackagePricingEnabled?: boolean }) => {
+      .then((data: { directBioPackagePricingEnabled?: boolean; directRocketPackagePricingEnabled?: boolean }) => {
         setServerDirectBioPackagesEnabled(Boolean(data.directBioPackagePricingEnabled));
+        setServerDirectRocketPackagesEnabled(Boolean(data.directRocketPackagePricingEnabled));
       })
-      .catch(() => setServerDirectBioPackagesEnabled(null));
+      .catch(() => {
+        setServerDirectBioPackagesEnabled(null);
+        setServerDirectRocketPackagesEnabled(null);
+      });
     return () => ac.abort();
   }, [env.apiUrl, env.apiUrlConfigured]);
 
@@ -691,6 +753,35 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     ? getBioPackageDisplay(bioPackageId) ?? bioPackageFromUrl
     : null;
   const isRocketCharter = bookingMode === 'charter' && bookingData.charterType === 'rocket_launch';
+  const rocketPackageFromUrl = getRocketPackageDisplay(searchParams.get('package'));
+  const serverRocketPackagesOn = serverDirectRocketPackagesEnabled === true;
+  const isRocketPackageFlow =
+    isRocketCharter &&
+    (isDirectRocketPackagePricingEnabled() ||
+      serverRocketPackagesOn ||
+      Boolean(rocketPackageFromUrl) ||
+      Boolean(rocketPackageId));
+  const selectedRocketPackage = isRocketPackageFlow
+    ? getRocketPackageDisplay(rocketPackageId) ?? rocketPackageFromUrl
+    : null;
+  const requiresRocketSharedAck = isSharedRocketPackage(selectedRocketPackage);
+  const charterAvailabilityQueryParams = (() => {
+    if (!isRocketPackageFlow || !rocketPackageId || !selectedRocketPackage) {
+      return '';
+    }
+    const q = new URLSearchParams();
+    q.set('package', rocketPackageId);
+    q.set('charterVariant', selectedRocketPackage.seating === 'private' ? 'private' : 'shared');
+    q.set(
+      'passengerCount',
+      String(
+        selectedRocketPackage.id === 'rocket_private'
+          ? bookingData.passengerCount
+          : selectedRocketPackage.guestCount
+      )
+    );
+    return q.toString();
+  })();
   const isSunsetCharter = bookingMode === 'charter' && bookingData.charterType === 'sunset_cruise';
   /** Charters use a ticket-style checkout and skip rental add-ons. */
   const charterUsesPrivateSharedStep = false;
@@ -699,7 +790,9 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     if (bookingData.charterType === 'night_bio') {
       return selectedBioPackage ? selectedBioPackage.perGuestUsd : BIO_SHARED_PER_PERSON;
     }
-    if (bookingData.charterType === 'rocket_launch') return ROCKET_SHARED_PER_PERSON;
+    if (bookingData.charterType === 'rocket_launch') {
+      return selectedRocketPackage ? selectedRocketPackage.perGuestUsd : ROCKET_SHARED_PER_PERSON;
+    }
     return SUNSET_SHARED_PER_PERSON;
   })();
 
@@ -708,6 +801,8 @@ export default function BookNow({ onNavigate }: BookNowProps) {
       const pkg = getBioPackageDisplay(id);
       if (!pkg) return;
       setBioPackageId(id);
+      setRocketPackageId(null);
+      setRocketSharedMinimumAcknowledged(false);
       setBookingData((prev) => ({ ...prev, passengerCount: pkg.guestCount }));
       setSearchParams(
         (prev) => {
@@ -723,22 +818,49 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     [setSearchParams]
   );
 
+  const handleSelectRocketPackage = useCallback(
+    (id: RocketPackageId) => {
+      const pkg = getRocketPackageDisplay(id);
+      if (!pkg) return;
+      setRocketPackageId(id);
+      setBioPackageId(null);
+      setRocketSharedMinimumAcknowledged(false);
+      setBookingData((prev) => ({
+        ...prev,
+        passengerCount: pkg.id === 'rocket_private' ? Math.max(1, prev.passengerCount || 1) : pkg.guestCount,
+        charterVariant: pkg.seating === 'private' ? 'private' : 'shared',
+      }));
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.set('bookingMode', 'charter');
+          next.set('charterType', 'rocket');
+          next.set('package', id);
+          return next;
+        },
+        { replace: true }
+      );
+    },
+    [setSearchParams]
+  );
+
   const syncCharterExperienceUrl = useCallback(
-    (charterType: CharterType, packageId: BioPackageId | null) => {
+    (charterType: CharterType, packageId: string | null) => {
       setSearchParams(
         (prev) => {
           const next = new URLSearchParams(prev);
           next.set('bookingMode', 'charter');
           if (charterType === 'night_bio') {
             next.set('charterType', 'bio');
-            if (packageId) next.set('package', packageId);
+            if (packageId && getBioPackageDisplay(packageId)) next.set('package', packageId);
             else next.delete('package');
           } else if (charterType === 'sunset_cruise') {
             next.set('charterType', 'sunset');
             next.delete('package');
           } else {
             next.set('charterType', 'rocket');
-            next.delete('package');
+            if (packageId && getRocketPackageDisplay(packageId)) next.set('package', packageId);
+            else next.delete('package');
           }
           return next;
         },
@@ -763,15 +885,31 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     if (bookingMode !== 'charter') return;
     const urlTypeOk = charterTypeMatchesUrl(bookingData.charterType, searchParams);
     const urlPackage = searchParams.get('package') || '';
-    const wantPackage = bioPackageId || '';
+    const wantPackage =
+      charterTypeForApi(bookingData.charterType) === 'bio'
+        ? bioPackageId || ''
+        : charterTypeForApi(bookingData.charterType) === 'rocket'
+          ? rocketPackageId || ''
+          : '';
     const packageOk =
-      charterTypeForApi(bookingData.charterType) !== 'bio' || urlPackage === wantPackage;
+      charterTypeForApi(bookingData.charterType) === 'bio' ||
+      charterTypeForApi(bookingData.charterType) === 'rocket'
+        ? urlPackage === wantPackage
+        : true;
     if (urlTypeOk && packageOk) return;
-    syncCharterExperienceUrl(bookingData.charterType, bioPackageId);
+    syncCharterExperienceUrl(
+      bookingData.charterType,
+      charterTypeForApi(bookingData.charterType) === 'bio'
+        ? bioPackageId
+        : charterTypeForApi(bookingData.charterType) === 'rocket'
+          ? rocketPackageId
+          : null
+    );
   }, [
     bookingMode,
     bookingData.charterType,
     bioPackageId,
+    rocketPackageId,
     searchParams,
     syncCharterExperienceUrl,
     charterTypeMatchesUrl,
@@ -783,6 +921,8 @@ export default function BookNow({ onNavigate }: BookNowProps) {
       setSelectedBoat(null);
       if (charterType === 'night_bio') {
         const pkg = getBioPackageDisplay(bioPackageId);
+        setRocketPackageId(null);
+        setRocketSharedMinimumAcknowledged(false);
         setBookingData((prev) => ({
           ...prev,
           captainIncluded: true,
@@ -796,6 +936,13 @@ export default function BookNow({ onNavigate }: BookNowProps) {
         }));
         syncCharterExperienceUrl('night_bio', bioPackageId);
       } else {
+        if (charterType === 'rocket_launch') {
+          setBioPackageId(null);
+        } else {
+          setBioPackageId(null);
+          setRocketPackageId(null);
+          setRocketSharedMinimumAcknowledged(false);
+        }
         setBookingData((prev) => ({
           ...prev,
           captainIncluded: true,
@@ -807,11 +954,11 @@ export default function BookNow({ onNavigate }: BookNowProps) {
           time: charterType === 'sunset_cruise' ? '18:30' : prev.time,
           slotStartIso: '',
         }));
-        syncCharterExperienceUrl(charterType, null);
+        syncCharterExperienceUrl(charterType, charterType === 'rocket_launch' ? rocketPackageId : null);
       }
       setStep(1);
     },
-    [bioPackageId, syncCharterExperienceUrl]
+    [bioPackageId, rocketPackageId, syncCharterExperienceUrl]
   );
 
   const sharedTourOverLimit =
@@ -892,6 +1039,11 @@ export default function BookNow({ onNavigate }: BookNowProps) {
       to,
       charterType: charterTypeForApi(bookingData.charterType),
     });
+    if (charterAvailabilityQueryParams) {
+      new URLSearchParams(charterAvailabilityQueryParams).forEach((value, key) => {
+        q.set(key, value);
+      });
+    }
     fetch(`${env.apiUrl}/api/availability/charter?${q.toString()}`, { signal: ac.signal })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error('charter calendar'))))
       .then((data: { dates?: { date: string; available: boolean; slotsRemaining?: number }[] }) => {
@@ -912,7 +1064,14 @@ export default function BookNow({ onNavigate }: BookNowProps) {
         if (!ac.signal.aborted) setAvailCalendarLoading(false);
       });
     return () => ac.abort();
-  }, [bookingMode, bookingData.charterType, calendarMonth, env.apiUrl, env.apiUrlConfigured]);
+  }, [
+    bookingMode,
+    bookingData.charterType,
+    calendarMonth,
+    charterAvailabilityQueryParams,
+    env.apiUrl,
+    env.apiUrlConfigured,
+  ]);
 
   useEffect(() => {
     const cached = calendarIntelCacheRef.current;
@@ -1075,6 +1234,11 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     const charterType = charterTypeForApi(bookingData.charterType);
     const fetchDay = (date: string) => {
       const q = new URLSearchParams({ date, charterType });
+      if (charterAvailabilityQueryParams) {
+        new URLSearchParams(charterAvailabilityQueryParams).forEach((value, key) => {
+          q.set(key, value);
+        });
+      }
       return fetch(`${env.apiUrl}/api/availability/charter/times?${q.toString()}`, { signal: ac.signal })
         .then((r) => (r.ok ? r.json() : Promise.reject(new Error('charter times'))))
         .then((data: { slots?: ApiTimeSlot[] }) => normalizeApiTimeSlots(data.slots));
@@ -1123,7 +1287,14 @@ export default function BookNow({ onNavigate }: BookNowProps) {
         if (!ac.signal.aborted) setAvailTimesLoading(false);
       });
     return () => ac.abort();
-  }, [bookingMode, bookingData.date, bookingData.charterType, env.apiUrl, env.apiUrlConfigured]);
+  }, [
+    bookingMode,
+    bookingData.date,
+    bookingData.charterType,
+    charterAvailabilityQueryParams,
+    env.apiUrl,
+    env.apiUrlConfigured,
+  ]);
 
   const todayYmdLocal = ymdInTimezone(BUSINESS_TIMEZONE);
   const apiAvailEnabled = env.apiUrlConfigured && Boolean(env.apiUrl);
@@ -1178,6 +1349,11 @@ export default function BookNow({ onNavigate }: BookNowProps) {
 
   const charterSelectedDescription = (): string => {
     const t = bookingData.charterType;
+    if (isRocketPackageFlow && selectedRocketPackage) {
+      return `${selectedRocketPackage.cardTitle} · ${
+        selectedRocketPackage.seating === 'shared' ? 'Shared charter' : 'Private charter'
+      }`;
+    }
     const base = CHARTER_EXPERIENCE_LABEL[t];
     if (t === 'night_bio' || t === 'rocket_launch' || t === 'sunset_cruise') {
       return `${base} · ${bookingData.charterVariant === 'shared' ? 'Shared tour' : 'Private charter'}`;
@@ -1290,6 +1466,35 @@ export default function BookNow({ onNavigate }: BookNowProps) {
         total,
       };
     }
+    if (isRocketPackageFlow) {
+      if (!selectedRocketPackage) {
+        return {
+          basePrice: 0,
+          captainFee: 0,
+          deposit: 0,
+          weekendSurcharge: 0,
+          rocketLaunchSurcharge: 0,
+          bioTourSurcharge: 0,
+          sunsetExperienceSurcharge: 0,
+          nightExperienceSurcharge: 0,
+          peakSeasonSurcharge: 0,
+          total: 0,
+        };
+      }
+      const total = selectedRocketPackage.directPriceUsd;
+      return {
+        basePrice: total,
+        captainFee: 0,
+        deposit: 0,
+        weekendSurcharge: 0,
+        rocketLaunchSurcharge: 0,
+        bioTourSurcharge: 0,
+        sunsetExperienceSurcharge: 0,
+        nightExperienceSurcharge: 0,
+        peakSeasonSurcharge: 0,
+        total,
+      };
+    }
     const guests = Math.min(CHARTER_MAX_PASSENGERS, Math.max(CHARTER_MIN_PASSENGERS, Number(bookingData.passengerCount) || 1));
     const ticketPrice = sharedTourPerPerson;
     const total = Number((guests * ticketPrice).toFixed(2));
@@ -1336,7 +1541,15 @@ export default function BookNow({ onNavigate }: BookNowProps) {
           primary: `${selectedBioPackage.cardTitle} — $${selectedBioPackage.directPriceUsd.toFixed(2)}`,
           sub: `${selectedBioPackage.guestCount} guest${selectedBioPackage.guestCount === 1 ? '' : 's'} · $${selectedBioPackage.perGuestUsd} per guest`,
         }
-      : isSharedTour
+      : isRocketPackageFlow && selectedRocketPackage
+        ? {
+            primary: `${selectedRocketPackage.cardTitle} — $${selectedRocketPackage.directPriceUsd.toFixed(2)}`,
+            sub:
+              selectedRocketPackage.id === 'rocket_private'
+                ? `Up to ${selectedRocketPackage.maxGuests ?? 5} guests · private charter`
+                : `${selectedRocketPackage.guestCount} guest${selectedRocketPackage.guestCount === 1 ? '' : 's'} · shared charter`,
+          }
+        : isSharedTour
         ? {
             primary: `$${sharedTourPerPerson} per person`,
             sub: `Full charter total: $${pricing.total.toFixed(2)}`,
@@ -1511,9 +1724,19 @@ export default function BookNow({ onNavigate }: BookNowProps) {
       checkoutPerf.end('aborted_bio_package');
       return;
     }
-    if (isBioPackageFlow && normalizedPromoInput) {
-      setCheckoutError('Promo codes cannot be applied to bioluminescence package bookings.');
-      checkoutPerf.end('aborted_bio_promo');
+    if (isRocketPackageFlow && !rocketPackageId) {
+      setCheckoutError('Choose a rocket launch package to continue.');
+      checkoutPerf.end('aborted_rocket_package');
+      return;
+    }
+    if ((isBioPackageFlow || isRocketPackageFlow) && normalizedPromoInput) {
+      setCheckoutError('Promo codes cannot be applied to direct package charter bookings.');
+      checkoutPerf.end('aborted_package_promo');
+      return;
+    }
+    if (requiresRocketSharedAck && !rocketSharedMinimumAcknowledged) {
+      setCheckoutError('Please acknowledge the shared charter minimum guest policy before payment.');
+      checkoutPerf.end('aborted_rocket_shared_ack');
       return;
     }
     if (!bookingData.date || !bookingData.fullName || !bookingData.email || !bookingData.phone) {
@@ -1631,12 +1854,27 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                       ? 'sunset'
                       : 'rocket'
                   : null,
-              charterVariant: bookingMode === 'charter' ? bookingData.charterVariant : null,
+              charterVariant:
+                bookingMode === 'charter'
+                  ? isRocketPackageFlow && selectedRocketPackage
+                    ? selectedRocketPackage.seating === 'private'
+                      ? 'private'
+                      : 'shared'
+                    : bookingData.charterVariant
+                  : null,
               passengerCount:
                 bookingMode === 'charter'
                   ? Math.min(CHARTER_MAX_PASSENGERS, Math.max(CHARTER_MIN_PASSENGERS, Number(bookingData.passengerCount) || 1))
                   : 1,
-              pricingPackageId: isBioPackageFlow && bioPackageId ? bioPackageId : null,
+              pricingPackageId:
+                isBioPackageFlow && bioPackageId
+                  ? bioPackageId
+                  : isRocketPackageFlow && rocketPackageId
+                    ? rocketPackageId
+                    : null,
+              sharedCharterMinimumAcknowledged: requiresRocketSharedAck
+                ? rocketSharedMinimumAcknowledged
+                : null,
               special_requests:
                 bookingMode === 'charter'
                   ? `${bookingData.charterRequestOnly ? '[REQUEST_ONLY] ' : ''}${bookingData.specialRequests || ''}`.trim()
@@ -1654,6 +1892,9 @@ export default function BookNow({ onNavigate }: BookNowProps) {
             legal: {
               termsAccepted,
               damageFeeAcknowledged,
+              sharedCharterMinimumAcknowledged: requiresRocketSharedAck
+                ? rocketSharedMinimumAcknowledged
+                : undefined,
             },
           }),
         });
@@ -1881,6 +2122,13 @@ export default function BookNow({ onNavigate }: BookNowProps) {
   const charterTimesFromApi =
     bookingMode === 'charter' && apiAvailEnabled && !availTimesLoading && !timesManualFallback;
   const availableCharterTimes = new Set(timeSlots.map((slot) => slot.startHHMM));
+  const selectedRocketDepartureLabel = (() => {
+    if (!isRocketPackageFlow) return null;
+    const slot =
+      timeSlots.find((s) => s.start && bookingData.slotStartIso && s.start === bookingData.slotStartIso) ||
+      timeSlots.find((s) => s.startHHMM && s.startHHMM === bookingData.time);
+    return slot?.rocketDepartureLabel || null;
+  })();
 
   const urgencyHint =
     bookingMode === 'charter' &&
@@ -2392,7 +2640,12 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                             No captain availability that night. Try another evening start (5:00 PM or later).
                           </p>
                         )}
-                        {!isBioCharter && (
+                        {isRocketPackageFlow && selectedRocketDepartureLabel ? (
+                          <p className="mt-3 rounded-lg border border-amber-400/25 bg-amber-950/20 px-3 py-2 text-sm text-amber-100/95">
+                            {selectedRocketDepartureLabel}
+                          </p>
+                        ) : null}
+                        {!isBioCharter && !isRocketPackageFlow && (
                           <div className="mt-3 max-w-xs">
                             <label className="mb-1 block text-xs text-slate-500">Custom time</label>
                             <input
@@ -2465,6 +2718,89 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                             </a>
                             .
                           </p>
+                        </div>
+                      ) : isRocketPackageFlow ? (
+                        <div className="space-y-4">
+                          <div>
+                            <h3 className={bookingSectionTitle}>Choose your rocket launch package</h3>
+                            <p className="mt-2 text-sm text-slate-300">
+                              Guest packages — not boats. Launch Zone assigns your vessel based on availability.
+                            </p>
+                          </div>
+                          {!selectedRocketPackage ? (
+                            <RocketLaunchPackageCards
+                              selectedPackageId={rocketPackageId}
+                              onSelect={handleSelectRocketPackage}
+                            />
+                          ) : (
+                            <div className={`${bookingCard} border-cyan-400/25`}>
+                              <p className="text-xs font-semibold uppercase tracking-wide text-cyan-200/90">
+                                Selected package
+                              </p>
+                              <p className="mt-2 text-lg font-bold text-white">{selectedRocketPackage.cardTitle}</p>
+                              <p className="mt-1 text-sm text-slate-300">
+                                ${selectedRocketPackage.directPriceUsd.toFixed(2)} total
+                                {selectedRocketPackage.id !== 'rocket_private'
+                                  ? ` · ${selectedRocketPackage.guestCount} guest${selectedRocketPackage.guestCount === 1 ? '' : 's'}`
+                                  : ' · up to 5 guests · private charter'}
+                              </p>
+                              {selectedRocketPackage.seating === 'shared' ? (
+                                <p className="mt-3 text-sm leading-relaxed text-amber-100/90">
+                                  {ROCKET_SHARED_CHARTER_DISCLOSURE}
+                                </p>
+                              ) : null}
+                              {selectedRocketPackage.id === 'rocket_private' ? (
+                                <div className="mt-4">
+                                  <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-400">
+                                    How many guests in your group?
+                                  </label>
+                                  <div className="flex flex-wrap gap-2">
+                                    {[1, 2, 3, 4, 5].map((count) => (
+                                      <button
+                                        key={count}
+                                        type="button"
+                                        onClick={() => setBookingData({ ...bookingData, passengerCount: count })}
+                                        className={`min-h-[48px] min-w-[3.5rem] rounded-xl border px-4 py-3 text-sm font-semibold transition ${
+                                          bookingData.passengerCount === count
+                                            ? bookingSlotChipActive
+                                            : `border ${bookingChoiceIdle}`
+                                        }`}
+                                      >
+                                        {count}
+                                      </button>
+                                    ))}
+                                  </div>
+                                </div>
+                              ) : null}
+                              <button
+                                type="button"
+                                className="mt-4 text-sm font-semibold text-cyan-300 underline underline-offset-2"
+                                onClick={() => {
+                                  setRocketPackageId(null);
+                                  setRocketSharedMinimumAcknowledged(false);
+                                  setSearchParams(
+                                    (prev) => {
+                                      const next = new URLSearchParams(prev);
+                                      next.delete('package');
+                                      return next;
+                                    },
+                                    { replace: true }
+                                  );
+                                }}
+                              >
+                                Change package
+                              </button>
+                            </div>
+                          )}
+                          <div
+                            className="rounded-xl border border-white/10 bg-slate-950/45 p-4 text-sm leading-relaxed text-slate-300"
+                            role="note"
+                          >
+                            <p className="text-xs font-bold uppercase tracking-wide text-slate-400">
+                              Rocket launch schedule notice
+                            </p>
+                            <p className="mt-2">{ROCKET_SCHEDULE_NOTICE}</p>
+                          </div>
                         </div>
                       ) : (
                       <div>
@@ -2749,6 +3085,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                       bookingData.passengerCount >= 1 &&
                       bookingData.passengerCount <= CHARTER_MAX_PASSENGERS &&
                       (!isBioPackageFlow || Boolean(bioPackageId)) &&
+                      (!isRocketPackageFlow || Boolean(rocketPackageId)) &&
                       !dateMarkedUnavailable &&
                       !noSlotsForDay;
                     const canContinueRental = bookingMode === 'rental' && selectedBoat && bookingData.date && !scheduleContinueBlocked;
@@ -2763,6 +3100,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                         bookingData.passengerCount < 1 ||
                         bookingData.passengerCount > CHARTER_MAX_PASSENGERS ||
                         (isBioPackageFlow && !bioPackageId) ||
+                        (isRocketPackageFlow && !rocketPackageId) ||
                         dateMarkedUnavailable ||
                         noSlotsForDay ||
                         availTimesLoading
@@ -2863,7 +3201,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                       bookingChoiceIdle={bookingChoiceIdle}
                     />
                   )}
-                  {isRocketCharter && (
+                  {isRocketCharter && !isRocketPackageFlow && (
                     <CharterPrivateSharedTourBlock
                       sectionTitle="ROCKET LAUNCH: PRIVATE OR SHARED"
                       perPerson={ROCKET_SHARED_PER_PERSON}
@@ -3027,6 +3365,46 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                   </div>
                 )}
 
+                {isRocketPackageFlow ? (
+                  <div className="mt-6 space-y-4">
+                    <div
+                      className="rounded-xl border border-white/10 bg-slate-950/45 p-4 text-sm text-slate-300"
+                      role="note"
+                    >
+                      <p className="text-xs font-bold uppercase tracking-wide text-slate-400">
+                        Rocket launch schedule notice
+                      </p>
+                      <p className="mt-2">{ROCKET_SCHEDULE_NOTICE}</p>
+                    </div>
+                    {requiresRocketSharedAck ? (
+                      <>
+                        <div
+                          className="rounded-xl border border-amber-400/30 bg-amber-950/25 p-4 text-sm leading-relaxed text-amber-50/95"
+                          role="note"
+                        >
+                          <p className="text-xs font-bold uppercase tracking-wide text-amber-200/95">
+                            Shared charter — minimum {ROCKET_LAUNCH_MIN_GUESTS} guests required
+                          </p>
+                          <p className="mt-2">{ROCKET_SHARED_CHARTER_DISCLOSURE}</p>
+                          <p className="mt-3 text-xs text-amber-100/80">
+                            Payment reserves your seats. Departure is fully confirmed once the minimum guest count is
+                            reached.
+                          </p>
+                        </div>
+                        <label className="flex items-start gap-3 rounded-[var(--lz-radius)] border border-amber-400/25 bg-amber-950/20 p-4 text-sm text-slate-100">
+                          <input
+                            type="checkbox"
+                            checked={rocketSharedMinimumAcknowledged}
+                            onChange={(e) => setRocketSharedMinimumAcknowledged(e.target.checked)}
+                            className="mt-1 h-5 w-5 shrink-0 rounded border-white/20 text-amber-400 focus:ring-amber-500/40"
+                          />
+                          <span>{ROCKET_SHARED_ACK_LABEL}</span>
+                        </label>
+                      </>
+                    ) : null}
+                  </div>
+                ) : null}
+
                 <WaiverBlock
                   bookingMode={bookingMode}
                   waiverData={waiverData}
@@ -3189,12 +3567,32 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                     </div>
                     <div className="my-3 border-t border-white/10"></div>
                     {bookingMode === 'charter' ? (
-                      <div className="flex justify-between text-slate-300">
-                        <span>
-                          ${sharedTourPerPerson} × {bookingData.passengerCount} passengers
-                        </span>
-                        <span>${pricing.total.toFixed(2)}</span>
-                      </div>
+                      isBioPackageFlow && selectedBioPackage ? (
+                        <div className="flex justify-between text-slate-300">
+                          <span>
+                            {selectedBioPackage.cardTitle} ({selectedBioPackage.guestCount} guest
+                            {selectedBioPackage.guestCount === 1 ? '' : 's'})
+                          </span>
+                          <span>${pricing.total.toFixed(2)}</span>
+                        </div>
+                      ) : isRocketPackageFlow && selectedRocketPackage ? (
+                        <div className="flex justify-between text-slate-300">
+                          <span>
+                            {selectedRocketPackage.cardTitle}
+                            {selectedRocketPackage.id === 'rocket_private'
+                              ? ` (${bookingData.passengerCount} guest${bookingData.passengerCount === 1 ? '' : 's'})`
+                              : ` (${selectedRocketPackage.guestCount} guest${selectedRocketPackage.guestCount === 1 ? '' : 's'})`}
+                          </span>
+                          <span>${pricing.total.toFixed(2)}</span>
+                        </div>
+                      ) : (
+                        <div className="flex justify-between text-slate-300">
+                          <span>
+                            ${sharedTourPerPerson} × {bookingData.passengerCount} passengers
+                          </span>
+                          <span>${pricing.total.toFixed(2)}</span>
+                        </div>
+                      )
                     ) : (
                       <>
                         <div className="flex justify-between">
@@ -3221,7 +3619,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                         <span>Included</span>
                       </div>
                     )}
-                    {!isBioPackageFlow ? (
+                    {!isBioPackageFlow && !isRocketPackageFlow ? (
                     <div className="rounded-lg border border-white/10 bg-slate-950/60 p-3">
                       <label htmlFor="promo-code" className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-300">
                         Promo code

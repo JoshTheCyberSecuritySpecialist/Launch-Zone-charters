@@ -19,6 +19,8 @@ const MESSAGE_TYPES = new Set([
   'groupon_request_received',
   'groupon_request_rejected',
   'groupon_alternative_proposed',
+  'rocket_launch_reservation_received',
+  'rocket_launch_departure_confirmed',
 ]);
 
 function escapeHtml(value) {

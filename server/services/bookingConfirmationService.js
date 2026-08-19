@@ -3,6 +3,7 @@
  */
 const { DateTime } = require('luxon');
 const bookingCommunications = require('./bookingCommunications');
+const rocketLaunchEmailService = require('./rocketLaunchEmailService');
 const {
   googleMapsDirectionsUrl,
   locationText,
@@ -246,7 +247,7 @@ async function loadBookingForConfirmation(supabase, bookingId) {
   const { data: booking, error } = await supabase
     .from('bookings')
     .select(
-      'id, customer_id, boat_id, start_time, end_time, status, payment_status, payment_method, booking_source, booking_type, charter_type, charter_seating, rental_type, rental_location, guest_count, package_guest_count, pricing_package_name, pricing_package_id, is_night_tour, captain_included, waiver_signed, license_status, insurance_status, deposit_paid, deposit_amount, balance_due, total_price, final_total, final_amount_cents, booking_confirmation_sent_at, boats(id, name, type), customers(id, full_name, email, phone)'
+      'id, customer_id, boat_id, start_time, end_time, status, payment_status, payment_method, booking_source, booking_type, charter_type, charter_seating, rental_type, rental_location, guest_count, package_guest_count, pricing_package_name, pricing_package_id, is_night_tour, is_rocket_tour, captain_included, waiver_signed, license_status, insurance_status, deposit_paid, deposit_amount, balance_due, total_price, final_total, final_amount_cents, booking_confirmation_sent_at, departure_confirmation_status, shared_departure_id, boats(id, name, type), customers(id, full_name, email, phone)'
     )
     .eq('id', bookingId)
     .maybeSingle();
@@ -296,14 +297,55 @@ async function sendBookingConfirmation({
     throw err;
   }
 
-  if (booking.booking_confirmation_sent_at && !forceResend) {
-    return { ok: true, alreadySent: true, email: emailSafe };
-  }
-
   if (!resend || !resendFrom) {
     const err = new Error('Email service not configured');
     err.statusCode = 503;
     throw err;
+  }
+
+  const confirmationHelpers = getConfirmationEmailHelpers();
+
+  if (rocketLaunchEmailService.shouldSendRocketReservationEmail(booking)) {
+    return rocketLaunchEmailService.sendRocketReservationEmail({
+      supabase,
+      resend,
+      resendFrom,
+      booking,
+      customer,
+      boat,
+      bookingId: bookingIdSafe,
+      emailSafe,
+      source,
+      forceResend,
+      confirmationHelpers,
+      bookingReliability,
+    });
+  }
+
+  if (rocketLaunchEmailService.shouldSendRocketDepartureConfirmedEmail(booking)) {
+    if (booking.booking_confirmation_sent_at && !forceResend) {
+      return { ok: true, alreadySent: true, email: emailSafe };
+    }
+    return rocketLaunchEmailService.sendRocketDepartureConfirmedEmail({
+      supabase,
+      resend,
+      resendFrom,
+      booking,
+      customer,
+      boat,
+      bookingId: bookingIdSafe,
+      emailSafe,
+      source,
+      forceResend,
+      confirmationHelpers,
+      bookingReliability,
+      verificationReminder,
+      verificationSms,
+    });
+  }
+
+  if (booking.booking_confirmation_sent_at && !forceResend) {
+    return { ok: true, alreadySent: true, email: emailSafe };
   }
 
   const content = buildConfirmationContent({ booking, customer, boat, source });
@@ -411,6 +453,20 @@ async function sendBookingConfirmation({
   return { ok: true, alreadySent: false, email: emailSafe, subject: content.subject };
 }
 
+function getConfirmationEmailHelpers() {
+  return {
+    formatDateLabel,
+    formatTimeRange,
+    experienceLabel,
+    paymentSummary,
+    buildConfirmationContent,
+    ARRIVAL_MINUTES_EARLY,
+    SUPPORT_PHONE,
+    SUPPORT_PHONE_TEL,
+    publicAppBase,
+  };
+}
+
 module.exports = {
   ARRIVAL_MINUTES_EARLY,
   TITUSVILLE_MEETING_LOCATION,
@@ -420,4 +476,5 @@ module.exports = {
   resolveMeetingLocation,
   sendBookingConfirmation,
   loadBookingForConfirmation,
+  getConfirmationEmailHelpers,
 };

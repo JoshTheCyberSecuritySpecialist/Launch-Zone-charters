@@ -18,6 +18,7 @@ const {
   normalizeCharterSeating,
 } = require('../lib/sharedCharterCapacity');
 const boatCapacityService = require('./boatCapacityService');
+const rocketDepartureService = require('./rocketDepartureService');
 
 const BUSINESS_TZ = String(process.env.BUSINESS_TIMEZONE || 'America/New_York').trim();
 const DEFAULT_OPEN_HOUR = Number(process.env.AVAILABILITY_OPEN_HOUR || 7);
@@ -489,6 +490,7 @@ function isSharedCharterBookingRequest({
   charterSeating = null,
   charterVariant = null,
   bioPackage = null,
+  rocketPackage = null,
 } = {}) {
   const seating = normalizeCharterSeating(charterSeating);
   if (seating === 'private') return false;
@@ -497,6 +499,7 @@ function isSharedCharterBookingRequest({
   if (variant === 'private') return false;
   if (variant === 'shared') return true;
   if (bioPackage) return true;
+  if (rocketPackage) return String(rocketPackage.seating || '').trim().toLowerCase() === 'shared';
   return normalizeCharterType(charterType) === 'bio';
 }
 
@@ -705,6 +708,7 @@ async function checkUnifiedCharterSlotAvailability({
   charterSeating = null,
   charterVariant = null,
   bioPackage = null,
+  rocketPackage = null,
   passengerCount = 1,
   excludeBookingId = null,
   bookingSource = null,
@@ -749,6 +753,7 @@ async function checkUnifiedCharterSlotAvailability({
     charterSeating,
     charterVariant,
     bioPackage,
+    rocketPackage,
   });
   const boatId = await resolveCharterBoatId(charterType);
   const charterSeatingResolved = shared ? 'shared' : 'private';
@@ -957,6 +962,7 @@ async function listCharterSlotsForDay(dateStr, charterType, options = {}) {
     charterType: normalizedType,
     charterVariant: options.charterVariant,
     bioPackage: options.bioPackage,
+    rocketPackage: options.rocketPackage,
   });
   const boatId = sharedListing ? await resolveCharterBoatId(charterType) : null;
   const intervals =
@@ -999,20 +1005,27 @@ async function listCharterSlotsForDay(dateStr, charterType, options = {}) {
     }
 
     if (available) {
+      const enrichedCapacity = rocketDepartureService.enrichCapacityWithRocketDeparture(capacity, {
+        charterType: normalizedType,
+        rocketPackage: options.rocketPackage || null,
+      });
       out.push({
         start: new Date(startMs).toISOString(),
         end: endDt.toUTC().toISO(),
         label: startDt.setZone(BUSINESS_TZ).toFormat('h:mm a'),
         startHHMM: startDt.setZone(BUSINESS_TZ).toFormat('HH:mm'),
         available: true,
-        capacity,
+        capacity: enrichedCapacity,
+        rocketDepartureLabel: rocketDepartureService.formatRocketDepartureSlotLabel(
+          enrichedCapacity?.rocketDeparture || null
+        ),
       });
     }
   }
   return normalizeSlotRows(out);
 }
 
-async function listCharterDatesAvailability(fromDateStr, toDateStr, charterType) {
+async function listCharterDatesAvailability(fromDateStr, toDateStr, charterType, options = {}) {
   const from = parseDateOnlyInZone(fromDateStr, BUSINESS_TZ);
   const to = parseDateOnlyInZone(toDateStr, BUSINESS_TZ);
   if (!from || !to || to < from) {
@@ -1025,7 +1038,7 @@ async function listCharterDatesAvailability(fromDateStr, toDateStr, charterType)
 
   while (cursor <= endDay) {
     const isoDate = cursor.toFormat('yyyy-MM-dd');
-    const slots = await listCharterSlotsForDay(isoDate, charterType);
+    const slots = await listCharterSlotsForDay(isoDate, charterType, options);
     dates.push({
       date: isoDate,
       available: slots.length > 0,

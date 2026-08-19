@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Helmet } from 'react-helmet-async';
+import { useNavigate } from 'react-router-dom';
 import {
   ArrowRight,
   Calendar,
@@ -36,6 +37,12 @@ import SubscribeAlerts from '../components/SubscribeAlerts';
 import LaunchCountdown from '../components/LaunchCountdown';
 import LaunchCardViewingInfo from '../components/LaunchCardViewingInfo';
 import SmartImage from '../components/ui/SmartImage';
+import RocketLaunchPackageCards from '../components/booking/RocketLaunchPackageCards';
+import {
+  rocketBookingUrl,
+  ROCKET_SCHEDULE_NOTICE,
+  type RocketPackageId,
+} from '../lib/rocketLaunchPackages';
 
 const DEFAULT_SITE_ORIGIN = 'https://launchzonecharters.com';
 
@@ -110,6 +117,13 @@ function confidenceBadgeClass(level: 'High' | 'Medium' | 'Low') {
 }
 
 export default function Launches({ onNavigate }: LaunchesProps) {
+  const navigate = useNavigate();
+  const navigateRocketPackageBooking = useCallback(
+    (packageId: RocketPackageId) => {
+      navigate(rocketBookingUrl(packageId));
+    },
+    [navigate]
+  );
   const [rocketLoading, setRocketLoading] = useState(false);
   const [rocketResult, setRocketResult] = useState<RocketCheckResult | null>(null);
   const [previewLaunches, setPreviewLaunches] = useState<SpaceDevsLaunch[]>([]);
@@ -718,6 +732,31 @@ export default function Launches({ onNavigate }: LaunchesProps) {
                   </div>
                 );
               })}
+          </section>
+
+          <section
+            id="packages"
+            className="mt-12 space-y-6 border-t border-white/[0.06] pt-12 md:mt-14 md:pt-14"
+            aria-labelledby="rocket-packages-heading"
+          >
+            <div className="mx-auto max-w-4xl text-center">
+              <h2
+                id="rocket-packages-heading"
+                className="font-display text-2xl font-bold text-white md:text-3xl"
+              >
+                Choose your rocket launch package
+              </h2>
+              <p className="mt-3 text-pretty text-slate-300">
+                Solo seat, duo, or private charter for up to five guests — guest packages, not boat selection.
+                Launch Zone assigns your vessel.
+              </p>
+            </div>
+            <div className="mx-auto max-w-5xl">
+              <RocketLaunchPackageCards onSelect={navigateRocketPackageBooking} />
+            </div>
+            <p className="mx-auto max-w-3xl text-center text-sm leading-relaxed text-slate-400">
+              {ROCKET_SCHEDULE_NOTICE}
+            </p>
           </section>
 
           <section

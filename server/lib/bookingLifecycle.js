@@ -71,11 +71,27 @@ function experienceLabel(booking) {
 function buildPublicConfirmationSummary({ booking, customer, boat }) {
   const meeting = resolveMeetingLocation(booking);
   const mapsUrl = meeting?.address1 ? googleMapsDirectionsUrl(meeting) : null;
+  const charterType = String(booking.charter_type || '').trim().toLowerCase();
+  const charterSeating = String(booking.charter_seating || '').trim().toLowerCase();
+  const departureStatus = String(booking.departure_confirmation_status || '').trim();
+  const rocketSharedAwaitingMinimum =
+    charterType === 'rocket' &&
+    charterSeating === 'shared' &&
+    departureStatus === 'awaiting_minimum';
+  const rocketDepartureConfirmed =
+    charterType === 'rocket' &&
+    (charterSeating === 'private' ||
+      departureStatus === 'departure_confirmed' ||
+      departureStatus === 'departure_full');
   return {
     bookingId: booking.id,
     bookingType: booking.booking_type || null,
     charterType: booking.charter_type || null,
+    charterSeating: booking.charter_seating || null,
     status: booking.status || null,
+    departureConfirmationStatus: booking.departure_confirmation_status || null,
+    rocketSharedAwaitingMinimum,
+    rocketDepartureConfirmed,
     paymentStatus: booking.payment_status || null,
     waiverSigned: Boolean(booking.waiver_signed),
     confirmationEmailSent: Boolean(booking.booking_confirmation_sent_at),
@@ -85,20 +101,23 @@ function buildPublicConfirmationSummary({ booking, customer, boat }) {
     guests: Math.max(1, Number(booking.guest_count || booking.package_guest_count || 1)),
     experience: experienceLabel(booking),
     boatName: boat?.name || null,
-    meeting: meeting
-      ? {
-          id: meeting.id,
-          name: meeting.name,
-          address1: meeting.address1,
-          city: meeting.city,
-          state: meeting.state,
-          postalCode: meeting.postalCode,
-          fullAddress: locationText(meeting),
-          instructions: meeting.meetingInstructions || null,
-          directionsNote: meeting.directionsNote || null,
-          mapsUrl,
-        }
-      : null,
+    meeting:
+      rocketSharedAwaitingMinimum
+        ? null
+        : meeting
+          ? {
+              id: meeting.id,
+              name: meeting.name,
+              address1: meeting.address1,
+              city: meeting.city,
+              state: meeting.state,
+              postalCode: meeting.postalCode,
+              fullAddress: locationText(meeting),
+              instructions: meeting.meetingInstructions || null,
+              directionsNote: meeting.directionsNote || null,
+              mapsUrl,
+            }
+          : null,
   };
 }
 

@@ -27,6 +27,7 @@ import {
   buildPatchBody,
 } from '../lib/adminBookingFormState';
 import AdminGrouponReviewPanel from '../components/admin/AdminGrouponReviewPanel';
+import AdminRocketDeparturePanel from '../components/admin/AdminRocketDeparturePanel';
 import { BIO_LEGACY_PRICING_LABEL } from '../lib/bioluminescencePackages';
 import { fetchActiveCaptains, type AdminCaptainListItem } from '../lib/adminCaptains';
 
@@ -1096,6 +1097,12 @@ export default function AdminBookingDetails() {
         tripDate={form.date}
         startTimeLocal={form.startTime}
         endTimeLocal={form.endTime}
+      />
+      <AdminRocketDeparturePanel
+        bookingId={id}
+        charterType={String(booking.charter_type || '')}
+        authedFetch={authedFetch}
+        onUpdated={load}
       />
       {booking.charter_type === 'bio' ? (
         <div className="rounded-xl border border-cyan-500/25 bg-slate-900/80 p-4 text-sm text-slate-200">

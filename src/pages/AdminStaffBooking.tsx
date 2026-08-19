@@ -32,9 +32,16 @@ import {
   getBioPackageDisplay,
   isDirectBioPackagePricingEnabled,
 } from '../lib/bioluminescencePackages';
+import {
+  ROCKET_STAFF_PACKAGE_OPTIONS,
+  ROCKET_LAUNCH_MIN_GUESTS,
+  type RocketPackageId,
+  getRocketPackageDisplay,
+  isDirectRocketPackagePricingEnabled,
+} from '../lib/rocketLaunchPackages';
 
 type BookingType = 'rental' | 'captain_charter';
-type CharterProduct = 'general' | 'bio_night';
+type CharterProduct = 'general' | 'bio_night' | 'rocket_launch';
 type LocationValue = 'Port Orange' | 'Titusville';
 type PaymentStatus = 'pending' | 'deposit_paid' | 'paid';
 type PaymentMethod = '' | 'stripe' | 'cash' | 'venmo' | 'zelle' | 'paypal' | 'groupon' | 'comp' | 'other';
@@ -97,6 +104,17 @@ type StaffBookingRow = {
 };
 
 /** Default captain-led charter vessel — SunCatcher pontoon (FL0278PU). */
+function staffCharterApiFields(form: ReturnType<typeof blankForm>) {
+  if (form.bookingType !== 'captain_charter') return {};
+  if (form.charterProduct === 'bio_night' && form.bioPackageId) {
+    return { charter_type: 'bio' as const, pricing_package_id: form.bioPackageId };
+  }
+  if (form.charterProduct === 'rocket_launch' && form.rocketPackageId) {
+    return { charter_type: 'rocket' as const, pricing_package_id: form.rocketPackageId };
+  }
+  return {};
+}
+
 function pickDefaultCharterBoatId(boats: BoatRow[]): string {
   const name = (boat: BoatRow) => String(boat.name || '').toLowerCase();
   const suncatcher = boats.find(
@@ -119,6 +137,7 @@ const blankForm = () => {
     bookingType: 'rental' as BookingType,
     charterProduct: 'general' as CharterProduct,
     bioPackageId: '' as '' | BioPackageId,
+    rocketPackageId: '' as '' | RocketPackageId,
     location: 'Port Orange' as LocationValue,
     boatId: '',
     date: todayYmd(),
@@ -368,6 +387,11 @@ export default function AdminStaffBooking() {
     void loadToday();
   }, [loadToday]);
 
+  const selectedRocketPackage = useMemo(() => {
+    if (form.charterProduct !== 'rocket_launch' || !form.rocketPackageId) return null;
+    return getRocketPackageDisplay(form.rocketPackageId);
+  }, [form.charterProduct, form.rocketPackageId]);
+
   useEffect(() => {
     if (
       form.bookingType === 'captain_charter' &&
@@ -386,6 +410,24 @@ export default function AdminStaffBooking() {
       }));
       return;
     }
+    if (
+      form.bookingType === 'captain_charter' &&
+      form.charterProduct === 'rocket_launch' &&
+      form.rocketPackageId &&
+      isDirectRocketPackagePricingEnabled()
+    ) {
+      const pkg = getRocketPackageDisplay(form.rocketPackageId);
+      if (!pkg) return;
+      setForm((prev) => ({
+        ...prev,
+        passengerCount:
+          pkg.id === 'rocket_private' ? prev.passengerCount : String(pkg.guestCount),
+        originalPrice: money(pkg.directPriceUsd),
+        discount: '0.00',
+        finalPrice: money(pkg.directPriceUsd),
+      }));
+      return;
+    }
     if (!selectedBoat || durationHours <= 0) return;
     const base = computeStaffBookingOriginalPrice(selectedBoat, durationHours, form.bookingType);
     const discount = Number(form.discount) || 0;
@@ -398,6 +440,7 @@ export default function AdminStaffBooking() {
     durationHours,
     form.bookingType,
     form.bioPackageId,
+    form.rocketPackageId,
     form.charterProduct,
     form.discount,
     selectedBoat,
@@ -432,14 +475,7 @@ export default function AdminStaffBooking() {
             rental_location: form.location,
             passenger_count:
               form.bookingType === 'captain_charter' ? Math.floor(Number(form.passengerCount) || 1) : 1,
-            charter_type:
-              form.bookingType === 'captain_charter' && form.charterProduct === 'bio_night' ? 'bio' : undefined,
-            pricing_package_id:
-              form.bookingType === 'captain_charter' &&
-              form.charterProduct === 'bio_night' &&
-              form.bioPackageId
-                ? form.bioPackageId
-                : undefined,
+            ...staffCharterApiFields(form),
           }),
         });
         const payload = (await res.json().catch(() => ({}))) as {
@@ -493,6 +529,9 @@ export default function AdminStaffBooking() {
     form.location,
     form.passengerCount,
     form.startTime,
+    form.charterProduct,
+    form.bioPackageId,
+    form.rocketPackageId,
   ]);
 
   const submitGate = useMemo(() => {
@@ -522,10 +561,23 @@ export default function AdminStaffBooking() {
         blockers.push('Select a bioluminescence package.');
       }
       if (
+        form.charterProduct === 'rocket_launch' &&
+        isDirectRocketPackagePricingEnabled() &&
+        !form.rocketPackageId
+      ) {
+        blockers.push('Select a rocket launch package.');
+      }
+      if (
         form.charterProduct === 'bio_night' &&
         form.paymentMethod === 'groupon'
       ) {
         blockers.push('Groupon vouchers must be redeemed through the Groupon booking workflow, not direct bio packages.');
+      }
+      if (
+        form.charterProduct === 'rocket_launch' &&
+        form.paymentMethod === 'groupon'
+      ) {
+        blockers.push('Groupon vouchers must be redeemed through the Groupon booking workflow, not direct rocket packages.');
       }
       if (form.paymentMethod === 'comp' && !form.compReason.trim()) {
         blockers.push('Comp reason is required for complimentary bookings.');
@@ -563,6 +615,7 @@ export default function AdminStaffBooking() {
     form.boatId,
     form.bookingType,
     form.bioPackageId,
+    form.rocketPackageId,
     form.charterProduct,
     form.customerName,
     form.date,
@@ -640,14 +693,7 @@ export default function AdminStaffBooking() {
           startTime: form.startTime,
           durationHours,
           passenger_count: form.bookingType === 'captain_charter' ? form.passengerCount : 1,
-          charter_type:
-            form.bookingType === 'captain_charter' && form.charterProduct === 'bio_night' ? 'bio' : undefined,
-          pricing_package_id:
-            form.bookingType === 'captain_charter' &&
-            form.charterProduct === 'bio_night' &&
-            form.bioPackageId
-              ? form.bioPackageId
-              : undefined,
+          ...staffCharterApiFields(form),
           original_price: form.originalPrice,
           discount: form.discount,
           final_price: form.finalPrice,
@@ -855,6 +901,7 @@ export default function AdminStaffBooking() {
                           : p.boatId,
                       charterProduct: nextType === 'rental' ? 'general' : p.charterProduct,
                       bioPackageId: nextType === 'rental' ? '' : p.bioPackageId,
+                      rocketPackageId: nextType === 'rental' ? '' : p.rocketPackageId,
                       captainId: nextType === 'rental' ? '' : p.captainId,
                       ...durationFieldsForNewBookingType(nextType),
                     }));
@@ -881,7 +928,10 @@ export default function AdminStaffBooking() {
                         ...p,
                         charterProduct: next,
                         bioPackageId: next === 'bio_night' ? p.bioPackageId : '',
-                        passengerCount: next === 'bio_night' ? p.passengerCount : '1',
+                        rocketPackageId: next === 'rocket_launch' ? p.rocketPackageId : '',
+                        passengerCount:
+                          next === 'bio_night' || next === 'rocket_launch' ? p.passengerCount : '1',
+                        location: next === 'rocket_launch' ? 'Titusville' : p.location,
                       }));
                     }}
                   >
@@ -889,7 +939,41 @@ export default function AdminStaffBooking() {
                     {isDirectBioPackagePricingEnabled() ? (
                       <option value="bio_night">Bioluminescence night tour</option>
                     ) : null}
+                    {isDirectRocketPackagePricingEnabled() ? (
+                      <option value="rocket_launch">Rocket launch viewing</option>
+                    ) : null}
                   </select>
+                </label>
+              ) : null}
+              {form.bookingType === 'captain_charter' &&
+              form.charterProduct === 'rocket_launch' &&
+              isDirectRocketPackagePricingEnabled() ? (
+                <label className={labelClass}>
+                  Rocket launch package *
+                  <select
+                    className={inputClass}
+                    value={form.rocketPackageId}
+                    onChange={(e) => {
+                      const id = e.target.value as RocketPackageId | '';
+                      setForm((p) => ({ ...p, rocketPackageId: id }));
+                    }}
+                  >
+                    <option value="">Select package</option>
+                    {ROCKET_STAFF_PACKAGE_OPTIONS.map((opt) => (
+                      <option key={opt.id} value={opt.id}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="mt-1 block text-xs font-normal text-slate-500">
+                    Solo $100 · Duo $190 · Private $450 — shared packages lock guest count.
+                  </span>
+                  {selectedRocketPackage?.seating === 'shared' ? (
+                    <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-950">
+                      Shared rocket departures need at least {ROCKET_LAUNCH_MIN_GUESTS} total booked guests before
+                      the trip is fully confirmed. Customers receive a reservation email until the minimum is reached.
+                    </p>
+                  ) : null}
                 </label>
               ) : null}
               {form.bookingType === 'captain_charter' &&
@@ -1013,6 +1097,23 @@ export default function AdminStaffBooking() {
                       Locked to the selected bioluminescence package.
                     </span>
                   </label>
+                ) : form.charterProduct === 'rocket_launch' &&
+                  isDirectRocketPackagePricingEnabled() &&
+                  selectedRocketPackage &&
+                  selectedRocketPackage.id !== 'rocket_private' ? (
+                  <label className={labelClass}>
+                    Passengers
+                    <input
+                      className={`${inputClass} bg-slate-100`}
+                      type="number"
+                      readOnly
+                      value={form.passengerCount}
+                      aria-readonly
+                    />
+                    <span className="mt-1 block text-xs font-normal text-slate-500">
+                      Locked to the selected rocket launch package.
+                    </span>
+                  </label>
                 ) : (
                 <label className={labelClass}>
                   Passengers
@@ -1026,7 +1127,10 @@ export default function AdminStaffBooking() {
                     onChange={(e) => setForm((p) => ({ ...p, passengerCount: e.target.value }))}
                   />
                   <span className="mt-1 block text-xs font-normal text-slate-500">
-                    1–{CHARTER_MAX_PASSENGERS} passengers (plus captain).
+                    {form.charterProduct === 'rocket_launch' &&
+                    selectedRocketPackage?.id === 'rocket_private'
+                      ? `1–${CHARTER_MAX_PASSENGERS} guests on private rocket charter (flat package price).`
+                      : `1–${CHARTER_MAX_PASSENGERS} passengers (plus captain).`}
                   </span>
                 </label>
                 )

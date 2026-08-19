@@ -10,6 +10,11 @@ import {
 import { env } from '../config/env.js';
 import { wrapNavigateClick, wrapRouterNavigate, wrapSyncClick } from '../lib/clickPerf';
 import { supabase } from '../lib/supabase';
+import {
+  ROCKET_LAUNCH_MIN_GUESTS,
+  ROCKET_SCHEDULE_NOTICE,
+  ROCKET_SHARED_CHARTER_DISCLOSURE,
+} from '../lib/rocketLaunchPackages';
 
 interface BookingSuccessProps {
   onNavigate: (page: string) => void;
@@ -19,8 +24,12 @@ interface ConfirmationSummary {
   bookingId: string;
   bookingType: string | null;
   charterType: string | null;
+  charterSeating?: string | null;
   status: string | null;
   paymentStatus: string | null;
+  departureConfirmationStatus?: string | null;
+  rocketSharedAwaitingMinimum?: boolean;
+  rocketDepartureConfirmed?: boolean;
   waiverSigned: boolean;
   confirmationEmailSent: boolean;
   customerEmail: string | null;
@@ -86,8 +95,12 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
       if (!statusRes.ok) return false;
       if (statusPayload.bookingId) {
         setBookingId(statusPayload.bookingId);
-        await loadConfirmationSummary(api, statusPayload.bookingId);
-        setStatusMessage('Payment received. Your reservation is confirmed.');
+        const loaded = await loadConfirmationSummary(api, statusPayload.bookingId);
+        setStatusMessage(
+          loaded?.rocketSharedAwaitingMinimum
+            ? 'Payment received. Your rocket launch seats are reserved — awaiting minimum guest count.'
+            : 'Payment received. Your reservation is confirmed.'
+        );
         return true;
       }
       if (statusPayload.status === 'pending') {
@@ -239,6 +252,7 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
   );
 
   const isCharter = summary?.bookingType === 'charter';
+  const rocketAwaitingMinimum = Boolean(summary?.rocketSharedAwaitingMinimum);
   const showInsuranceNudge = !isCharter && insuranceStatus !== null && insuranceStatus !== 'verified';
   const showReadyForDeparture = bookingStatus === 'ready_for_departure';
   const meeting = summary?.meeting;
@@ -304,6 +318,17 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
         </div>
       ) : null}
 
+      {rocketAwaitingMinimum ? (
+        <div className="mb-6 rounded-xl border border-amber-400/40 bg-amber-500/10 px-4 py-3 text-left text-amber-50">
+          <p className="text-sm font-semibold md:text-base">Reservation received — minimum guests not reached yet</p>
+          <p className="mt-2 text-sm leading-relaxed text-amber-100/95">{ROCKET_SHARED_CHARTER_DISCLOSURE}</p>
+          <p className="mt-2 text-xs leading-relaxed text-amber-100/90 md:text-sm">
+            This shared departure needs at least {ROCKET_LAUNCH_MIN_GUESTS} total booked guests before it is fully
+            confirmed. Meeting directions will be emailed once the minimum is reached.
+          </p>
+        </div>
+      ) : null}
+
       {showInsuranceNudge ? (
         <div className="mb-6 rounded-xl border border-amber-400/40 bg-amber-500/10 px-4 py-3 text-center text-amber-50">
           <p className="text-sm font-semibold md:text-base">
@@ -319,25 +344,51 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
       ) : null}
 
       <div className="text-center">
-        <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full border border-emerald-400/40 bg-emerald-500/15 shadow-[0_0_24px_rgba(52,211,153,0.2)]">
-          <CheckCircle className="h-8 w-8 text-emerald-300" aria-hidden />
+        <div
+          className={`mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full border shadow-[0_0_24px_rgba(52,211,153,0.2)] ${
+            rocketAwaitingMinimum
+              ? 'border-amber-400/40 bg-amber-500/15'
+              : 'border-emerald-400/40 bg-emerald-500/15'
+          }`}
+        >
+          <CheckCircle
+            className={`h-8 w-8 ${rocketAwaitingMinimum ? 'text-amber-300' : 'text-emerald-300'}`}
+            aria-hidden
+          />
         </div>
         <h1 className="font-display text-2xl font-bold uppercase tracking-[0.1em] text-white md:text-3xl">
-          {isCharter ? "You're booked!" : 'Deposit received'}
+          {rocketAwaitingMinimum
+            ? 'Reservation received'
+            : isCharter
+              ? "You're booked!"
+              : 'Deposit received'}
         </h1>
         <p className="mt-3 text-sm leading-relaxed text-slate-300 md:text-base">
-          {isCharter
-            ? 'Your charter reservation is confirmed. Save the meeting location below — you do not need to wait for email to know where to meet us.'
-            : 'Your booking is submitted. Complete rental insurance below before your trip.'}
+          {rocketAwaitingMinimum
+            ? 'Your payment was received and your rocket launch seats are reserved. We will contact you once the shared departure reaches the minimum guest count or if we need to discuss options.'
+            : isCharter
+              ? 'Your charter reservation is confirmed. Save the meeting location below — you do not need to wait for email to know where to meet us.'
+              : 'Your booking is submitted. Complete rental insurance below before your trip.'}
         </p>
         {summary?.confirmationEmailSent && emailForDisplay ? (
           <p className="mt-3 text-sm text-emerald-100">
             We sent your booking confirmation and trip details to{' '}
             <span className="font-semibold text-white">{emailForDisplay}</span>.
           </p>
+        ) : rocketAwaitingMinimum && emailForDisplay ? (
+          <p className="mt-3 text-sm text-amber-100">
+            We sent a reservation confirmation to{' '}
+            <span className="font-semibold text-white">{emailForDisplay}</span>. A full departure confirmation with
+            meeting directions will follow once the minimum is reached.
+          </p>
         ) : emailForDisplay ? (
           <p className="mt-3 text-sm text-slate-400">
             Your confirmation email to {emailForDisplay} is being processed. Trip details are shown below.
+          </p>
+        ) : null}
+        {rocketAwaitingMinimum ? (
+          <p className="mt-4 rounded-lg border border-amber-400/20 bg-amber-950/20 px-3 py-2 text-left text-xs leading-relaxed text-amber-100/90 md:text-sm">
+            {ROCKET_SCHEDULE_NOTICE}
           </p>
         ) : null}
         {statusMessage ? <p className="mt-3 text-sm font-semibold text-emerald-100">{statusMessage}</p> : null}

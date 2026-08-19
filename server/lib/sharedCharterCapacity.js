@@ -48,6 +48,11 @@ function isSharedCharterBooking(row) {
   if (seating === 'private') return false;
   const charterType = String(row.charter_type || '').trim().toLowerCase();
   if (charterType === 'bio') return true;
+  if (charterType === 'rocket' || charterType === 'rocket_launch') {
+    const packageId = String(row.pricing_package_id || '').trim();
+    if (packageId === 'rocket_private') return false;
+    return true;
+  }
   return charterType === 'captain_charter' && row.boat_id != null;
 }
 
@@ -61,6 +66,19 @@ function isExclusiveBoatBooking(row) {
 }
 
 function effectiveGuestCountForCapacity(row) {
+  const packageId = String(row?.pricing_package_id || '').trim();
+  if (packageId && packageId.startsWith('rocket_')) {
+    try {
+      const { getRocketLaunchPackage, getCapacityReservedForPackage } = require('../config/rocketLaunchPackages');
+      if (getRocketLaunchPackage && getCapacityReservedForPackage) {
+        const pkg = getRocketLaunchPackage(packageId);
+        const reserved = getCapacityReservedForPackage(pkg);
+        if (reserved) return reserved;
+      }
+    } catch {
+      // fall through
+    }
+  }
   const validated = validateCharterPassengerCount(row?.guest_count);
   if (validated.valid) return validated.count;
   return UNKNOWN_GUEST_COUNT_ASSUMES;

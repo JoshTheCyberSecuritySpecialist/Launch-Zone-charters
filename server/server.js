@@ -41,6 +41,9 @@ const adminDocumentAccessService = require('./services/adminDocumentAccessServic
 const waiverPdfService = require('./services/waiverPdfService');
 const { getBioConditions } = require('./services/bioluminescenceService');
 const bioPackagePricing = require('./services/bioluminescencePackagePricing');
+const rocketLaunchPackagePricing = require('./services/rocketLaunchPackagePricing');
+const rocketDepartureService = require('./services/rocketDepartureService');
+const rocketLaunchEmailService = require('./services/rocketLaunchEmailService');
 const { getRocketConditions } = require('./services/rocketService');
 const { getLaunchSchedulePreview } = require('./services/rocketScheduleService');
 const { getWeeklyForecast } = require('./services/weeklyForecastService');
@@ -165,6 +168,16 @@ function computeExpectedBookingTotals({
     });
     if (bioResolved.kind === 'package' && bioResolved.totals) {
       return bioResolved.totals;
+    }
+
+    const rocketResolved = rocketLaunchPackagePricing.resolveCharterRocketPricing({
+      charterType,
+      pricingPackageId,
+      passengerCount,
+      bookingSource,
+    });
+    if (rocketResolved.kind === 'package' && rocketResolved.totals) {
+      return rocketResolved.totals;
     }
 
     const charterDurationHours = 1;
@@ -1003,7 +1016,7 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
 
   const bookingMode = typeof booking.bookingMode === 'string' ? booking.bookingMode.trim().toLowerCase() : '';
   const charterType = typeof booking.charterType === 'string' ? booking.charterType.trim().toLowerCase() : '';
-  const charterVariant =
+  let charterVariant =
     typeof booking.charterVariant === 'string' ? booking.charterVariant.trim().toLowerCase() : '';
   const pricingPackageId = bioPackagePricing.extractPricingPackageId(booking);
   const bookingSource = String(booking.bookingSource || booking.booking_source || 'website')
@@ -1027,6 +1040,25 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
       }
       if (bioCheck.passengerCount) {
         passengerCount = bioCheck.passengerCount;
+      }
+    } else if (rocketLaunchPackagePricing.normalizeRocketCharterType(charterType) === 'rocket') {
+      const rocketCheck = rocketLaunchPackagePricing.validateDirectRocketPackageCheckout({
+        charterType,
+        pricingPackageId,
+        passengerCountFromClient: passengerCount,
+        bookingSource,
+      });
+      if (!rocketCheck.ok) {
+        const err = new Error(rocketCheck.error);
+        err.statusCode = 400;
+        throw err;
+      }
+      if (rocketCheck.passengerCount) {
+        passengerCount = rocketCheck.passengerCount;
+      }
+      if (rocketCheck.charterVariant) {
+        booking.charterVariant = rocketCheck.charterVariant;
+        charterVariant = rocketCheck.charterVariant;
       }
     }
     const validation = validateCharterPassengerCount(passengerCount);
@@ -1084,7 +1116,7 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
     pricingPackageId &&
     (booking.promoCode || booking.promo_code || booking.discountAmount || booking.discount_amount)
   ) {
-    const err = new Error('Promo codes cannot be applied to bioluminescence package bookings.');
+    const err = new Error('Promo codes cannot be applied to direct package charter bookings.');
     err.statusCode = 400;
     throw err;
   }
@@ -1111,6 +1143,27 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
   expected = promoApplied.expected;
   const promoFields = promoApplied.promo;
 
+  const sharedRocketAckFinalize = Boolean(
+    legal?.sharedCharterMinimumAcknowledged ?? booking?.sharedCharterMinimumAcknowledged
+  );
+  const sharedRocketAckFinalizeCheck = rocketLaunchPackagePricing.assertSharedRocketMinimumAcknowledged({
+    rocketPackage: expected.rocketPackage || null,
+    acknowledged: sharedRocketAckFinalize,
+  });
+  if (!sharedRocketAckFinalizeCheck.ok) {
+    const refund = await refundStripeCheckoutSession(session);
+    if (!refund.ok) {
+      await bookingReliability.enqueueRecovery(supabase, {
+        ...bookingReliability.recoveryPayloadFromSession(session),
+        reason: 'refund_failed',
+        error: refund.error || refund.reason || sharedRocketAckFinalizeCheck.error,
+      });
+    }
+    const err = new Error(sharedRocketAckFinalizeCheck.error);
+    err.statusCode = sharedRocketAckFinalizeCheck.statusCode || 400;
+    throw err;
+  }
+
   const paidDeposit =
     typeof session.amount_total === 'number'
       ? Math.round((session.amount_total / 100) * 100) / 100
@@ -1125,6 +1178,13 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
   if (booking.special_requests) {
     adminNotesParts.push(`Special requests: ${String(booking.special_requests).trim()}`);
   }
+  if (
+    expected.rocketPackage &&
+    rocketLaunchPackagePricing.requiresSharedRocketMinimumAck(expected.rocketPackage) &&
+    sharedRocketAckFinalize
+  ) {
+    adminNotesParts.push(`Shared rocket minimum policy acknowledged at ${legalAcceptedAt}`);
+  }
 
   const captainFeeStored =
     bookingMode === 'rental' ? roundMoney(expected.captainFee || 0) : Number(booking.captain_fee || 0);
@@ -1133,13 +1193,27 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
   const charterInsertFields = isCharterBooking
     ? await availabilityService.prepareCharterBookingInsertFields({
         charterType,
-        charterVariant,
+        charterVariant: expected.charterVariant || charterVariant,
         bioPackage: expected.bioPackage || null,
+        rocketPackage: expected.rocketPackage || null,
       })
     : null;
 
   const licenseStatusForInsert = isCharterBooking ? 'verified' : booking.license_status || 'pending';
   const insuranceStatusForInsert = isCharterBooking ? 'verified' : booking.insurance_status || 'pending';
+
+  const rocketDepartureFields =
+    isCharterBooking && expected.rocketPackage && charterInsertFields?.boat_id
+      ? await rocketDepartureService.buildRocketDepartureInsertFields(supabase, {
+          rocketPackage: expected.rocketPackage,
+          charterType,
+          charterSeating: charterInsertFields.charter_seating,
+          boatId: charterInsertFields.boat_id,
+          startTime: booking.start_time,
+          passengerCount,
+          excludeBookingId: holdRow?.id || null,
+        })
+      : { shared_departure_id: null, departure_confirmation_status: null };
 
   const bookingInsert = {
     customer_id: customerRow.id,
@@ -1196,7 +1270,13 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
     final_total: promoFields?.final_total ?? expected.totalPrice,
     ...(expected.bioPackage
       ? bioPackagePricing.bioPackageBookingFields(expected.bioPackage)
-      : {}),
+      : expected.rocketPackage
+        ? rocketLaunchPackagePricing.rocketPackageBookingFields(
+            expected.rocketPackage,
+            passengerCount
+          )
+        : {}),
+    ...rocketDepartureFields,
   };
 
   try {
@@ -1211,8 +1291,9 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
           startTime: booking.start_time,
           endTime: bookingInsert.end_time,
           charterType,
-          charterVariant,
+          charterVariant: expected.charterVariant || charterVariant,
           bioPackage: expected.bioPackage || null,
+          rocketPackage: expected.rocketPackage || null,
           passengerCount,
           excludeBookingId: holdRow?.id || null,
           bookingSource: 'stripe_finalize',
@@ -1378,6 +1459,17 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
       throw err;
     }
     bookingRow = inserted;
+  }
+
+  if (rocketDepartureFields.shared_departure_id) {
+    try {
+      await refreshRocketDepartureGroupAndNotify(
+        rocketDepartureFields.shared_departure_id,
+        'finalize_booking'
+      );
+    } catch (refreshErr) {
+      console.warn('[rocket-departure-refresh]', refreshErr?.message || refreshErr);
+    }
   }
 
   if (waiverAccepted && waiverSignature.length > 0) {
@@ -1857,8 +1949,10 @@ app.get('/api/boats', async (req, res) => {
 /** Public flags for booking UI (no secrets). */
 app.get('/api/public/booking-config', (req, res) => {
   const { isDirectBioPackagePricingEnabled } = require('./config/bioluminescencePackages');
+  const { isDirectRocketPackagePricingEnabled } = require('./config/rocketLaunchPackages');
   return res.json({
     directBioPackagePricingEnabled: isDirectBioPackagePricingEnabled(),
+    directRocketPackagePricingEnabled: isDirectRocketPackagePricingEnabled(),
   });
 });
 
@@ -1984,6 +2078,35 @@ async function findOrCreateStaffCustomer({ fullName, email, phone }) {
   return data;
 }
 
+function resolveStaffCaptainCharterContext(body, passengerCount) {
+  const pricingPackageId = bioPackagePricing.extractPricingPackageId(body);
+  if (pricingPackageId && rocketLaunchPackagePricing.isRocketLaunchPackageId(pricingPackageId)) {
+    const rocketResolved = rocketLaunchPackagePricing.resolveStaffRocketCharterPackage({
+      body,
+      passengerCount,
+    });
+    if (!rocketResolved.ok) return rocketResolved;
+    return {
+      ok: true,
+      passengerCount: rocketResolved.passengerCount,
+      charterType: rocketResolved.charterType || 'rocket',
+      charterVariant: rocketResolved.charterVariant || 'shared',
+      bioPackage: null,
+      rocketPackage: rocketResolved.package || null,
+    };
+  }
+  const bioResolved = bioPackagePricing.resolveStaffBioCharterPackage({ body, passengerCount });
+  if (!bioResolved.ok) return bioResolved;
+  return {
+    ok: true,
+    passengerCount: bioResolved.passengerCount,
+    charterType: bioResolved.charterType || 'captain_charter',
+    charterVariant: 'shared',
+    bioPackage: bioResolved.package || null,
+    rocketPackage: null,
+  };
+}
+
 app.post('/api/admin/staff-bookings/check', async (req, res) => {
   const adminUser = await verifyAdminRequest(req, res);
   if (!adminUser) return;
@@ -1999,17 +2122,14 @@ app.post('/api/admin/staff-bookings/check', async (req, res) => {
     }
     let passengerCount = Math.max(1, Math.floor(Number(req.body?.passenger_count ?? req.body?.passengerCount ?? 1) || 1));
     if (bookingType === 'captain_charter') {
-      const bioResolved = bioPackagePricing.resolveStaffBioCharterPackage({
-        body: req.body || {},
-        passengerCount,
-      });
-      if (!bioResolved.ok) {
-        return res.status(bioResolved.statusCode || 400).json({
-          error: bioResolved.error,
-          code: bioResolved.code,
+      const charterResolved = resolveStaffCaptainCharterContext(req.body || {}, passengerCount);
+      if (!charterResolved.ok) {
+        return res.status(charterResolved.statusCode || 400).json({
+          error: charterResolved.error,
+          code: charterResolved.code,
         });
       }
-      passengerCount = bioResolved.passengerCount;
+      passengerCount = charterResolved.passengerCount;
       const validation = validateCharterPassengerCount(passengerCount);
       if (!validation.valid) return res.status(400).json({ error: validation.error });
       passengerCount = validation.count;
@@ -2067,18 +2187,22 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
     const location = cleanText(body.rental_location || body.location, 80);
     let passengerCount = Math.max(1, Math.floor(Number(body.passenger_count || body.passengerCount || 1) || 1));
     let staffBioPackage = null;
+    let staffRocketPackage = null;
     let staffCharterType = 'captain_charter';
+    let staffCharterVariant = 'shared';
     if (bookingType === 'captain_charter') {
-      const bioResolved = bioPackagePricing.resolveStaffBioCharterPackage({ body, passengerCount });
-      if (!bioResolved.ok) {
-        return res.status(bioResolved.statusCode || 400).json({
-          error: bioResolved.error,
-          code: bioResolved.code,
+      const charterResolved = resolveStaffCaptainCharterContext(body, passengerCount);
+      if (!charterResolved.ok) {
+        return res.status(charterResolved.statusCode || 400).json({
+          error: charterResolved.error,
+          code: charterResolved.code,
         });
       }
-      passengerCount = bioResolved.passengerCount;
-      staffCharterType = bioResolved.charterType || 'captain_charter';
-      staffBioPackage = bioResolved.package || null;
+      passengerCount = charterResolved.passengerCount;
+      staffCharterType = charterResolved.charterType || 'captain_charter';
+      staffCharterVariant = charterResolved.charterVariant || 'shared';
+      staffBioPackage = charterResolved.bioPackage || null;
+      staffRocketPackage = charterResolved.rocketPackage || null;
       const validation = validateCharterPassengerCount(passengerCount);
       if (!validation.valid) return res.status(400).json({ error: validation.error });
       passengerCount = validation.count;
@@ -2126,6 +2250,11 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
         error: 'Groupon voucher bookings use the Groupon redemption workflow, not direct bio package pricing.',
       });
     }
+    if (staffRocketPackage && paymentMethod === 'groupon') {
+      return res.status(400).json({
+        error: 'Groupon voucher bookings use the Groupon redemption workflow, not direct rocket package pricing.',
+      });
+    }
     const compReason = cleanText(body.comp_reason || body.compReason, 500);
     if (paymentMethod === 'comp' && !compReason) {
       return res.status(400).json({ error: 'Comp reason is required for complimentary staff bookings.' });
@@ -2133,11 +2262,17 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
     let originalPrice = parseStaffMoney(body.original_price ?? body.originalPrice, 0);
     let discount = parseStaffMoney(body.discount, 0);
     let finalPrice = parseStaffMoney(body.final_price ?? body.finalPrice, Math.max(0, originalPrice - discount));
-    const packagePriceUsd = staffBioPackage ? roundMoney(staffBioPackage.priceCents / 100) : null;
+    const packagePriceUsd = staffBioPackage
+      ? roundMoney(staffBioPackage.priceCents / 100)
+      : staffRocketPackage
+        ? roundMoney(staffRocketPackage.priceCents / 100)
+        : null;
     const packageStandardUsd = staffBioPackage
       ? roundMoney(staffBioPackage.standardValueCents / 100)
-      : null;
-    if (staffBioPackage) {
+      : staffRocketPackage
+        ? roundMoney(staffRocketPackage.priceCents / 100)
+        : null;
+    if (staffBioPackage || staffRocketPackage) {
       originalPrice = packageStandardUsd;
       if (paymentMethod !== 'comp') {
         finalPrice = packagePriceUsd;
@@ -2166,12 +2301,31 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
       }
     }
 
+    const staffRocketDepartureFields =
+      staffRocketPackage && bookingType === 'captain_charter'
+        ? await rocketDepartureService.buildRocketDepartureInsertFields(supabase, {
+            rocketPackage: staffRocketPackage,
+            charterType: staffCharterType,
+            charterSeating: String(
+              staffRocketPackage?.seating || staffCharterVariant || 'shared'
+            ).toLowerCase(),
+            boatId: boat.id,
+            startTime: times.startIso,
+            passengerCount,
+          })
+        : { shared_departure_id: null, departure_confirmation_status: null };
+
     const insert = {
       customer_id: customer.id,
       boat_id: boat.id,
       booking_type: bookingType === 'captain_charter' ? 'charter' : 'rental',
       charter_type: bookingType === 'captain_charter' ? staffCharterType : null,
-      charter_seating: bookingType === 'captain_charter' ? 'shared' : null,
+      charter_seating:
+        bookingType === 'captain_charter'
+          ? String(
+              staffRocketPackage?.seating || staffBioPackage?.seating || staffCharterVariant || 'shared'
+            ).toLowerCase()
+          : null,
       captain_id: captainId,
       guest_count: passengerCount,
       rental_location: location || null,
@@ -2192,7 +2346,7 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
       payment_status: paymentStatus,
       status,
       is_night_tour: Boolean(staffBioPackage),
-      is_rocket_tour: false,
+      is_rocket_tour: Boolean(staffRocketPackage) || staffCharterType === 'rocket',
       license_status: 'pending',
       insurance_status: bookingType === 'captain_charter' ? 'verified' : 'pending',
       waiver_signed: false,
@@ -2222,7 +2376,12 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
       original_total: originalPrice,
       discount_amount: discount,
       final_total: finalPrice,
-      ...(staffBioPackage ? bioPackagePricing.bioPackageBookingFields(staffBioPackage) : {}),
+      ...(staffBioPackage
+        ? bioPackagePricing.bioPackageBookingFields(staffBioPackage)
+        : staffRocketPackage
+          ? rocketLaunchPackagePricing.rocketPackageBookingFields(staffRocketPackage, passengerCount)
+          : {}),
+      ...staffRocketDepartureFields,
     };
 
     const { data: booking, error } = await supabase
@@ -2241,18 +2400,32 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
       throw error;
     }
 
-    if (paymentMethod === 'comp' && staffBioPackage) {
+    if (staffRocketDepartureFields.shared_departure_id) {
+      try {
+        await refreshRocketDepartureGroupAndNotify(
+          staffRocketDepartureFields.shared_departure_id,
+          'staff_booking'
+        );
+      } catch (refreshErr) {
+        console.warn('[rocket-departure-refresh:staff]', refreshErr?.message || refreshErr);
+      }
+    }
+
+    if (paymentMethod === 'comp' && (staffBioPackage || staffRocketPackage)) {
+      const compPackage = staffBioPackage || staffRocketPackage;
       await bookingReliability.insertActivity(supabase, {
         booking_id: booking.id,
         event_type: 'staff_comp_booking_created',
         actor_type: 'admin',
         actor_id: adminUser.id,
-        message: 'Staff comp bioluminescence package booking created',
+        message: staffBioPackage
+          ? 'Staff comp bioluminescence package booking created'
+          : 'Staff comp rocket launch package booking created',
         payload: {
-          package_id: staffBioPackage.id,
-          package_name: staffBioPackage.name,
-          normal_amount_cents: staffBioPackage.priceCents,
-          standard_value_cents: staffBioPackage.standardValueCents,
+          package_id: compPackage.id,
+          package_name: compPackage.name,
+          normal_amount_cents: compPackage.priceCents,
+          standard_value_cents: staffBioPackage?.standardValueCents ?? compPackage.priceCents,
           final_amount_usd: finalPrice,
           comp_reason: compReason,
           staff_user_id: adminUser.id,
@@ -3309,6 +3482,101 @@ app.post('/api/admin/bookings/:id/capacity-check', async (req, res) => {
     }
     console.error('[admin-booking-capacity:check]', err.message || err);
     return res.status(err.statusCode || 500).json({ error: err.message || 'Capacity check failed.' });
+  }
+});
+
+/**
+ * GET /api/admin/bookings/:id/rocket-departure — shared rocket group status for admin.
+ */
+app.get('/api/admin/bookings/:id/rocket-departure', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const id = cleanText(req.params.id, 80);
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid booking id.' });
+    const detail = await rocketDepartureService.getRocketDepartureAdminDetail(supabase, id);
+    return res.json(detail);
+  } catch (err) {
+    console.error('[admin-booking-rocket-departure:get]', err.message || err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not load rocket departure detail.' });
+  }
+});
+
+/**
+ * POST /api/admin/bookings/:id/rocket-departure-override — staff confirm below minimum or revert.
+ */
+app.post('/api/admin/bookings/:id/rocket-departure-override', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const id = cleanText(req.params.id, 80);
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid booking id.' });
+
+    const action = cleanText(req.body?.action, 40);
+    const reason = String(req.body?.reason || req.body?.overrideReason || req.body?.override_reason || '').trim();
+    const confirmOverride = Boolean(req.body?.confirmOverride ?? req.body?.confirm_override);
+
+    const detailBefore = await rocketDepartureService.getRocketDepartureAdminDetail(supabase, id);
+    if (!detailBefore.applicable || detailBefore.privateCharter) {
+      return res.status(400).json({ error: 'Rocket departure override does not apply to this booking.' });
+    }
+
+    if (action === 'force_confirm' && detailBefore.canForceConfirm && !confirmOverride) {
+      return res.status(409).json({
+        error: 'Confirm staff override to force departure confirmation below the guest minimum.',
+        requiresConfirmOverride: true,
+        summary: detailBefore.summary,
+        label: detailBefore.label,
+      });
+    }
+
+    const result = await rocketDepartureService.applyStaffRocketDepartureOverride(supabase, {
+      bookingId: id,
+      action,
+      reason,
+    });
+
+    await bookingReliability.insertActivity(supabase, {
+      booking_id: id,
+      event_type: 'rocket_departure_override',
+      actor_type: 'admin',
+      actor_id: adminUser.id || null,
+      message:
+        action === 'force_confirm'
+          ? 'Staff confirmed shared rocket departure below computed minimum.'
+          : 'Staff reverted rocket departure status to computed guest total.',
+      payload: {
+        action,
+        reason,
+        shared_departure_id: result.sharedDepartureId,
+        departure_status: result.departureStatus || detailBefore.departureStatus,
+        updated: result.updated ?? null,
+      },
+    });
+
+    if (action === 'force_confirm' && result.sharedDepartureId) {
+      try {
+        await rocketLaunchEmailService.maybeNotifyRocketDepartureGroupConfirmed({
+          supabase,
+          resend,
+          resendFrom,
+          sharedDepartureId: result.sharedDepartureId,
+          source: 'staff_departure_override',
+          confirmationHelpers: bookingConfirmationService.getConfirmationEmailHelpers(),
+          bookingReliability,
+          verificationReminder,
+          verificationSms,
+        });
+      } catch (notifyErr) {
+        console.warn('[admin-booking-rocket-departure:notify]', notifyErr?.message || notifyErr);
+      }
+    }
+
+    const detail = await rocketDepartureService.getRocketDepartureAdminDetail(supabase, id);
+    return res.json({ ok: true, result, ...detail });
+  } catch (err) {
+    console.error('[admin-booking-rocket-departure:override]', err.message || err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Override failed.' });
   }
 });
 
@@ -4752,6 +5020,9 @@ function normalizeOpsBooking(row) {
     booking_source: row.booking_source || (row.staff_created ? 'admin' : 'website'),
     booking_type: row.booking_type,
     charter_type: row.charter_type,
+    charter_seating: row.charter_seating || null,
+    departure_confirmation_status: row.departure_confirmation_status || null,
+    shared_departure_id: row.shared_departure_id || null,
     captain_id: row.captain_id || null,
     created_at: row.created_at || null,
     waiver_done: Boolean(row.waiver_signed || (Array.isArray(row.waivers) && row.waivers.length > 0)),
@@ -4810,6 +5081,20 @@ function actionItemsForBookings(bookings) {
     if (Number.isFinite(startMs) && startMs >= now && startMs <= now + 2 * 60 * 60 * 1000) {
       items.push({ ...base, type: 'upcoming_departure', label: 'Departure within 2 hours', urgency: 12 });
     }
+    const charterType = String(booking.charter_type || '').trim().toLowerCase();
+    const seating = String(booking.charter_seating || '').trim().toLowerCase();
+    if (
+      (charterType === 'rocket' || charterType === 'rocket_launch') &&
+      seating === 'shared' &&
+      String(booking.departure_confirmation_status || '') === 'awaiting_minimum'
+    ) {
+      items.push({
+        ...base,
+        type: 'rocket_awaiting_minimum',
+        label: 'Shared rocket departure — minimum guests not reached',
+        urgency: 13,
+      });
+    }
   }
   return items.sort((a, b) => b.urgency - a.urgency || new Date(a.start_time).getTime() - new Date(b.start_time).getTime()).slice(0, 50);
 }
@@ -4828,7 +5113,7 @@ app.get('/api/admin/operations-dashboard', async (req, res) => {
     const upcomingEnd = todayStart.plus({ days: 14 });
 
     const bookingSelect =
-      'id, customer_id, boat_id, captain_id, start_time, end_time, status, payment_status, booking_source, staff_created, rental_location, booking_type, charter_type, charter_seating, guest_count, waiver_signed, license_status, insurance_status, license_url, insurance_url, hold_expires_at, final_total, total_price, total_amount, deposit_paid, deposit_amount, amount_collected, balance_due, created_at, customers(full_name, email, phone), boats(id, name, type), waivers(id)';
+      'id, customer_id, boat_id, captain_id, start_time, end_time, status, payment_status, booking_source, staff_created, rental_location, booking_type, charter_type, charter_seating, guest_count, package_guest_count, pricing_package_id, departure_confirmation_status, shared_departure_id, waiver_signed, license_status, insurance_status, license_url, insurance_url, hold_expires_at, final_total, total_price, total_amount, deposit_paid, deposit_amount, amount_collected, balance_due, created_at, customers(full_name, email, phone), boats(id, name, type), waivers(id)';
 
     const [
       boatsResult,
@@ -5481,6 +5766,28 @@ app.get('/api/availability/times', async (req, res) => {
 });
 
 /**
+ * Parse optional package-aware charter availability query params.
+ */
+function parseCharterAvailabilityOptions(query = {}) {
+  const { getRocketLaunchPackage } = require('./config/rocketLaunchPackages');
+  const packageId = cleanText(query.package || query.pricing_package_id || query.pricingPackageId, 80);
+  let rocketPackage = null;
+  if (packageId && rocketLaunchPackagePricing.isRocketLaunchPackageId(packageId)) {
+    try {
+      rocketPackage = getRocketLaunchPackage(packageId);
+    } catch {
+      rocketPackage = null;
+    }
+  }
+  const charterVariant = cleanText(query.charterVariant || query.charter_variant, 20) || undefined;
+  const passengerCountRaw = Number(query.passengerCount ?? query.passenger_count ?? query.guests);
+  const passengerCount = Number.isFinite(passengerCountRaw)
+    ? Math.max(1, Math.round(passengerCountRaw))
+    : undefined;
+  return { rocketPackage, charterVariant, passengerCount };
+}
+
+/**
  * Captain charter calendar availability (7 nights/week + admin blocks).
  * GET /api/availability/charter?from=&to=&charterType=bio|rocket|sunset
  */
@@ -5490,6 +5797,7 @@ app.get('/api/availability/charter', async (req, res) => {
       return res.status(503).json({ error: 'Server not configured' });
     }
     const charterType = cleanText(req.query.charterType || req.query.charter_type, 40) || 'bio';
+    const availabilityOptions = parseCharterAvailabilityOptions(req.query);
     let from = String(req.query.from || '').trim();
     let to = String(req.query.to || '').trim();
     if (!from || !to) {
@@ -5498,13 +5806,19 @@ app.get('/api/availability/charter', async (req, res) => {
       if (!to) to = d.to;
     }
 
-    const dates = await availabilityService.listCharterDatesAvailability(from, to, charterType);
+    const dates = await availabilityService.listCharterDatesAvailability(
+      from,
+      to,
+      charterType,
+      availabilityOptions
+    );
     return res.json({
       charterType,
       timezone: availabilityService.BUSINESS_TZ,
       captainNights: '7 nights/week 5:00 PM – 4:00 AM',
       from,
       to,
+      packageId: availabilityOptions.rocketPackage?.id || null,
       dates,
     });
   } catch (err) {
@@ -5527,13 +5841,15 @@ app.get('/api/availability/charter/times', async (req, res) => {
       return res.status(400).json({ error: 'date is required (YYYY-MM-DD)' });
     }
     const charterType = cleanText(req.query.charterType || req.query.charter_type, 40) || 'bio';
-    const slots = await availabilityService.listCharterSlotsForDay(date, charterType);
+    const availabilityOptions = parseCharterAvailabilityOptions(req.query);
+    const slots = await availabilityService.listCharterSlotsForDay(date, charterType, availabilityOptions);
     return res.json({
       date,
       charterType,
       timezone: availabilityService.BUSINESS_TZ,
       durationHours: 1,
       minLeadHours: availabilityService.MIN_LEAD_HOURS,
+      packageId: availabilityOptions.rocketPackage?.id || null,
       slots,
     });
   } catch (err) {
@@ -6369,7 +6685,7 @@ app.post('/api/create-checkout-session', async (req, res) => {
     }
 
     const charterType = String(booking.charterType || '').trim().toLowerCase();
-    const charterVariant = String(booking.charterVariant || '').trim().toLowerCase();
+    let charterVariant = String(booking.charterVariant || '').trim().toLowerCase();
     const rentalType = String(booking.rental_type || '').trim().toLowerCase();
     const startTime = new Date(String(booking.start_time || ''));
     const endTime = new Date(String(booking.end_time || ''));
@@ -6410,11 +6726,20 @@ app.post('/api/create-checkout-session', async (req, res) => {
       .trim()
       .toLowerCase();
 
-    const packageGate = bioPackagePricing.assertBioPackageRequestAllowed({
-      pricingPackageId,
-      charterType,
-      bookingMode,
-    });
+    let packageGate = { ok: true };
+    if (pricingPackageId && rocketLaunchPackagePricing.isRocketLaunchPackageId(pricingPackageId)) {
+      packageGate = rocketLaunchPackagePricing.assertRocketPackageRequestAllowed({
+        pricingPackageId,
+        charterType,
+        bookingMode,
+      });
+    } else {
+      packageGate = bioPackagePricing.assertBioPackageRequestAllowed({
+        pricingPackageId,
+        charterType,
+        bookingMode,
+      });
+    }
     if (!packageGate.ok) {
       return res.status(packageGate.statusCode || 400).json({
         error: packageGate.error,
@@ -6440,6 +6765,22 @@ app.post('/api/create-checkout-session', async (req, res) => {
         if (bioCheck.passengerCount) {
           passengerCount = bioCheck.passengerCount;
         }
+      } else if (rocketLaunchPackagePricing.normalizeRocketCharterType(charterType) === 'rocket') {
+        const rocketCheck = rocketLaunchPackagePricing.validateDirectRocketPackageCheckout({
+          charterType,
+          pricingPackageId,
+          passengerCountFromClient: passengerCount,
+          bookingSource,
+        });
+        if (!rocketCheck.ok) {
+          return res.status(400).json({ error: rocketCheck.error });
+        }
+        if (rocketCheck.passengerCount) {
+          passengerCount = rocketCheck.passengerCount;
+        }
+        if (rocketCheck.charterVariant) {
+          charterVariant = rocketCheck.charterVariant;
+        }
       }
       const validation = validateCharterPassengerCount(passengerCount);
       if (!validation.valid) {
@@ -6455,7 +6796,7 @@ app.post('/api/create-checkout-session', async (req, res) => {
       (booking.promoCode || booking.promo_code || booking.discountAmount || booking.discount_amount)
     ) {
       return res.status(400).json({
-        error: 'Promo codes cannot be applied to bioluminescence package bookings.',
+        error: 'Promo codes cannot be applied to direct package charter bookings.',
       });
     }
 
@@ -6501,6 +6842,20 @@ app.post('/api/create-checkout-session', async (req, res) => {
     }
     expected = promoApplied.expected;
     const promoFields = promoApplied.promo;
+
+    const sharedRocketAck = Boolean(
+      legal?.sharedCharterMinimumAcknowledged ?? booking?.sharedCharterMinimumAcknowledged
+    );
+    const sharedRocketAckCheck = rocketLaunchPackagePricing.assertSharedRocketMinimumAcknowledged({
+      rocketPackage: expected.rocketPackage || null,
+      acknowledged: sharedRocketAck,
+    });
+    if (!sharedRocketAckCheck.ok) {
+      return res.status(sharedRocketAckCheck.statusCode || 400).json({
+        error: sharedRocketAckCheck.error,
+        code: sharedRocketAckCheck.code,
+      });
+    }
 
     const clientTotal = roundMoney(Number(booking.total_price || 0));
     const clientDueToday = roundMoney(Number(booking.deposit_amount || 0));
@@ -6594,8 +6949,9 @@ app.post('/api/create-checkout-session', async (req, res) => {
           startTime: startTime.toISOString(),
           endTime: endTime.toISOString(),
           charterType,
-          charterVariant,
+          charterVariant: expected.charterVariant || charterVariant,
           bioPackage: expected.bioPackage || null,
+          rocketPackage: expected.rocketPackage || null,
           passengerCount,
           bookingSource: 'stripe_checkout',
         });
@@ -6632,6 +6988,8 @@ app.post('/api/create-checkout-session', async (req, res) => {
         : 'Boat Rental Deposit';
     if (expected.bioPackage) {
       lineItemName = bioPackagePricing.stripeLineItemNameForBioPackage(expected.bioPackage);
+    } else if (expected.rocketPackage) {
+      lineItemName = rocketLaunchPackagePricing.stripeLineItemNameForRocketPackage(expected.rocketPackage);
     }
 
     const session = await stripe.checkout.sessions.create({
@@ -6675,7 +7033,7 @@ app.post('/api/create-checkout-session', async (req, res) => {
       discountAmount: promoFields?.discount_amount ?? null,
       originalTotal: promoFields?.original_total ?? expected.totalPrice,
       finalTotal: promoFields?.final_total ?? expected.totalPrice,
-      pricingPackageId: expected.bioPackage?.id || pricingPackageId || null,
+      pricingPackageId: expected.bioPackage?.id || expected.rocketPackage?.id || pricingPackageId || null,
       passengerCount: isCharterBooking ? passengerCount : booking.passengerCount,
     };
 
@@ -6689,10 +7047,23 @@ app.post('/api/create-checkout-session', async (req, res) => {
     const charterInsertFields = isCharterBooking
       ? await availabilityService.prepareCharterBookingInsertFields({
           charterType,
-          charterVariant,
+          charterVariant: expected.charterVariant || charterVariant,
           bioPackage: expected.bioPackage || null,
+          rocketPackage: expected.rocketPackage || null,
         })
       : null;
+
+    const holdRocketDepartureFields =
+      isCharterBooking && expected.rocketPackage && charterInsertFields?.boat_id
+        ? await rocketDepartureService.buildRocketDepartureInsertFields(supabase, {
+            rocketPackage: expected.rocketPackage,
+            charterType,
+            charterSeating: charterInsertFields.charter_seating,
+            boatId: charterInsertFields.boat_id,
+            startTime: authoritativeBooking.start_time,
+            passengerCount,
+          })
+        : { shared_departure_id: null, departure_confirmation_status: null };
 
     const holdInsert = {
       customer_id: customerRow.id,
@@ -6727,7 +7098,16 @@ app.post('/api/create-checkout-session', async (req, res) => {
       license_status: isCharterBooking ? 'verified' : authoritativeBooking.license_status || 'pending',
       insurance_status: isCharterBooking ? 'verified' : authoritativeBooking.insurance_status || 'pending',
       waiver_signed: false,
-      admin_notes: `Checkout hold · expires ${expiresAt}`,
+      admin_notes: [
+        `Checkout hold · expires ${expiresAt}`,
+        expected.rocketPackage &&
+        rocketLaunchPackagePricing.requiresSharedRocketMinimumAck(expected.rocketPackage) &&
+        sharedRocketAck
+          ? `Shared rocket minimum policy acknowledged at ${legalAcceptedAt}`
+          : '',
+      ]
+        .filter(Boolean)
+        .join('\n'),
       license_url: authoritativeBooking.license_url || null,
       insurance_url: authoritativeBooking.insurance_url || null,
       promo_code: promoFields?.promo_code || null,
@@ -6736,7 +7116,13 @@ app.post('/api/create-checkout-session', async (req, res) => {
       final_total: promoFields?.final_total ?? expected.totalPrice,
       ...(expected.bioPackage
         ? bioPackagePricing.bioPackageBookingFields(expected.bioPackage)
-        : {}),
+        : expected.rocketPackage
+          ? rocketLaunchPackagePricing.rocketPackageBookingFields(
+              expected.rocketPackage,
+              passengerCount
+            )
+          : {}),
+      ...holdRocketDepartureFields,
     };
 
     try {
@@ -6745,8 +7131,9 @@ app.post('/api/create-checkout-session', async (req, res) => {
           startTime: authoritativeBooking.start_time,
           endTime: holdInsert.end_time,
           charterType,
-          charterVariant,
+          charterVariant: expected.charterVariant || charterVariant,
           bioPackage: expected.bioPackage || null,
+          rocketPackage: expected.rocketPackage || null,
           passengerCount,
           bookingSource: 'stripe_checkout_hold',
         });
@@ -6777,6 +7164,17 @@ app.post('/api/create-checkout-session', async (req, res) => {
       }
       console.error('[create-checkout-session] hold insert:', holdErr.message);
       return res.status(409).json({ error: SLOT_TAKEN_USER_MESSAGE });
+    }
+
+    if (holdRocketDepartureFields.shared_departure_id) {
+      try {
+        await refreshRocketDepartureGroupAndNotify(
+          holdRocketDepartureFields.shared_departure_id,
+          'checkout_hold'
+        );
+      } catch (refreshErr) {
+        console.warn('[rocket-departure-refresh:hold]', refreshErr?.message || refreshErr);
+      }
     }
 
     const { error: draftErr } = await supabase.from('checkout_drafts').upsert(
@@ -7270,6 +7668,33 @@ function requireCronBearer(req, res) {
     return false;
   }
   return true;
+}
+
+async function refreshRocketDepartureGroupAndNotify(sharedDepartureId, source = 'departure_minimum_reached') {
+  const result = await rocketDepartureService.refreshRocketDepartureGroup(supabase, sharedDepartureId);
+  const { DEPARTURE_STATUS } = rocketDepartureService;
+  if (
+    result?.updated > 0 &&
+    (result.departureStatus === DEPARTURE_STATUS.DEPARTURE_CONFIRMED ||
+      result.departureStatus === DEPARTURE_STATUS.DEPARTURE_FULL)
+  ) {
+    try {
+      await rocketLaunchEmailService.maybeNotifyRocketDepartureGroupConfirmed({
+        supabase,
+        resend,
+        resendFrom,
+        sharedDepartureId,
+        source,
+        confirmationHelpers: bookingConfirmationService.getConfirmationEmailHelpers(),
+        bookingReliability,
+        verificationReminder,
+        verificationSms,
+      });
+    } catch (notifyErr) {
+      console.warn('[rocket-departure-notify]', notifyErr?.message || notifyErr);
+    }
+  }
+  return result;
 }
 
 async function sendBookingConfirmationInternal({

@@ -19,6 +19,7 @@ const {
 } = require('../lib/sharedCharterCapacity');
 const boatCapacityService = require('./boatCapacityService');
 const rocketDepartureService = require('./rocketDepartureService');
+const sunsetDepartureService = require('./sunsetDepartureService');
 
 const BUSINESS_TZ = String(process.env.BUSINESS_TIMEZONE || 'America/New_York').trim();
 const DEFAULT_OPEN_HOUR = Number(process.env.AVAILABILITY_OPEN_HOUR || 7);
@@ -379,6 +380,7 @@ async function checkStaffBookingAvailability({
   passengerCount = 1,
   charterType = null,
   launchId = null,
+  sunsetPackage = null,
 } = {}) {
   if (String(bookingType || '').trim().toLowerCase() === 'captain_charter') {
     const normalizedCharterType = normalizeCharterType(charterType);
@@ -419,7 +421,7 @@ async function checkStaffBookingAvailability({
       }
     }
 
-    return checkSharedCharterSlotAvailability({
+    const result = await checkSharedCharterSlotAvailability({
       boatId,
       startTime,
       endTime,
@@ -427,6 +429,31 @@ async function checkStaffBookingAvailability({
       location,
       excludeBookingId,
     });
+    if (
+      result.available &&
+      sunsetPackage &&
+      (sunsetPackage.id === 'sunset_solo' || sunsetPackage.canOpenSharedDeparture === false) &&
+      String(sunsetPackage.seating || '').trim().toLowerCase() === 'shared'
+    ) {
+      try {
+        await sunsetDepartureService.assertSunsetSoloCanJoin(supabase, {
+          boatId,
+          startTime,
+          passengerCount,
+          excludeBookingId,
+        });
+      } catch (err) {
+        return {
+          available: false,
+          reason: err.code || 'sunset_solo_no_open_departure',
+          message: err.message || sunsetDepartureService.SOLO_NO_DEPARTURE_MESSAGE,
+          conflict: null,
+          capacity: result.capacity || null,
+          location,
+        };
+      }
+    }
+    return result;
   }
 
   return checkBookingSlotAvailability({
@@ -533,6 +560,7 @@ function isSharedCharterBookingRequest({
   charterVariant = null,
   bioPackage = null,
   rocketPackage = null,
+  sunsetPackage = null,
 } = {}) {
   const seating = normalizeCharterSeating(charterSeating);
   if (seating === 'private') return false;
@@ -542,6 +570,7 @@ function isSharedCharterBookingRequest({
   if (variant === 'shared') return true;
   if (bioPackage) return true;
   if (rocketPackage) return String(rocketPackage.seating || '').trim().toLowerCase() === 'shared';
+  if (sunsetPackage) return String(sunsetPackage.seating || '').trim().toLowerCase() === 'shared';
   return normalizeCharterType(charterType) === 'bio';
 }
 
@@ -745,6 +774,11 @@ function enumerateCharterStartsForDay(day, charterType) {
     }
   }
 
+  if (normalizeCharterType(charterType) === 'sunset' && CAPTAIN_NIGHT_WEEKDAYS.has(dow)) {
+    candidates.push(day.set({ hour: 18, minute: 30, second: 0, millisecond: 0 }));
+    candidates.sort((a, b) => a.toMillis() - b.toMillis());
+  }
+
   return candidates;
 }
 
@@ -774,6 +808,7 @@ async function checkUnifiedCharterSlotAvailability({
   charterVariant = null,
   bioPackage = null,
   rocketPackage = null,
+  sunsetPackage = null,
   passengerCount = 1,
   excludeBookingId = null,
   bookingSource = null,
@@ -853,6 +888,7 @@ async function checkUnifiedCharterSlotAvailability({
     charterVariant,
     bioPackage,
     rocketPackage,
+    sunsetPackage,
   });
   const boatId = await resolveCharterBoatId(charterType);
   const charterSeatingResolved = shared ? 'shared' : 'private';
@@ -885,6 +921,41 @@ async function checkUnifiedCharterSlotAvailability({
       passengerCount,
       excludeBookingId,
     });
+    if (
+      result.available &&
+      sunsetPackage &&
+      (sunsetPackage.id === 'sunset_solo' || sunsetPackage.canOpenSharedDeparture === false) &&
+      String(sunsetPackage.seating || '').trim().toLowerCase() === 'shared'
+    ) {
+      try {
+        await sunsetDepartureService.assertSunsetSoloCanJoin(supabase, {
+          boatId,
+          startTime: slot.startIso,
+          passengerCount,
+          excludeBookingId,
+        });
+      } catch (err) {
+        const denied = {
+          available: false,
+          reason: err.code || 'sunset_solo_no_open_departure',
+          conflict: null,
+          message: err.message || sunsetDepartureService.SOLO_NO_DEPARTURE_MESSAGE,
+          boatId,
+          charterSeating: charterSeatingResolved,
+          capacity: result.capacity || null,
+        };
+        logBookingConflictDecision(
+          conflictDecisionPayload(
+            denied,
+            slot,
+            { startTime, endTime, charterType, passengerCount, bookingSource },
+            boatId,
+            true
+          )
+        );
+        return denied;
+      }
+    }
     const unified = {
       ...result,
       boatId,
@@ -1157,15 +1228,59 @@ async function listCharterSlotsForDay(dateStr, charterType, options = {}) {
     charterVariant: options.charterVariant,
     bioPackage: options.bioPackage,
     rocketPackage: options.rocketPackage,
+    sunsetPackage: options.sunsetPackage,
   });
   const boatId = sharedListing ? await resolveCharterBoatId(charterType) : null;
   const intervals =
     sharedListing && boatId
       ? await loadCharterExternalBlockingIntervals(rangeStartIso, rangeEndIso)
       : await loadCharterBlockingIntervals(rangeStartIso, rangeEndIso);
-  const starts = enumerateCharterStartsForDay(day, charterType);
   const minStartMs = minBookableStartMs();
   const minGuests = Math.max(1, Number(options.passengerCount || options.minGuests || 1) || 1);
+
+  if (normalizedType === 'sunset' && options.sunsetPackage?.id === 'sunset_solo') {
+    if (!boatId) return [];
+    const joinable = await sunsetDepartureService.listJoinableSunsetSoloSlots(supabase, {
+      boatId,
+      rangeStartIso,
+      rangeEndIso,
+      passengerCount: minGuests,
+    });
+    const out = [];
+    for (const item of joinable) {
+      const startDt = DateTime.fromISO(item.startIso, { zone: 'utc' }).setZone(BUSINESS_TZ);
+      if (!startDt.isValid) continue;
+      const startMs = startDt.toUTC().toMillis();
+      if (startMs < minStartMs) continue;
+      const endMs = startMs + durMs;
+      const endDt = DateTime.fromMillis(endMs, { zone: 'utc' }).setZone(BUSINESS_TZ);
+      const windowCheck = validateCharterSlotWindow({
+        charterType,
+        startIso: startDt.toUTC().toISO(),
+        endIso: endDt.toUTC().toISO(),
+      });
+      if (!windowCheck.valid) continue;
+      const availability = await checkSharedCharterSlotAvailability({
+        boatId,
+        startTime: startDt.toUTC().toISO(),
+        endTime: endDt.toUTC().toISO(),
+        passengerCount: minGuests,
+      });
+      if (!availability.available) continue;
+      if (slotConflicts(startMs, endMs, intervals)) continue;
+      out.push({
+        start: new Date(startMs).toISOString(),
+        end: endDt.toUTC().toISO(),
+        label: startDt.setZone(BUSINESS_TZ).toFormat('h:mm a'),
+        startHHMM: startDt.setZone(BUSINESS_TZ).toFormat('HH:mm'),
+        available: true,
+        capacity: availability.capacity || null,
+      });
+    }
+    return normalizeSlotRows(out);
+  }
+
+  const starts = enumerateCharterStartsForDay(day, charterType);
   const out = [];
 
   for (const startDt of starts) {

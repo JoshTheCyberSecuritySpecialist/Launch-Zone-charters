@@ -23,6 +23,15 @@ import {
   formatRocketPackagePriceUsd,
   type RocketPackageDisplay,
 } from './rocketLaunchPackages';
+import {
+  SUNSET_PACKAGE_DISPLAY,
+  SUNSET_PRIVATE_CHARTER_DESCRIPTION,
+  SUNSET_SOLO_JOIN_DISCLOSURE,
+  SUNSET_TWO_OPENER_DISCLOSURE,
+  sunsetBookingUrl,
+  formatSunsetPackagePriceUsd,
+  type SunsetPackageDisplay,
+} from './sunsetPackages';
 
 export const DIRECT_DEALS_PATH = '/booking/direct';
 
@@ -32,7 +41,13 @@ export type DirectDealExperienceId = 'bio' | 'rocket_launch' | 'sunset';
 
 export type DirectDealSeating = 'shared' | 'private';
 
-export type DirectDealDisclosureKind = 'bio_shared' | 'rocket_shared' | 'rocket_private' | 'none';
+export type DirectDealDisclosureKind =
+  | 'bio_shared'
+  | 'rocket_shared'
+  | 'rocket_private'
+  | 'sunset_shared'
+  | 'sunset_private'
+  | 'none';
 
 export type DirectDealCard = {
   id: string;
@@ -60,6 +75,7 @@ export type DirectDealSection = {
 export type DirectDealFlags = {
   bioPackagesEnabled: boolean;
   rocketPackagesEnabled: boolean;
+  sunsetPackagesEnabled: boolean;
 };
 
 function guestCountLabel(count: number): string {
@@ -147,6 +163,30 @@ function rocketFallbackCard(): DirectDealCard {
   };
 }
 
+function sunsetSkuCard(pkg: SunsetPackageDisplay): DirectDealCard {
+  const isPrivate = pkg.seating === 'private';
+  return {
+    id: pkg.id,
+    experienceId: 'sunset',
+    packageId: pkg.id,
+    name: pkg.cardTitle,
+    description: isPrivate ? SUNSET_PRIVATE_CHARTER_DESCRIPTION : EXPERIENCE_SUNSET.tagline,
+    guestLabel: isPrivate ? `Up to ${pkg.maxGuests ?? 5} Guests` : guestCountLabel(pkg.guestCount),
+    seating: pkg.seating,
+    seatingLabel: isPrivate ? 'Private Charter' : 'Shared Departure',
+    priceLabel: formatSunsetPackagePriceUsd(pkg.directPriceUsd),
+    href: sunsetBookingUrl(pkg.id),
+    disclosure: isPrivate ? 'sunset_private' : 'sunset_shared',
+    disclosureBody: isPrivate
+      ? null
+      : pkg.id === 'sunset_solo'
+        ? SUNSET_SOLO_JOIN_DISCLOSURE
+        : SUNSET_TWO_OPENER_DISCLOSURE,
+    extraDisclosure: null,
+    badge: isPrivate ? 'Private Charter' : pkg.badge,
+  };
+}
+
 function sunsetCard(): DirectDealCard {
   return {
     id: 'sunset_charter',
@@ -173,11 +213,14 @@ export function buildDirectDealSections(flags: DirectDealFlags): DirectDealSecti
   const rocketCards = flags.rocketPackagesEnabled
     ? ROCKET_PACKAGE_DISPLAY.map(rocketSkuCard)
     : [rocketFallbackCard()];
+  const sunsetCards = flags.sunsetPackagesEnabled
+    ? SUNSET_PACKAGE_DISPLAY.map(sunsetSkuCard)
+    : [sunsetCard()];
 
   return [
     { id: 'bio', heading: 'Bioluminescence Tours', cards: bioCards },
     { id: 'rocket', heading: 'Rocket Launch Experiences', cards: rocketCards },
-    { id: 'sunset', heading: 'Sunset and Wildlife', cards: [sunsetCard()] },
+    { id: 'sunset', heading: 'Sunset and Wildlife', cards: sunsetCards },
   ];
 }
 
@@ -186,6 +229,7 @@ export function isKnownDirectPackageId(packageId: string | null | undefined): bo
   if (!id) return false;
   return (
     BIO_PACKAGE_DISPLAY.some((pkg) => pkg.id === id) ||
-    ROCKET_PACKAGE_DISPLAY.some((pkg) => pkg.id === id)
+    ROCKET_PACKAGE_DISPLAY.some((pkg) => pkg.id === id) ||
+    SUNSET_PACKAGE_DISPLAY.some((pkg) => pkg.id === id)
   );
 }

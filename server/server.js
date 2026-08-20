@@ -43,6 +43,8 @@ const { getBioConditions } = require('./services/bioluminescenceService');
 const bioPackagePricing = require('./services/bioluminescencePackagePricing');
 const rocketLaunchPackagePricing = require('./services/rocketLaunchPackagePricing');
 const rocketDepartureService = require('./services/rocketDepartureService');
+const sunsetPackagePricing = require('./services/sunsetPackagePricing');
+const sunsetDepartureService = require('./services/sunsetDepartureService');
 const rocketLaunchEmailService = require('./services/rocketLaunchEmailService');
 const { getRocketConditions } = require('./services/rocketService');
 const { getLaunchSchedulePreview } = require('./services/rocketScheduleService');
@@ -179,6 +181,16 @@ function computeExpectedBookingTotals({
     });
     if (rocketResolved.kind === 'package' && rocketResolved.totals) {
       return rocketResolved.totals;
+    }
+
+    const sunsetResolved = sunsetPackagePricing.resolveCharterSunsetPricing({
+      charterType,
+      pricingPackageId,
+      passengerCount,
+      bookingSource,
+    });
+    if (sunsetResolved.kind === 'package' && sunsetResolved.totals) {
+      return sunsetResolved.totals;
     }
 
     const charterDurationHours = 1;
@@ -1084,6 +1096,25 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
         booking.charterVariant = rocketCheck.charterVariant;
         charterVariant = rocketCheck.charterVariant;
       }
+    } else if (sunsetPackagePricing.normalizeSunsetCharterType(charterType) === 'sunset') {
+      const sunsetCheck = sunsetPackagePricing.validateDirectSunsetPackageCheckout({
+        charterType,
+        pricingPackageId,
+        passengerCountFromClient: passengerCount,
+        bookingSource,
+      });
+      if (!sunsetCheck.ok) {
+        const err = new Error(sunsetCheck.error);
+        err.statusCode = 400;
+        throw err;
+      }
+      if (sunsetCheck.passengerCount) {
+        passengerCount = sunsetCheck.passengerCount;
+      }
+      if (sunsetCheck.charterVariant) {
+        booking.charterVariant = sunsetCheck.charterVariant;
+        charterVariant = sunsetCheck.charterVariant;
+      }
     }
     const validation = validateCharterPassengerCount(passengerCount);
     if (!validation.valid) {
@@ -1220,6 +1251,7 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
         charterVariant: expected.charterVariant || charterVariant,
         bioPackage: expected.bioPackage || null,
         rocketPackage: expected.rocketPackage || null,
+        sunsetPackage: expected.sunsetPackage || null,
       })
     : null;
 
@@ -1230,6 +1262,19 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
     isCharterBooking && expected.rocketPackage && charterInsertFields?.boat_id
       ? await rocketDepartureService.buildRocketDepartureInsertFields(supabase, {
           rocketPackage: expected.rocketPackage,
+          charterType,
+          charterSeating: charterInsertFields.charter_seating,
+          boatId: charterInsertFields.boat_id,
+          startTime: booking.start_time,
+          passengerCount,
+          excludeBookingId: holdRow?.id || null,
+        })
+      : { shared_departure_id: null, departure_confirmation_status: null };
+
+  const sunsetDepartureFields =
+    isCharterBooking && expected.sunsetPackage && charterInsertFields?.boat_id
+      ? await sunsetDepartureService.buildSunsetDepartureInsertFields(supabase, {
+          sunsetPackage: expected.sunsetPackage,
           charterType,
           charterSeating: charterInsertFields.charter_seating,
           boatId: charterInsertFields.boat_id,
@@ -1299,7 +1344,9 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
             expected.rocketPackage,
             passengerCount
           )
-        : {}),
+        : expected.sunsetPackage
+          ? sunsetPackagePricing.sunsetPackageBookingFields(expected.sunsetPackage, passengerCount)
+          : {}),
     ...(rocketLaunchId
       ? {
           external_reference: require('./services/rocketLaunchAvailabilityService').formatExternalLaunchRef(
@@ -1308,6 +1355,7 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
         }
       : {}),
     ...rocketDepartureFields,
+    ...sunsetDepartureFields,
   };
 
   try {
@@ -1325,6 +1373,7 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
           charterVariant: expected.charterVariant || charterVariant,
           bioPackage: expected.bioPackage || null,
           rocketPackage: expected.rocketPackage || null,
+          sunsetPackage: expected.sunsetPackage || null,
           passengerCount,
           excludeBookingId: holdRow?.id || null,
           bookingSource: 'stripe_finalize',
@@ -1985,6 +2034,7 @@ app.get('/api/public/booking-config', (req, res) => {
   return res.json({
     directBioPackagePricingEnabled: isDirectBioPackagePricingEnabled(),
     directRocketPackagePricingEnabled: isDirectRocketPackagePricingEnabled(),
+    directSunsetPackagePricingEnabled: require('./config/sunsetPackages').isDirectSunsetPackagePricingEnabled(),
   });
 });
 
@@ -2125,6 +2175,23 @@ function resolveStaffCaptainCharterContext(body, passengerCount) {
       charterVariant: rocketResolved.charterVariant || 'shared',
       bioPackage: null,
       rocketPackage: rocketResolved.package || null,
+      sunsetPackage: null,
+    };
+  }
+  if (pricingPackageId && sunsetPackagePricing.isSunsetPackageId(pricingPackageId)) {
+    const sunsetResolved = sunsetPackagePricing.resolveStaffSunsetCharterPackage({
+      body,
+      passengerCount,
+    });
+    if (!sunsetResolved.ok) return sunsetResolved;
+    return {
+      ok: true,
+      passengerCount: sunsetResolved.passengerCount,
+      charterType: sunsetResolved.charterType || 'sunset',
+      charterVariant: sunsetResolved.charterVariant || 'shared',
+      bioPackage: null,
+      rocketPackage: null,
+      sunsetPackage: sunsetResolved.package || null,
     };
   }
   const bioResolved = bioPackagePricing.resolveStaffBioCharterPackage({ body, passengerCount });
@@ -2136,6 +2203,7 @@ function resolveStaffCaptainCharterContext(body, passengerCount) {
     charterVariant: 'shared',
     bioPackage: bioResolved.package || null,
     rocketPackage: null,
+    sunsetPackage: null,
   };
 }
 
@@ -2182,6 +2250,8 @@ app.post('/api/admin/staff-bookings/check', async (req, res) => {
         bookingType === 'captain_charter' && charterResolved.ok
           ? extractRocketLaunchIdFromBooking(req.body || {})
           : null,
+      sunsetPackage:
+        bookingType === 'captain_charter' && charterResolved.ok ? charterResolved.sunsetPackage || null : null,
     });
     return res.json(staffAvailabilityConflictPayload(result));
   } catch (err) {
@@ -2251,6 +2321,7 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
     let passengerCount = Math.max(1, Math.floor(Number(body.passenger_count || body.passengerCount || 1) || 1));
     let staffBioPackage = null;
     let staffRocketPackage = null;
+    let staffSunsetPackage = null;
     let staffCharterType = 'captain_charter';
     let staffCharterVariant = 'shared';
     if (bookingType === 'captain_charter') {
@@ -2266,6 +2337,7 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
       staffCharterVariant = charterResolved.charterVariant || 'shared';
       staffBioPackage = charterResolved.bioPackage || null;
       staffRocketPackage = charterResolved.rocketPackage || null;
+      staffSunsetPackage = charterResolved.sunsetPackage || null;
       const validation = validateCharterPassengerCount(passengerCount);
       if (!validation.valid) return res.status(400).json({ error: validation.error });
       passengerCount = validation.count;
@@ -2298,6 +2370,7 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
       passengerCount: bookingType === 'captain_charter' ? passengerCount : 1,
       charterType: bookingType === 'captain_charter' ? staffCharterType : null,
       launchId: staffLaunchId,
+      sunsetPackage: staffSunsetPackage,
     });
     if (!availability.available) {
       if (availability.reason === 'captain_window') {
@@ -2327,9 +2400,9 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
         error: 'Groupon voucher bookings use the Groupon redemption workflow, not direct bio package pricing.',
       });
     }
-    if (staffRocketPackage && paymentMethod === 'groupon') {
+    if (staffSunsetPackage && paymentMethod === 'groupon') {
       return res.status(400).json({
-        error: 'Groupon voucher bookings use the Groupon redemption workflow, not direct rocket package pricing.',
+        error: 'Groupon voucher bookings use the Groupon redemption workflow, not direct sunset package pricing.',
       });
     }
     const compReason = cleanText(body.comp_reason || body.compReason, 500);
@@ -2343,13 +2416,17 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
       ? roundMoney(staffBioPackage.priceCents / 100)
       : staffRocketPackage
         ? roundMoney(staffRocketPackage.priceCents / 100)
-        : null;
+        : staffSunsetPackage
+          ? roundMoney(staffSunsetPackage.priceCents / 100)
+          : null;
     const packageStandardUsd = staffBioPackage
       ? roundMoney(staffBioPackage.standardValueCents / 100)
       : staffRocketPackage
         ? roundMoney(staffRocketPackage.priceCents / 100)
-        : null;
-    if (staffBioPackage || staffRocketPackage) {
+        : staffSunsetPackage
+          ? roundMoney(staffSunsetPackage.standardValueCents / 100)
+          : null;
+    if (staffBioPackage || staffRocketPackage || staffSunsetPackage) {
       originalPrice = packageStandardUsd;
       if (paymentMethod !== 'comp') {
         finalPrice = packagePriceUsd;
@@ -2392,6 +2469,20 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
           })
         : { shared_departure_id: null, departure_confirmation_status: null };
 
+    const staffSunsetDepartureFields =
+      staffSunsetPackage && bookingType === 'captain_charter'
+        ? await sunsetDepartureService.buildSunsetDepartureInsertFields(supabase, {
+            sunsetPackage: staffSunsetPackage,
+            charterType: staffCharterType,
+            charterSeating: String(
+              staffSunsetPackage?.seating || staffCharterVariant || 'shared'
+            ).toLowerCase(),
+            boatId: boat.id,
+            startTime: times.startIso,
+            passengerCount,
+          })
+        : { shared_departure_id: null, departure_confirmation_status: null };
+
     const insert = {
       customer_id: customer.id,
       boat_id: boat.id,
@@ -2400,7 +2491,11 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
       charter_seating:
         bookingType === 'captain_charter'
           ? String(
-              staffRocketPackage?.seating || staffBioPackage?.seating || staffCharterVariant || 'shared'
+              staffRocketPackage?.seating ||
+                staffSunsetPackage?.seating ||
+                staffBioPackage?.seating ||
+                staffCharterVariant ||
+                'shared'
             ).toLowerCase()
           : null,
       captain_id: captainId,
@@ -2457,7 +2552,9 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
         ? bioPackagePricing.bioPackageBookingFields(staffBioPackage)
         : staffRocketPackage
           ? rocketLaunchPackagePricing.rocketPackageBookingFields(staffRocketPackage, passengerCount)
-          : {}),
+          : staffSunsetPackage
+            ? sunsetPackagePricing.sunsetPackageBookingFields(staffSunsetPackage, passengerCount)
+            : {}),
       ...(staffLaunchId
         ? {
             external_reference: require('./services/rocketLaunchAvailabilityService').formatExternalLaunchRef(
@@ -2466,6 +2563,7 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
           }
         : {}),
       ...staffRocketDepartureFields,
+      ...staffSunsetDepartureFields,
       ...(idemParsed?.key ? { staff_idempotency_key: idemParsed.key } : {}),
     };
 
@@ -2479,6 +2577,7 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
         passengerCount,
         charterType: staffCharterType,
         launchId: staffLaunchId,
+        sunsetPackage: staffSunsetPackage,
       });
       if (!recheck.available) {
         if (recheck.reason === 'captain_window') {
@@ -2551,7 +2650,7 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
       }
     }
 
-    if (paymentMethod === 'comp' && (staffBioPackage || staffRocketPackage)) {
+    if (paymentMethod === 'comp' && (staffBioPackage || staffRocketPackage || staffSunsetPackage)) {
       const compPackage = staffBioPackage || staffRocketPackage;
       await bookingReliability.insertActivity(supabase, {
         booking_id: booking.id,
@@ -6144,14 +6243,22 @@ app.get('/api/availability/times', async (req, res) => {
  */
 function parseCharterAvailabilityOptions(query = {}) {
   const { getRocketLaunchPackage } = require('./config/rocketLaunchPackages');
+  const { getSunsetPackage } = require('./config/sunsetPackages');
   const rocketLaunchAvailability = require('./services/rocketLaunchAvailabilityService');
   const packageId = cleanText(query.package || query.pricing_package_id || query.pricingPackageId, 80);
   let rocketPackage = null;
+  let sunsetPackage = null;
   if (packageId && rocketLaunchPackagePricing.isRocketLaunchPackageId(packageId)) {
     try {
       rocketPackage = getRocketLaunchPackage(packageId);
     } catch {
       rocketPackage = null;
+    }
+  } else if (packageId && sunsetPackagePricing.isSunsetPackageId(packageId)) {
+    try {
+      sunsetPackage = getSunsetPackage(packageId);
+    } catch {
+      sunsetPackage = null;
     }
   }
   const charterVariant = cleanText(query.charterVariant || query.charter_variant, 20) || undefined;
@@ -6163,7 +6270,7 @@ function parseCharterAvailabilityOptions(query = {}) {
   const launchId = launchIdRaw
     ? rocketLaunchAvailability.parseLaunchIdFromExternalRef(launchIdRaw) || launchIdRaw
     : undefined;
-  return { rocketPackage, charterVariant, passengerCount, launchId };
+  return { rocketPackage, sunsetPackage, charterVariant, passengerCount, launchId };
 }
 
 function extractRocketLaunchIdFromBooking(booking = {}) {
@@ -6209,7 +6316,7 @@ app.get('/api/availability/charter', async (req, res) => {
       captainNights: '7 nights/week 5:00 PM – 4:00 AM',
       from,
       to,
-      packageId: availabilityOptions.rocketPackage?.id || null,
+      packageId: availabilityOptions.rocketPackage?.id || availabilityOptions.sunsetPackage?.id || null,
       dates,
     });
   } catch (err) {
@@ -6240,7 +6347,7 @@ app.get('/api/availability/charter/times', async (req, res) => {
       timezone: availabilityService.BUSINESS_TZ,
       durationHours: 1,
       minLeadHours: availabilityService.MIN_LEAD_HOURS,
-      packageId: availabilityOptions.rocketPackage?.id || null,
+      packageId: availabilityOptions.rocketPackage?.id || availabilityOptions.sunsetPackage?.id || null,
       schedulingMode:
         cleanText(charterType, 40).toLowerCase() === 'rocket' ||
         cleanText(charterType, 40).toLowerCase() === 'rocket_launch'
@@ -7162,6 +7269,12 @@ app.post('/api/create-checkout-session', async (req, res) => {
         charterType,
         bookingMode,
       });
+    } else if (pricingPackageId && sunsetPackagePricing.isSunsetPackageId(pricingPackageId)) {
+      packageGate = sunsetPackagePricing.assertSunsetPackageRequestAllowed({
+        pricingPackageId,
+        charterType,
+        bookingMode,
+      });
     } else {
       packageGate = bioPackagePricing.assertBioPackageRequestAllowed({
         pricingPackageId,
@@ -7209,6 +7322,22 @@ app.post('/api/create-checkout-session', async (req, res) => {
         }
         if (rocketCheck.charterVariant) {
           charterVariant = rocketCheck.charterVariant;
+        }
+      } else if (sunsetPackagePricing.normalizeSunsetCharterType(charterType) === 'sunset') {
+        const sunsetCheck = sunsetPackagePricing.validateDirectSunsetPackageCheckout({
+          charterType,
+          pricingPackageId,
+          passengerCountFromClient: passengerCount,
+          bookingSource,
+        });
+        if (!sunsetCheck.ok) {
+          return res.status(400).json({ error: sunsetCheck.error });
+        }
+        if (sunsetCheck.passengerCount) {
+          passengerCount = sunsetCheck.passengerCount;
+        }
+        if (sunsetCheck.charterVariant) {
+          charterVariant = sunsetCheck.charterVariant;
         }
       }
       const validation = validateCharterPassengerCount(passengerCount);
@@ -7391,6 +7520,7 @@ app.post('/api/create-checkout-session', async (req, res) => {
           charterVariant: expected.charterVariant || charterVariant,
           bioPackage: expected.bioPackage || null,
           rocketPackage: expected.rocketPackage || null,
+          sunsetPackage: expected.sunsetPackage || null,
           passengerCount,
           bookingSource: 'stripe_checkout',
           launchId: rocketLaunchId,
@@ -7430,6 +7560,8 @@ app.post('/api/create-checkout-session', async (req, res) => {
       lineItemName = bioPackagePricing.stripeLineItemNameForBioPackage(expected.bioPackage);
     } else if (expected.rocketPackage) {
       lineItemName = rocketLaunchPackagePricing.stripeLineItemNameForRocketPackage(expected.rocketPackage);
+    } else if (expected.sunsetPackage) {
+      lineItemName = sunsetPackagePricing.stripeLineItemNameForSunsetPackage(expected.sunsetPackage);
     }
 
     const session = await stripe.checkout.sessions.create({
@@ -7473,7 +7605,12 @@ app.post('/api/create-checkout-session', async (req, res) => {
       discountAmount: promoFields?.discount_amount ?? null,
       originalTotal: promoFields?.original_total ?? expected.totalPrice,
       finalTotal: promoFields?.final_total ?? expected.totalPrice,
-      pricingPackageId: expected.bioPackage?.id || expected.rocketPackage?.id || pricingPackageId || null,
+      pricingPackageId:
+        expected.bioPackage?.id ||
+        expected.rocketPackage?.id ||
+        expected.sunsetPackage?.id ||
+        pricingPackageId ||
+        null,
       passengerCount: isCharterBooking ? passengerCount : booking.passengerCount,
     };
 
@@ -7490,6 +7627,7 @@ app.post('/api/create-checkout-session', async (req, res) => {
           charterVariant: expected.charterVariant || charterVariant,
           bioPackage: expected.bioPackage || null,
           rocketPackage: expected.rocketPackage || null,
+          sunsetPackage: expected.sunsetPackage || null,
         })
       : null;
 
@@ -7497,6 +7635,18 @@ app.post('/api/create-checkout-session', async (req, res) => {
       isCharterBooking && expected.rocketPackage && charterInsertFields?.boat_id
         ? await rocketDepartureService.buildRocketDepartureInsertFields(supabase, {
             rocketPackage: expected.rocketPackage,
+            charterType,
+            charterSeating: charterInsertFields.charter_seating,
+            boatId: charterInsertFields.boat_id,
+            startTime: authoritativeBooking.start_time,
+            passengerCount,
+          })
+        : { shared_departure_id: null, departure_confirmation_status: null };
+
+    const holdSunsetDepartureFields =
+      isCharterBooking && expected.sunsetPackage && charterInsertFields?.boat_id
+        ? await sunsetDepartureService.buildSunsetDepartureInsertFields(supabase, {
+            sunsetPackage: expected.sunsetPackage,
             charterType,
             charterSeating: charterInsertFields.charter_seating,
             boatId: charterInsertFields.boat_id,
@@ -7561,7 +7711,9 @@ app.post('/api/create-checkout-session', async (req, res) => {
               expected.rocketPackage,
               passengerCount
             )
-          : {}),
+          : expected.sunsetPackage
+            ? sunsetPackagePricing.sunsetPackageBookingFields(expected.sunsetPackage, passengerCount)
+            : {}),
       ...(rocketLaunchId
         ? {
             external_reference: require('./services/rocketLaunchAvailabilityService').formatExternalLaunchRef(
@@ -7570,6 +7722,7 @@ app.post('/api/create-checkout-session', async (req, res) => {
           }
         : {}),
       ...holdRocketDepartureFields,
+      ...holdSunsetDepartureFields,
     };
 
     try {
@@ -7581,6 +7734,7 @@ app.post('/api/create-checkout-session', async (req, res) => {
           charterVariant: expected.charterVariant || charterVariant,
           bioPackage: expected.bioPackage || null,
           rocketPackage: expected.rocketPackage || null,
+          sunsetPackage: expected.sunsetPackage || null,
           passengerCount,
           bookingSource: 'stripe_checkout_hold',
           launchId: rocketLaunchId,

@@ -83,6 +83,21 @@ function effectiveGuestCountForCapacity(row) {
       // fall through
     }
   }
+  if (packageId && packageId.startsWith('sunset_')) {
+    try {
+      const {
+        getSunsetPackage,
+        getCapacityReservedForSunsetPackage,
+      } = require('../config/sunsetPackages');
+      if (getSunsetPackage && getCapacityReservedForSunsetPackage) {
+        const pkg = getSunsetPackage(packageId);
+        const reserved = getCapacityReservedForSunsetPackage(pkg);
+        if (reserved) return reserved;
+      }
+    } catch {
+      // fall through
+    }
+  }
   const validated = validateCharterPassengerCount(row?.guest_count);
   if (validated.valid) return validated.count;
   return UNKNOWN_GUEST_COUNT_ASSUMES;

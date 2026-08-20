@@ -14,6 +14,7 @@ import {
   type DirectDealSection,
 } from '../lib/directDealsCatalog';
 import { isDirectRocketPackagePricingEnabled } from '../lib/rocketLaunchPackages';
+import { isDirectSunsetPackagePricingEnabled, SUNSET_WILDLIFE_DISCLAIMER } from '../lib/sunsetPackages';
 
 interface DirectDealsProps {
   onNavigate: (page: string) => void;
@@ -22,8 +23,11 @@ interface DirectDealsProps {
 type ConfigStatus = 'loading' | 'ready' | 'error';
 
 function DealCard({ card }: { card: DirectDealCard }) {
-  const showSharedNote = card.disclosure === 'bio_shared' || card.disclosure === 'rocket_shared';
-  const isPrivate = card.disclosure === 'rocket_private';
+  const showSharedNote =
+    card.disclosure === 'bio_shared' ||
+    card.disclosure === 'rocket_shared' ||
+    card.disclosure === 'sunset_shared';
+  const isPrivate = card.disclosure === 'rocket_private' || card.disclosure === 'sunset_private';
 
   return (
     <article className="flex h-full flex-col rounded-2xl border border-white/12 bg-slate-950/55 p-4 shadow-lg md:p-5">
@@ -106,6 +110,9 @@ function DealSection({ section }: { section: DirectDealSection }) {
       >
         {section.heading}
       </h2>
+      {section.id === 'sunset' ? (
+        <p className="mt-2 text-sm leading-relaxed text-slate-400">{SUNSET_WILDLIFE_DISCLAIMER}</p>
+      ) : null}
       <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {section.cards.map((card) => (
           <DealCard key={card.id} card={card} />
@@ -124,6 +131,7 @@ export default function DirectDeals({ onNavigate }: DirectDealsProps) {
   );
   const [serverBioEnabled, setServerBioEnabled] = useState<boolean | null>(null);
   const [serverRocketEnabled, setServerRocketEnabled] = useState<boolean | null>(null);
+  const [serverSunsetEnabled, setServerSunsetEnabled] = useState<boolean | null>(null);
 
   const loadConfig = useCallback((signal?: AbortSignal) => {
     if (!env.apiUrlConfigured || !env.apiUrl) {
@@ -133,15 +141,21 @@ export default function DirectDeals({ onNavigate }: DirectDealsProps) {
     setStatus('loading');
     fetch(`${env.apiUrl}/api/public/booking-config`, { signal })
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error('booking-config'))))
-      .then((data: { directBioPackagePricingEnabled?: boolean; directRocketPackagePricingEnabled?: boolean }) => {
+      .then((data: {
+        directBioPackagePricingEnabled?: boolean;
+        directRocketPackagePricingEnabled?: boolean;
+        directSunsetPackagePricingEnabled?: boolean;
+      }) => {
         setServerBioEnabled(Boolean(data.directBioPackagePricingEnabled));
         setServerRocketEnabled(Boolean(data.directRocketPackagePricingEnabled));
+        setServerSunsetEnabled(Boolean(data.directSunsetPackagePricingEnabled));
         setStatus('ready');
       })
       .catch((err: unknown) => {
         if (err instanceof DOMException && err.name === 'AbortError') return;
         setServerBioEnabled(null);
         setServerRocketEnabled(null);
+        setServerSunsetEnabled(null);
         setStatus('error');
       });
   }, []);
@@ -165,10 +179,12 @@ export default function DirectDeals({ onNavigate }: DirectDealsProps) {
     isDirectBioPackagePricingEnabled() || serverBioEnabled === true;
   const rocketPackagesEnabled =
     isDirectRocketPackagePricingEnabled() || serverRocketEnabled === true;
+  const sunsetPackagesEnabled =
+    isDirectSunsetPackagePricingEnabled() || serverSunsetEnabled === true;
 
   const sections = useMemo(
-    () => buildDirectDealSections({ bioPackagesEnabled, rocketPackagesEnabled }),
-    [bioPackagesEnabled, rocketPackagesEnabled]
+    () => buildDirectDealSections({ bioPackagesEnabled, rocketPackagesEnabled, sunsetPackagesEnabled }),
+    [bioPackagesEnabled, rocketPackagesEnabled, sunsetPackagesEnabled]
   );
 
   return (

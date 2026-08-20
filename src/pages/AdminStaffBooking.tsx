@@ -39,9 +39,15 @@ import {
   getRocketPackageDisplay,
   isDirectRocketPackagePricingEnabled,
 } from '../lib/rocketLaunchPackages';
+import {
+  SUNSET_STAFF_PACKAGE_OPTIONS,
+  type SunsetPackageId,
+  getSunsetPackageDisplay,
+  isDirectSunsetPackagePricingEnabled,
+} from '../lib/sunsetPackages';
 
 type BookingType = 'rental' | 'captain_charter';
-type CharterProduct = 'general' | 'bio_night' | 'rocket_launch';
+type CharterProduct = 'general' | 'bio_night' | 'rocket_launch' | 'sunset';
 type LocationValue = 'Port Orange' | 'Titusville';
 type PaymentStatus = 'pending' | 'deposit_paid' | 'paid';
 type PaymentMethod = '' | 'stripe' | 'cash' | 'venmo' | 'zelle' | 'paypal' | 'groupon' | 'comp' | 'other';
@@ -112,6 +118,9 @@ function staffCharterApiFields(form: ReturnType<typeof blankForm>) {
   if (form.charterProduct === 'rocket_launch' && form.rocketPackageId) {
     return { charter_type: 'rocket' as const, pricing_package_id: form.rocketPackageId };
   }
+  if (form.charterProduct === 'sunset' && form.sunsetPackageId) {
+    return { charter_type: 'sunset' as const, pricing_package_id: form.sunsetPackageId };
+  }
   return {};
 }
 
@@ -138,6 +147,7 @@ const blankForm = () => {
     charterProduct: 'general' as CharterProduct,
     bioPackageId: '' as '' | BioPackageId,
     rocketPackageId: '' as '' | RocketPackageId,
+    sunsetPackageId: '' as '' | SunsetPackageId,
     launchId: '',
     location: 'Port Orange' as LocationValue,
     boatId: '',
@@ -446,6 +456,11 @@ export default function AdminStaffBooking() {
     return getRocketPackageDisplay(form.rocketPackageId);
   }, [form.charterProduct, form.rocketPackageId]);
 
+  const selectedSunsetPackage = useMemo(() => {
+    if (form.charterProduct !== 'sunset' || !form.sunsetPackageId) return null;
+    return getSunsetPackageDisplay(form.sunsetPackageId);
+  }, [form.charterProduct, form.sunsetPackageId]);
+
   useEffect(() => {
     if (
       form.bookingType === 'captain_charter' &&
@@ -482,6 +497,24 @@ export default function AdminStaffBooking() {
       }));
       return;
     }
+    if (
+      form.bookingType === 'captain_charter' &&
+      form.charterProduct === 'sunset' &&
+      form.sunsetPackageId &&
+      isDirectSunsetPackagePricingEnabled()
+    ) {
+      const pkg = getSunsetPackageDisplay(form.sunsetPackageId);
+      if (!pkg) return;
+      setForm((prev) => ({
+        ...prev,
+        passengerCount:
+          pkg.seating === 'private' ? prev.passengerCount : String(pkg.guestCount),
+        originalPrice: money(pkg.listPriceUsd),
+        discount: money(Math.max(0, pkg.listPriceUsd - pkg.directPriceUsd)),
+        finalPrice: money(pkg.directPriceUsd),
+      }));
+      return;
+    }
     if (!selectedBoat || durationHours <= 0) return;
     const base = computeStaffBookingOriginalPrice(selectedBoat, durationHours, form.bookingType);
     const discount = Number(form.discount) || 0;
@@ -495,6 +528,7 @@ export default function AdminStaffBooking() {
     form.bookingType,
     form.bioPackageId,
     form.rocketPackageId,
+    form.sunsetPackageId,
     form.charterProduct,
     form.discount,
     selectedBoat,
@@ -587,6 +621,7 @@ export default function AdminStaffBooking() {
     form.charterProduct,
     form.bioPackageId,
     form.rocketPackageId,
+    form.sunsetPackageId,
   ]);
 
   const submitGate = useMemo(() => {
@@ -632,10 +667,17 @@ export default function AdminStaffBooking() {
         blockers.push('Groupon vouchers must be redeemed through the Groupon booking workflow, not direct bio packages.');
       }
       if (
-        form.charterProduct === 'rocket_launch' &&
+        form.charterProduct === 'sunset' &&
+        isDirectSunsetPackagePricingEnabled() &&
+        !form.sunsetPackageId
+      ) {
+        blockers.push('Select a sunset package.');
+      }
+      if (
+        form.charterProduct === 'sunset' &&
         form.paymentMethod === 'groupon'
       ) {
-        blockers.push('Groupon vouchers must be redeemed through the Groupon booking workflow, not direct rocket packages.');
+        blockers.push('Groupon vouchers must be redeemed through the Groupon booking workflow, not direct sunset packages.');
       }
       if (form.paymentMethod === 'comp' && !form.compReason.trim()) {
         blockers.push('Comp reason is required for complimentary bookings.');
@@ -674,6 +716,7 @@ export default function AdminStaffBooking() {
     form.bookingType,
     form.bioPackageId,
     form.rocketPackageId,
+    form.sunsetPackageId,
     form.charterProduct,
     form.customerName,
     form.date,
@@ -976,7 +1019,8 @@ export default function AdminStaffBooking() {
                           : p.boatId,
                       charterProduct: nextType === 'rental' ? 'general' : p.charterProduct,
                       bioPackageId: nextType === 'rental' ? '' : p.bioPackageId,
-                      rocketPackageId: nextType === 'rental' ? '' : p.rocketPackageId,
+                        rocketPackageId: nextType === 'rental' ? '' : p.rocketPackageId,
+                        sunsetPackageId: nextType === 'rental' ? '' : p.sunsetPackageId,
                       captainId: nextType === 'rental' ? '' : p.captainId,
                       ...durationFieldsForNewBookingType(nextType),
                     }));
@@ -1004,8 +1048,11 @@ export default function AdminStaffBooking() {
                         charterProduct: next,
                         bioPackageId: next === 'bio_night' ? p.bioPackageId : '',
                         rocketPackageId: next === 'rocket_launch' ? p.rocketPackageId : '',
+                        sunsetPackageId: next === 'sunset' ? p.sunsetPackageId : '',
                         passengerCount:
-                          next === 'bio_night' || next === 'rocket_launch' ? p.passengerCount : '1',
+                          next === 'bio_night' || next === 'rocket_launch' || next === 'sunset'
+                            ? p.passengerCount
+                            : '1',
                         location: next === 'rocket_launch' ? 'Titusville' : p.location,
                       }));
                     }}
@@ -1016,6 +1063,9 @@ export default function AdminStaffBooking() {
                     ) : null}
                     {isDirectRocketPackagePricingEnabled() ? (
                       <option value="rocket_launch">Rocket launch viewing</option>
+                    ) : null}
+                    {isDirectSunsetPackagePricingEnabled() ? (
+                      <option value="sunset">Sunset and wildlife</option>
                     ) : null}
                   </select>
                 </label>
@@ -1047,6 +1097,37 @@ export default function AdminStaffBooking() {
                     <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-950">
                       Shared rocket departures need at least {ROCKET_LAUNCH_MIN_GUESTS} total booked guests before
                       the trip is fully confirmed. Customers receive a reservation email until the minimum is reached.
+                    </p>
+                  ) : null}
+                </label>
+              ) : null}
+              {form.bookingType === 'captain_charter' &&
+              form.charterProduct === 'sunset' &&
+              isDirectSunsetPackagePricingEnabled() ? (
+                <label className={labelClass}>
+                  Sunset package *
+                  <select
+                    className={inputClass}
+                    value={form.sunsetPackageId}
+                    onChange={(e) => {
+                      const id = e.target.value as SunsetPackageId | '';
+                      setForm((p) => ({ ...p, sunsetPackageId: id }));
+                    }}
+                  >
+                    <option value="">Select package</option>
+                    {SUNSET_STAFF_PACKAGE_OPTIONS.map((opt) => (
+                      <option key={opt.id} value={opt.id}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="mt-1 block text-xs font-normal text-slate-500">
+                    Solo $75 join-only · Two $140 opener · Family $250 · Private $325
+                  </span>
+                  {selectedSunsetPackage?.id === 'sunset_solo' ? (
+                    <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-950">
+                      Solo can only join a paid shared sunset already opened by Sunset for Two. Unpaid holds are not
+                      joinable.
                     </p>
                   ) : null}
                 </label>
@@ -1223,6 +1304,23 @@ export default function AdminStaffBooking() {
                     />
                     <span className="mt-1 block text-xs font-normal text-slate-500">
                       Locked to the selected rocket launch package.
+                    </span>
+                  </label>
+                ) : form.charterProduct === 'sunset' &&
+                  isDirectSunsetPackagePricingEnabled() &&
+                  selectedSunsetPackage &&
+                  selectedSunsetPackage.seating !== 'private' ? (
+                  <label className={labelClass}>
+                    Passengers
+                    <input
+                      className={`${inputClass} bg-slate-100`}
+                      type="number"
+                      readOnly
+                      value={form.passengerCount}
+                      aria-readonly
+                    />
+                    <span className="mt-1 block text-xs font-normal text-slate-500">
+                      Locked to the selected sunset package.
                     </span>
                   </label>
                 ) : (

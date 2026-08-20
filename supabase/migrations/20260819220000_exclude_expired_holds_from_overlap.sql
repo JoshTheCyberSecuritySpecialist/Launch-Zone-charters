@@ -1,19 +1,20 @@
--- Align GiST overlap constraints with lz_booking_blocks_availability():
--- expired checkout holds (pending + expires_at) and expired staff holds (hold + hold_expires_at)
--- must not block new bookings at the database layer.
+-- Expired holds must not block availability or overlap checks.
+--
+-- PostgreSQL GiST exclusion partial-index predicates must be IMMUTABLE, so
+-- `expires_at < now()` cannot appear in constraint WHERE clauses. Instead:
+-- 1) extend lz_booking_blocks_availability() for shared-capacity / triggers
+-- 2) cancel expired hold rows so they drop out of blocking statuses
+-- 3) server cleanupExpiredBookingHolds() continues on checkout + interval
 
 BEGIN;
 
-ALTER TABLE public.bookings DROP CONSTRAINT IF EXISTS bookings_boat_no_time_overlap;
-ALTER TABLE public.bookings
-  ADD CONSTRAINT bookings_boat_no_time_overlap
-  EXCLUDE USING gist (
-    boat_id WITH =,
-    tstzrange(start_time, end_time, '[)') WITH &&
-  )
-  WHERE (
-    boat_id IS NOT NULL
-    AND status IN (
+CREATE OR REPLACE FUNCTION public.lz_booking_blocks_availability(b public.bookings)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+AS $$
+  SELECT
+    b.status IN (
       'hold',
       'pending',
       'pending_verification',
@@ -22,55 +23,38 @@ ALTER TABLE public.bookings
       'completed'
     )
     AND NOT (
-      booking_type = 'charter'
-      AND charter_seating = 'shared'
+      b.status = 'pending'
+      AND b.expires_at IS NOT NULL
+      AND b.expires_at < now()
     )
     AND NOT (
-      status = 'pending'
-      AND expires_at IS NOT NULL
-      AND expires_at < now()
-    )
-    AND NOT (
-      status = 'hold'
-      AND hold_expires_at IS NOT NULL
-      AND hold_expires_at < now()
-    )
-  );
+      b.status = 'hold'
+      AND b.hold_expires_at IS NOT NULL
+      AND b.hold_expires_at < now()
+    );
+$$;
 
-ALTER TABLE public.bookings DROP CONSTRAINT IF EXISTS bookings_fleet_exclusive_charter_no_overlap;
-ALTER TABLE public.bookings
-  ADD CONSTRAINT bookings_fleet_exclusive_charter_no_overlap
-  EXCLUDE USING gist (
-    tstzrange(start_time, end_time, '[)') WITH &&
+COMMENT ON FUNCTION public.lz_booking_blocks_availability(public.bookings) IS
+  'True when a booking row should block availability, capacity, and overlap detection. Expired checkout and staff holds return false.';
+
+-- Remove stale rows that still carry blocking statuses but are past expiry.
+UPDATE public.bookings AS b
+SET
+  status = 'cancelled',
+  admin_notes = CONCAT(
+    COALESCE(b.admin_notes, ''),
+    E'\n[20260819220000] Auto-cancelled expired hold during migration.'
   )
-  WHERE (
-    boat_id IS NULL
-    AND booking_type = 'charter'
-    AND (charter_seating IS NULL OR charter_seating = 'private')
-    AND status IN (
-      'hold',
-      'pending',
-      'pending_verification',
-      'confirmed',
-      'ready_for_departure',
-      'completed'
-    )
-    AND NOT (
-      status = 'pending'
-      AND expires_at IS NOT NULL
-      AND expires_at < now()
-    )
-    AND NOT (
-      status = 'hold'
-      AND hold_expires_at IS NOT NULL
-      AND hold_expires_at < now()
-    )
+WHERE (
+    b.status = 'pending'
+    AND b.expires_at IS NOT NULL
+    AND b.expires_at < now()
+    AND b.stripe_payment_id IS NULL
+  )
+  OR (
+    b.status = 'hold'
+    AND b.hold_expires_at IS NOT NULL
+    AND b.hold_expires_at < now()
   );
-
-COMMENT ON CONSTRAINT bookings_boat_no_time_overlap ON public.bookings IS
-  'Exclusive boat bookings cannot overlap; expired pending/staff holds are excluded.';
-
-COMMENT ON CONSTRAINT bookings_fleet_exclusive_charter_no_overlap ON public.bookings IS
-  'Fleet-wide exclusive charters cannot overlap; expired pending/staff holds are excluded.';
 
 COMMIT;

@@ -273,7 +273,7 @@ function assertCharterStartTimeAllowed(charterType, startIso, endIso = null) {
 }
 
 async function cleanupExpiredBookingHolds() {
-  if (!supabaseConfigured) return { deleted: 0 };
+  if (!supabaseConfigured) return { deleted: 0, cancelled: 0 };
   const nowIso = new Date().toISOString();
   const { data, error } = await supabase
     .from('bookings')
@@ -285,13 +285,32 @@ async function cleanupExpiredBookingHolds() {
     .select('id');
   if (error) {
     console.warn('[booking-hold-cleanup]', error.message);
-    return { deleted: 0, error };
+    return { deleted: 0, cancelled: 0, error };
   }
-  const n = Array.isArray(data) ? data.length : 0;
-  if (n > 0) {
-    console.log('[booking-hold-cleanup] removed', n, 'expired pending hold(s)');
+  const deleted = Array.isArray(data) ? data.length : 0;
+  if (deleted > 0) {
+    console.log('[booking-hold-cleanup] removed', deleted, 'expired pending hold(s)');
   }
-  return { deleted: n };
+
+  const { data: cancelledRows, error: cancelErr } = await supabase
+    .from('bookings')
+    .update({
+      status: 'cancelled',
+      admin_notes: `[${nowIso}] Auto-cancelled expired staff hold.`,
+    })
+    .eq('status', 'hold')
+    .not('hold_expires_at', 'is', null)
+    .lt('hold_expires_at', nowIso)
+    .select('id');
+  if (cancelErr) {
+    console.warn('[booking-hold-cleanup:staff]', cancelErr.message);
+    return { deleted, cancelled: 0, error: cancelErr };
+  }
+  const cancelled = Array.isArray(cancelledRows) ? cancelledRows.length : 0;
+  if (cancelled > 0) {
+    console.log('[booking-hold-cleanup] cancelled', cancelled, 'expired staff hold(s)');
+  }
+  return { deleted, cancelled };
 }
 
 async function refundStripeCheckoutSession(session) {

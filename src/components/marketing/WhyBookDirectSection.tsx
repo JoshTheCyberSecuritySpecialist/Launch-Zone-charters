@@ -3,9 +3,9 @@ import { Link, useNavigate } from 'react-router-dom';
 import { Headphones, ListChecks, MessageSquare, ClipboardList } from 'lucide-react';
 import {
   BIO_PACKAGE_DISPLAY,
-  bioBookingUrl,
   formatBioPackagePriceUsd,
 } from '../../lib/bioluminescencePackages';
+import { DIRECT_DEALS_PATH } from '../../lib/directDealsCatalog';
 import { trackDirectBookingEvent } from '../../lib/directBookingMarketing';
 import { wrapRouterNavigate } from '../../lib/clickPerf';
 import DirectBookingSteps from './DirectBookingSteps';
@@ -60,9 +60,9 @@ export default function WhyBookDirectSection() {
 
   const goBookDirect = wrapRouterNavigate(
     'home_why_direct',
-    'book_direct_bio',
+    'book_direct',
     navigate,
-    bioBookingUrl('bio_solo')
+    DIRECT_DEALS_PATH
   );
 
   return (
@@ -130,7 +130,7 @@ export default function WhyBookDirectSection() {
           <button
             type="button"
             onClick={() => {
-              trackDirectBookingEvent('direct_booking_cta_clicked', { target: 'book_direct_bio' });
+              trackDirectBookingEvent('direct_booking_cta_clicked', { target: 'book_direct' });
               goBookDirect();
             }}
             className="lz-btn-primary min-h-[48px] w-full max-w-md"

@@ -323,7 +323,7 @@ export default function Header({ onNavigate, currentPage }: HeaderProps) {
               </button>
               <button
                 type="button"
-                onClick={() => handleNavigation('book-bio')}
+                onClick={() => handleNavigation('book-direct')}
                 className="lz-btn-nav-cta lz-btn-nav-cta--toolbar shrink-0 whitespace-nowrap text-[11px] sm:text-xs sm:whitespace-normal"
               >
                 Book Direct

@@ -15,6 +15,7 @@ import RefundPolicy from './pages/RefundPolicy';
 import Launches from './pages/Launches';
 import Conditions from './pages/Conditions';
 import BookNow from './pages/BookNow';
+import DirectDeals from './pages/DirectDeals';
 import BookingReceived from './pages/BookingReceived';
 import BookingSuccess from './pages/BookingSuccess';
 import InsuranceRequired from './pages/InsuranceRequired';
@@ -112,6 +113,7 @@ function AppLayout() {
           <Route path="/boat-rentals-daytona-beach" element={<Navigate to="/boat-rentals/daytona" replace />} />
           <Route path="/boats" element={<Navigate to="/boat-rentals/daytona" replace />} />
           <Route path="/booking" element={<BookNow onNavigate={onNavigate} />} />
+          <Route path="/booking/direct" element={<DirectDeals onNavigate={onNavigate} />} />
           <Route path="/booking/groupon" element={<GrouponBook />} />
           <Route path="/booking/groupon/received" element={<GrouponRequestReceived onNavigate={onNavigate} />} />
           <Route path="/booking-received" element={<BookingReceived onNavigate={onNavigate} />} />

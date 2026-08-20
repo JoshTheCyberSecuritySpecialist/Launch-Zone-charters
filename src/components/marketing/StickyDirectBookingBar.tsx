@@ -6,7 +6,7 @@ import {
   trackDirectBookingEvent,
 } from '../../lib/directBookingMarketing';
 import { wrapRouterNavigate } from '../../lib/clickPerf';
-import { bioBookingUrl } from '../../lib/bioluminescencePackages';
+import { DIRECT_DEALS_PATH } from '../../lib/directDealsCatalog';
 
 type StickyDirectBookingBarProps = {
   heroSentinelId?: string;
@@ -60,7 +60,7 @@ export default function StickyDirectBookingBar({
     'home_sticky_direct',
     'book_direct',
     navigate,
-    bioBookingUrl('bio_solo')
+    DIRECT_DEALS_PATH
   );
 
   if (!visible) return null;

@@ -4,6 +4,8 @@ const ROUTES = {
   boatRentalsDaytona: '/boat-rentals/daytona',
   boatRentalsTitusville: '/boat-rentals/titusville',
   booking: '/booking',
+  /** Direct-booking package chooser (Book Direct). Does not replace /booking form. */
+  bookingDirect: '/booking/direct',
   bookingReceived: '/booking-received',
   bookingSuccess: '/booking-success',
   bookingDepositCancel: '/booking-deposit-cancel',
@@ -48,6 +50,7 @@ const BOOKING_RENTAL_TITUSVILLE = `${ROUTES.booking}?bookingMode=rental&location
 const PAGE_TO_PATH: Record<string, string> = {
   home: ROUTES.home,
   book: ROUTES.booking,
+  'book-direct': ROUTES.bookingDirect,
   experiences: ROUTES.experiences,
   'book-bio': BOOKING_BIO_CHARTER,
   'book-rental-daytona': BOOKING_RENTAL_DAYTONA,
@@ -108,6 +111,7 @@ export function pageKeyFromPath(pathname: string): string {
   if (path === '/waivers-insurance') return 'waivers-insurance';
   if (path === ROUTES.experiences) return 'experiences';
   if (path === ROUTES.grouponRedeem) return 'groupon-redeem';
+  if (path === ROUTES.bookingDirect) return 'book-direct';
   if (path === ROUTES.bioluminescentTours) return 'bioluminescent-tours';
   if (path === ROUTES.launches) return 'launches';
   if (path === ROUTES.pricing) return 'pricing';

@@ -8,7 +8,9 @@ export type DirectBookingMarketingEvent =
   | 'sticky_direct_bar_viewed'
   | 'sticky_direct_bar_clicked'
   | 'sticky_direct_bar_dismissed'
-  | 'direct_booking_faq_opened';
+  | 'direct_booking_faq_opened'
+  | 'direct_deals_viewed'
+  | 'direct_package_selected';
 
 export function trackDirectBookingEvent(
   name: DirectBookingMarketingEvent,

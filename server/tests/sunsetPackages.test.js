@@ -44,7 +44,7 @@ function runPackageLookupTests() {
 
   const family = getSunsetPackage('sunset_family');
   assert.strictEqual(family.priceCents, 25000);
-  assert.strictEqual(family.maxGuests, 4);
+  assert.strictEqual(family.maxGuests, 5);
   assert.strictEqual(family.seating, 'private');
   assert.strictEqual(sunsetPackageSavingsCents(family), 3500);
 
@@ -106,7 +106,15 @@ function runGuestRuleTests() {
     passengerCountFromClient: 5,
     bookingSource: 'website',
   });
-  assert.strictEqual(family5.ok, false);
+  assert.strictEqual(family5.ok, true);
+
+  const family6 = validateDirectSunsetPackageCheckout({
+    charterType: 'sunset',
+    pricingPackageId: 'sunset_family',
+    passengerCountFromClient: 6,
+    bookingSource: 'website',
+  });
+  assert.strictEqual(family6.ok, false);
 
   const private5 = validateDirectSunsetPackageCheckout({
     charterType: 'sunset',
@@ -128,8 +136,8 @@ function runGuestRuleTests() {
 function runFixedPriceTests() {
   const family1 = sunsetPackageExpectedTotals(getSunsetPackage('sunset_family'), 1);
   assert.strictEqual(Math.round(family1.amountDueToday * 100), 25000);
-  const family4 = sunsetPackageExpectedTotals(getSunsetPackage('sunset_family'), 4);
-  assert.strictEqual(Math.round(family4.amountDueToday * 100), 25000);
+  const family5 = sunsetPackageExpectedTotals(getSunsetPackage('sunset_family'), 5);
+  assert.strictEqual(Math.round(family5.amountDueToday * 100), 25000);
 
   const private1 = sunsetPackageExpectedTotals(getSunsetPackage('sunset_private'), 1);
   assert.strictEqual(Math.round(private1.amountDueToday * 100), 32500);

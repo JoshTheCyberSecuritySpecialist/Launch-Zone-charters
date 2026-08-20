@@ -52,7 +52,7 @@ export const SUNSET_PACKAGE_DISPLAY: SunsetPackageDisplay[] = [
     id: 'sunset_family',
     cardTitle: 'Sunset Family',
     guestCount: 1,
-    maxGuests: 4,
+    maxGuests: 5,
     directPriceUsd: 250,
     listPriceUsd: 285,
     perGuestUsd: 250,
@@ -60,7 +60,7 @@ export const SUNSET_PACKAGE_DISPLAY: SunsetPackageDisplay[] = [
     canOpenSharedDeparture: false,
     badge: 'Private boat',
     ctaLabel: 'Select Family Charter',
-    included: ['Captain included', 'Fuel included', 'Up to 4 guests · Exclusive boat'],
+    included: ['Captain included', 'Fuel included', 'Up to 5 guests · Exclusive boat'],
   },
   {
     id: 'sunset_private',

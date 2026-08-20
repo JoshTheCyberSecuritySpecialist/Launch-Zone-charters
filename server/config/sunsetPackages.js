@@ -36,7 +36,7 @@ const SUNSET_PACKAGES = {
     id: 'sunset_family',
     name: 'Sunset Family',
     guestCount: 1,
-    maxGuests: 4,
+    maxGuests: 5,
     standardValueCents: 28500,
     priceCents: 25000,
     seating: 'private',

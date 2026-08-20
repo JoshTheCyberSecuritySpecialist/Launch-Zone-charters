@@ -160,7 +160,7 @@ function sunsetPackageBookingFields(pkg, passengerCount) {
 function stripeLineItemNameForSunsetPackage(pkg) {
   if (pkg.id === 'sunset_solo') return 'Sunset Solo Seat — 1 Guest';
   if (pkg.id === 'sunset_two') return 'Sunset for Two — 2 Guests';
-  if (pkg.id === 'sunset_family') return 'Sunset Family Charter — Up to 4 Guests';
+  if (pkg.id === 'sunset_family') return 'Sunset Family Charter — Up to 5 Guests';
   return 'Private Sunset Charter — Up to 5 Guests';
 }
 

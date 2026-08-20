@@ -1087,6 +1087,110 @@ async function fetchRecentBookingCandidates(supabase, lookbackDays = NEW_BOOKING
   return data || [];
 }
 
+function countFromSettledResult(result) {
+  if (result?.status !== 'fulfilled' || result.value?.error) return 0;
+  return result.value.count || 0;
+}
+
+function parseSinceIso(raw) {
+  const trimmed = String(raw || '').trim();
+  if (!trimmed) {
+    return { error: 'since is required (ISO-8601 timestamp).', statusCode: 400 };
+  }
+  const ms = Date.parse(trimmed);
+  if (!Number.isFinite(ms)) {
+    return { error: 'since must be a valid ISO-8601 timestamp.', statusCode: 400 };
+  }
+  if (ms > Date.now() + 60_000) {
+    return { error: 'since cannot be in the future.', statusCode: 400 };
+  }
+  const maxAgeMs = 7 * 24 * 60 * 60 * 1000;
+  if (Date.now() - ms > maxAgeMs) {
+    return { error: 'since is too far in the past; reload the full dashboard.', statusCode: 400 };
+  }
+  return { sinceIso: new Date(ms).toISOString() };
+}
+
+async function fetchLightweightOpsCounts(supabase) {
+  const [grouponPendingResult, paymentRecoveryResult, unreadMessagesResult, pendingPreTripResult] =
+    await Promise.allSettled([
+      supabase
+        .from('bookings')
+        .select('id', { count: 'exact', head: true })
+        .eq('booking_source', 'groupon')
+        .in('status', ['pending', 'pending_verification']),
+      supabase
+        .from('payment_recovery_queue')
+        .select('id', { count: 'exact', head: true })
+        .in('status', ['open', 'retrying']),
+      supabase.from('contact_messages').select('id', { count: 'exact', head: true }).eq('is_read', false),
+      supabase
+        .from('pre_trip_submissions')
+        .select('id', { count: 'exact', head: true })
+        .eq('admin_status', 'pending'),
+    ]);
+
+  return {
+    grouponPending: countFromSettledResult(grouponPendingResult),
+    openPaymentRecovery: countFromSettledResult(paymentRecoveryResult),
+    unreadMessages: countFromSettledResult(unreadMessagesResult),
+    pendingPreTrip: countFromSettledResult(pendingPreTripResult),
+  };
+}
+
+/** Cheap change probe for background dashboard polls. */
+async function probeOpsDashboardChanges(supabase, sinceIso) {
+  const [
+    newBookingsResult,
+    activityResult,
+    commsResult,
+    preTripSinceResult,
+    paymentRecoverySinceResult,
+    counts,
+  ] = await Promise.all([
+    supabase.from('bookings').select('id', { count: 'exact', head: true }).gte('created_at', sinceIso),
+    supabase
+      .from('booking_activity_events')
+      .select('id', { count: 'exact', head: true })
+      .gte('created_at', sinceIso),
+    supabase
+      .from('booking_communications')
+      .select('id', { count: 'exact', head: true })
+      .gte('created_at', sinceIso),
+    supabase
+      .from('pre_trip_submissions')
+      .select('id', { count: 'exact', head: true })
+      .gte('created_at', sinceIso),
+    supabase
+      .from('payment_recovery_queue')
+      .select('id', { count: 'exact', head: true })
+      .gte('created_at', sinceIso),
+    fetchLightweightOpsCounts(supabase),
+  ]);
+
+  const newBookingsSince = countFromSettledResult({ status: 'fulfilled', value: newBookingsResult });
+  const activitySince = countFromSettledResult({ status: 'fulfilled', value: activityResult });
+  const commsSince = countFromSettledResult({ status: 'fulfilled', value: commsResult });
+  const preTripSince = countFromSettledResult({ status: 'fulfilled', value: preTripSinceResult });
+  const paymentRecoverySince = countFromSettledResult({ status: 'fulfilled', value: paymentRecoverySinceResult });
+  const changed =
+    newBookingsSince > 0 ||
+    activitySince > 0 ||
+    commsSince > 0 ||
+    preTripSince > 0 ||
+    paymentRecoverySince > 0;
+
+  return {
+    changed,
+    counts,
+    newBookingsSince,
+    activitySince,
+    commsSince,
+    preTripSince,
+    paymentRecoverySince,
+  };
+}
+
 function summarizeActionCounts({
   newBookings,
   pendingApprovals,
@@ -1139,6 +1243,9 @@ module.exports = {
   markBookingReviewed,
   markAllBookingsReviewed,
   fetchRecentBookingCandidates,
+  parseSinceIso,
+  fetchLightweightOpsCounts,
+  probeOpsDashboardChanges,
   summarizeActionCounts,
   detectBoatOverlapConflicts,
   detectSharedDepartureCapacityConflicts,

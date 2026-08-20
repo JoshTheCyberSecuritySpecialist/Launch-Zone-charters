@@ -19,6 +19,23 @@ const {
   detectDuplicateBookingWarnings,
 } = require('../services/adminOperationsDashboardService');
 
+test('parseSinceIso validates timestamps', () => {
+  const { parseSinceIso } = require('../services/adminOperationsDashboardService');
+  const ok = parseSinceIso('2026-08-19T12:00:00.000Z');
+  assert.ok(ok.sinceIso);
+  assert.equal(ok.sinceIso, '2026-08-19T12:00:00.000Z');
+
+  const missing = parseSinceIso('');
+  assert.ok(missing.error);
+  assert.equal(missing.statusCode, 400);
+
+  const bad = parseSinceIso('not-a-date');
+  assert.ok(bad.error);
+
+  const future = parseSinceIso('2099-01-01T00:00:00.000Z');
+  assert.ok(future.error);
+});
+
 test('isBookingNewForAdmin respects last reviewed and acknowledgements', () => {
   const ack = new Set(['b-old']);
   assert.equal(

@@ -33,6 +33,8 @@ import {
   filterActiveOpsBookingGroups,
   formatRelativeTime,
   fetchOperationsDashboard,
+  fetchOperationsDashboardDelta,
+  mergeOperationsDashboardDelta,
   markAllBookingsReviewed,
   markBookingReviewed,
   normalizeOpsFilterFromApi,
@@ -143,7 +145,8 @@ function dashboardPayloadSignature(data: OpsDashboardPayload): string {
     counts?.newBookings ?? 0,
     counts?.pendingApprovals ?? 0,
     counts?.conflicts ?? 0,
-    data.generatedAt || '',
+    counts?.unreadMessages ?? 0,
+    counts?.grouponPending ?? 0,
   ].join('|');
 }
 
@@ -223,6 +226,7 @@ export default function AdminOperationsDashboard() {
   const knownNewBookingIdsRef = useRef<Set<string>>(new Set());
   const pollInFlightRef = useRef(false);
   const payloadSignatureRef = useRef('');
+  const lastPollSinceRef = useRef<string | null>(null);
   const opsSortRef = useRef(opsSort);
   const opsFilterRef = useRef(opsFilter);
   const fetchAbortRef = useRef<AbortController | null>(null);
@@ -303,6 +307,7 @@ export default function AdminOperationsDashboard() {
         payloadSignatureRef.current = signature;
         setPayload(normalized);
       }
+      lastPollSinceRef.current = data.generatedAt;
       setLastFetchedAt(Date.now());
       setAppliedSort(normalizeOpsSortFromApi(data.sort));
       setAppliedFilter(normalizeOpsFilterFromApi(data.filter));
@@ -334,6 +339,102 @@ export default function AdminOperationsDashboard() {
       }
     }
   }, [getAdminToken, isAdmin]);
+
+  const pollDashboardDelta = useCallback(async () => {
+    if (!isAdmin) return;
+    const since = lastPollSinceRef.current;
+    if (!since || !hasPayloadRef.current) {
+      return loadDashboard({ background: true });
+    }
+
+    const sort = opsSortRef.current;
+    const filter = opsFilterRef.current;
+    const generation = fetchGenerationRef.current;
+
+    fetchAbortRef.current?.abort();
+    const controller = new AbortController();
+    fetchAbortRef.current = controller;
+
+    if (import.meta.env.DEV) {
+      adminDebugLog('ops-dashboard:delta', { since, sort, filter: filter || '(all new)' });
+    }
+
+    try {
+      if (!env.apiUrlConfigured || !env.apiUrl) throw new Error('API URL is not configured.');
+      const token = await getAdminToken();
+      if (!token) throw new Error('Admin session expired.');
+      const delta = await fetchOperationsDashboardDelta(
+        token,
+        {
+          since,
+          sort,
+          filter: filter || undefined,
+        },
+        { signal: controller.signal }
+      );
+
+      if (generation !== fetchGenerationRef.current) {
+        return;
+      }
+
+      setPayload((prev) => {
+        if (!prev) return prev;
+        const merged = mergeOperationsDashboardDelta(prev, delta);
+        const nextPayload: DashboardPayload = {
+          ...prev,
+          ...merged,
+          ...(delta.changed && delta.schedule
+            ? { schedule: delta.schedule as DashboardPayload['schedule'] }
+            : {}),
+          ...(delta.changed && delta.boatStatus
+            ? { boatStatus: delta.boatStatus as DashboardPayload['boatStatus'] }
+            : {}),
+          ...(delta.changed && delta.alerts
+            ? { alerts: delta.alerts as DashboardPayload['alerts'] }
+            : {}),
+          ...(delta.changed && delta.today ? { today: delta.today } : {}),
+        };
+
+        if (delta.changed) {
+          const prevKnown = knownNewBookingIdsRef.current;
+          const incomingNew = (delta.newBookings || prev.newBookings || []).map((b) => b.id);
+          const fresh = incomingNew.filter((id) => !prevKnown.has(id));
+          if (fresh.length > 0) {
+            setLiveNotice(
+              fresh.length === 1 ? '1 new booking arrived' : `${fresh.length} new bookings arrived`
+            );
+          }
+          knownNewBookingIdsRef.current = new Set(incomingNew);
+        }
+
+        const signature = dashboardPayloadSignature(nextPayload);
+        if (signature === payloadSignatureRef.current) {
+          return prev;
+        }
+        payloadSignatureRef.current = signature;
+        return normalizeDashboardPayload(nextPayload);
+      });
+
+      lastPollSinceRef.current = delta.generatedAt;
+      setLastFetchedAt(Date.now());
+      if (delta.changed) {
+        setAppliedSort(normalizeOpsSortFromApi(delta.sort));
+        setAppliedFilter(normalizeOpsFilterFromApi(delta.filter));
+      }
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        return;
+      }
+      if (generation !== fetchGenerationRef.current) {
+        return;
+      }
+      if (import.meta.env.DEV) {
+        adminDebugLog('ops-dashboard:delta-failed', {
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }, [getAdminToken, isAdmin, loadDashboard]);
 
   useEffect(() => {
     if (authLoading || !isAdmin) return;
@@ -379,7 +480,7 @@ export default function AdminOperationsDashboard() {
     const tick = () => {
       if (document.hidden || pollInFlightRef.current) return;
       pollInFlightRef.current = true;
-      void loadDashboard({ background: true }).finally(() => {
+      void pollDashboardDelta().finally(() => {
         pollInFlightRef.current = false;
       });
     };
@@ -399,7 +500,7 @@ export default function AdminOperationsDashboard() {
       window.clearInterval(timer);
       document.removeEventListener('visibilitychange', onVisibility);
     };
-  }, [authLoading, isAdmin, loadDashboard]);
+  }, [authLoading, isAdmin, pollDashboardDelta]);
 
   useEffect(() => {
     if (!liveNotice) return;

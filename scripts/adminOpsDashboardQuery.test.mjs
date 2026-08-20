@@ -14,6 +14,22 @@ function buildOperationsDashboardPath(query) {
   return `/api/admin/operations-dashboard${qs ? `?${qs}` : ''}`;
 }
 
+function buildOperationsDashboardDeltaPath(query) {
+  const params = new URLSearchParams();
+  params.set('since', query.since);
+  if (query?.sort) params.set('sort', query.sort);
+  const filter = query?.filter != null ? String(query.filter).trim() : '';
+  if (filter) params.set('filter', filter);
+  return `/api/admin/operations-dashboard/delta?${params.toString()}`;
+}
+
+test('delta path requires since', () => {
+  assert.equal(
+    buildOperationsDashboardDeltaPath({ since: '2026-08-19T12:00:00.000Z', sort: 'trip_date' }),
+    '/api/admin/operations-dashboard/delta?since=2026-08-19T12%3A00%3A00.000Z&sort=trip_date'
+  );
+});
+
 test('all new omits filter param', () => {
   assert.equal(buildOperationsDashboardPath({ sort: 'trip_date' }), '/api/admin/operations-dashboard?sort=trip_date');
   assert.equal(buildOperationsDashboardPath({}), '/api/admin/operations-dashboard');

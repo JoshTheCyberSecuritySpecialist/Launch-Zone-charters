@@ -5196,6 +5196,239 @@ function actionItemsForBookings(bookings) {
   return items.sort((a, b) => b.urgency - a.urgency || new Date(a.start_time).getTime() - new Date(b.start_time).getTime()).slice(0, 50);
 }
 
+const OPS_BOOKING_SELECT =
+  'id, customer_id, boat_id, captain_id, start_time, end_time, status, payment_status, booking_source, staff_created, rental_location, booking_type, charter_type, charter_seating, guest_count, package_guest_count, pricing_package_id, departure_confirmation_status, shared_departure_id, waiver_signed, license_status, insurance_status, license_url, insurance_url, hold_expires_at, final_total, total_price, total_amount, deposit_paid, deposit_amount, amount_collected, balance_due, created_at, customers(full_name, email, phone), boats(id, name, type), waivers(id)';
+
+async function assembleOpsDashboardBookingSections(supabase, adminUserId, { opsSort, opsFilter, businessTz }) {
+  const now = DateTime.now().setZone(businessTz);
+  const todayStart = now.startOf('day');
+  const todayEnd = todayStart.plus({ days: 1 });
+  const upcomingEnd = todayStart.plus({ days: 14 });
+
+  const [
+    boatsResult,
+    todayResult,
+    upcomingResult,
+    blockedResult,
+    reviewStateResult,
+    ackResult,
+    recentCreatedResult,
+    grouponPendingResult,
+    paymentRecoveryResult,
+    unreadMessagesResult,
+    pendingPreTripResult,
+  ] = await Promise.allSettled([
+    supabase.from('boats').select('id, name, type, is_active').order('name'),
+    supabase
+      .from('bookings')
+      .select(OPS_BOOKING_SELECT)
+      .lt('start_time', todayEnd.toUTC().toISO())
+      .gt('end_time', todayStart.toUTC().toISO())
+      .order('start_time', { ascending: true }),
+    supabase
+      .from('bookings')
+      .select(OPS_BOOKING_SELECT)
+      .gte('start_time', todayStart.toUTC().toISO())
+      .lt('start_time', upcomingEnd.toUTC().toISO())
+      .order('start_time', { ascending: true }),
+    loadCalendarBlockedDates({ fromIso: todayStart.toUTC().toISO(), toIso: todayEnd.toUTC().toISO(), boatId: null }),
+    adminOperationsDashboard.loadReviewState(supabase, adminUserId),
+    adminOperationsDashboard.loadAcknowledgedBookingIds(supabase, adminUserId),
+    adminOperationsDashboard.fetchRecentBookingCandidates(supabase),
+    supabase
+      .from('bookings')
+      .select('id', { count: 'exact', head: true })
+      .eq('booking_source', 'groupon')
+      .in('status', ['pending', 'pending_verification']),
+    supabase
+      .from('payment_recovery_queue')
+      .select('id', { count: 'exact', head: true })
+      .in('status', ['open', 'retrying']),
+    supabase.from('contact_messages').select('id', { count: 'exact', head: true }).eq('is_read', false),
+    supabase
+      .from('pre_trip_submissions')
+      .select('id', { count: 'exact', head: true })
+      .eq('admin_status', 'pending'),
+  ]);
+
+  const boats = boatsResult.status === 'fulfilled' && !boatsResult.value.error ? boatsResult.value.data || [] : [];
+  const todayRows = todayResult.status === 'fulfilled' && !todayResult.value.error ? todayResult.value.data || [] : [];
+  const upcomingRows = upcomingResult.status === 'fulfilled' && !upcomingResult.value.error ? upcomingResult.value.data || [] : [];
+  const blockedDates = blockedResult.status === 'fulfilled' ? blockedResult.value || [] : [];
+  const todayTrips = todayRows.map(normalizeOpsBooking);
+  const upcomingBookings = upcomingRows.map(normalizeOpsBooking);
+
+  const todayActive = todayTrips.filter((trip) => !['cancelled', 'completed'].includes(String(trip.status)));
+  const blockedBoatIds = new Set((blockedDates || []).map((row) => row.boat_id).filter(Boolean));
+  const boatStatus = boats.map((boat) => {
+    const trips = todayActive.filter((trip) => trip.boat_id === boat.id);
+    const inUse = trips.some((trip) => {
+      const s = new Date(trip.start_time).getTime();
+      const e = new Date(trip.end_time).getTime();
+      return Number.isFinite(s + e) && s <= Date.now() && e >= Date.now();
+    });
+    let status = 'Available';
+    if (boat.is_active === false) status = 'Out of Service';
+    else if (blockedBoatIds.has(boat.id)) status = 'Blocked';
+    else if (inUse) status = 'In Use';
+    else if (trips.length > 0) status = 'Booked';
+    return { ...boat, status, bookings: trips };
+  });
+
+  const upcomingActionItems = actionItemsForBookings(upcomingBookings);
+  const alerts = upcomingActionItems.filter((item) =>
+    ['hold_expires_today', 'upcoming_departure', 'missing_waiver', 'missing_insurance', 'missing_license'].includes(item.type)
+  );
+
+  const lastReviewedAt =
+    reviewStateResult.status === 'fulfilled' ? reviewStateResult.value : adminOperationsDashboard.DEFAULT_LAST_REVIEWED;
+  const acknowledgedIds = ackResult.status === 'fulfilled' ? ackResult.value : new Set();
+  const recentCreatedRows = recentCreatedResult.status === 'fulfilled' ? recentCreatedResult.value : [];
+
+  const scheduleConflicts = adminOperationsDashboard.filterConflictsToOperational(
+    adminOperationsDashboard.buildScheduleConflicts(upcomingBookings, upcomingRows, businessTz),
+    new Map([...upcomingRows, ...recentCreatedRows].map((r) => [String(r.id), r])),
+    businessTz
+  );
+
+  let newBookings = [];
+  let newBookingsGrouped = [];
+  try {
+    ({ cards: newBookings, grouped: newBookingsGrouped } = adminOperationsDashboard.buildNewBookingCards({
+      rawRows: recentCreatedRows,
+      normalizeRow: normalizeOpsBooking,
+      lastReviewedAt,
+      acknowledgedIds,
+      scheduleConflicts,
+      sort: opsSort,
+      filter: opsFilter,
+      businessTimezone: businessTz,
+    }));
+  } catch (cardErr) {
+    console.error('[admin-operations-dashboard] new booking cards:', cardErr);
+  }
+
+  const actionRequired = upcomingActionItems;
+  const pendingApprovals =
+    upcomingBookings.filter((b) => ['pending', 'pending_verification'].includes(String(b.status))).length;
+  const grouponPending =
+    grouponPendingResult.status === 'fulfilled' && !grouponPendingResult.value.error
+      ? grouponPendingResult.value.count || 0
+      : 0;
+  const openPaymentRecovery =
+    paymentRecoveryResult.status === 'fulfilled' && !paymentRecoveryResult.value.error
+      ? paymentRecoveryResult.value.count || 0
+      : 0;
+  const unreadMessages =
+    unreadMessagesResult.status === 'fulfilled' && !unreadMessagesResult.value.error
+      ? unreadMessagesResult.value.count || 0
+      : 0;
+  const pendingPreTrip =
+    pendingPreTripResult.status === 'fulfilled' && !pendingPreTripResult.value.error
+      ? pendingPreTripResult.value.count || 0
+      : 0;
+
+  const counts = adminOperationsDashboard.summarizeActionCounts({
+    newBookings,
+    pendingApprovals,
+    pendingPreTrip,
+    unreadMessages,
+    openPaymentRecovery,
+    grouponPending,
+    conflicts: scheduleConflicts,
+    actionRequired,
+  });
+
+  const upcoming = adminOperationsDashboard.computeUpcomingCounts(upcomingRows, businessTz);
+
+  const todaySchedule = todayActive.map((trip) => ({
+    ...trip,
+    source_label: adminOperationsDashboard.bookingSourceDisplay(trip),
+    trip_type: adminOperationsDashboard.tripTypeLabel(trip),
+    readiness: adminOperationsDashboard.readinessLabel(trip),
+  }));
+
+  return {
+    businessTimezone: businessTz,
+    sort: opsSort,
+    filter: opsFilter,
+    lastReviewedAt,
+    counts,
+    newBookings,
+    newBookingsGrouped,
+    conflicts: scheduleConflicts,
+    upcoming,
+    todaySchedule,
+    today: todayStart.toISODate(),
+    todayTrips,
+    actionRequired,
+    alerts,
+    schedule: {
+      boats: boatStatus,
+      bookings: todayTrips,
+      blockedDates,
+    },
+    boatStatus,
+  };
+}
+
+app.get('/api/admin/operations-dashboard/delta', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const sinceParsed = adminOperationsDashboard.parseSinceIso(req.query.since);
+    if (sinceParsed.error) {
+      return res.status(sinceParsed.statusCode || 400).json({ error: sinceParsed.error });
+    }
+    const queryCheck = adminOperationsDashboard.validateOpsQuery(req.query.sort, req.query.filter);
+    if (queryCheck.error) {
+      return res.status(queryCheck.statusCode || 400).json({ error: queryCheck.error });
+    }
+
+    const businessTz = availabilityService.BUSINESS_TZ;
+    const probe = await adminOperationsDashboard.probeOpsDashboardChanges(supabase, sinceParsed.sinceIso);
+
+    if (!probe.changed) {
+      return res.json({
+        changed: false,
+        generatedAt: new Date().toISOString(),
+        since: sinceParsed.sinceIso,
+        quickCounts: probe.counts,
+        probes: {
+          newBookingsSince: probe.newBookingsSince,
+          activitySince: probe.activitySince,
+          commsSince: probe.commsSince,
+          preTripSince: probe.preTripSince,
+          paymentRecoverySince: probe.paymentRecoverySince,
+        },
+      });
+    }
+
+    const sections = await assembleOpsDashboardBookingSections(supabase, adminUser.id, {
+      opsSort: queryCheck.sort,
+      opsFilter: queryCheck.filter,
+      businessTz,
+    });
+
+    return res.json({
+      changed: true,
+      generatedAt: new Date().toISOString(),
+      since: sinceParsed.sinceIso,
+      probes: {
+        newBookingsSince: probe.newBookingsSince,
+        activitySince: probe.activitySince,
+        commsSince: probe.commsSince,
+        preTripSince: probe.preTripSince,
+        paymentRecoverySince: probe.paymentRecoverySince,
+      },
+      ...sections,
+    });
+  } catch (err) {
+    console.error('[admin-operations-dashboard-delta]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not load operations dashboard delta.' });
+  }
+});
+
 app.get('/api/admin/operations-dashboard', async (req, res) => {
   const adminUser = await verifyAdminRequest(req, res);
   if (!adminUser) return;

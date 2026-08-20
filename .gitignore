@@ -36,3 +36,4 @@ groupon-exports/
 VOUCHER_LIST_*.csv
 *groupon*production*.csv
 *groupon*export*.csv
+.vercel

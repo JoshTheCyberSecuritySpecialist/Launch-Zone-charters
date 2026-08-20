@@ -1,9 +1,11 @@
 import { env } from '../config/env.js';
 import { adminDebugLog, fetchJsonWithTimeout } from './adminDiagnostics';
 import {
+  buildOperationsDashboardDeltaPath,
   buildOperationsDashboardPath,
   normalizeOpsFilterFromApi,
   normalizeOpsSortFromApi,
+  type OpsDashboardDeltaQueryParams,
   type OpsDashboardQueryParams,
   type OpsDashboardSort,
 } from './adminOpsDashboardQuery';
@@ -114,9 +116,39 @@ export type OpsDashboardPayload = {
   weather?: Record<string, unknown>;
 };
 
+export type OpsDashboardQuickCounts = {
+  grouponPending: number;
+  openPaymentRecovery: number;
+  unreadMessages: number;
+  pendingPreTrip: number;
+};
+
+export type OpsDashboardDeltaPayload = {
+  changed: boolean;
+  generatedAt: string;
+  since: string;
+  quickCounts?: OpsDashboardQuickCounts;
+  counts?: OpsDashboardCounts;
+  businessTimezone?: string;
+  sort?: string;
+  filter?: string | null;
+  lastReviewedAt?: string;
+  newBookings?: OpsNewBookingCard[];
+  newBookingsGrouped?: OpsNewBookingGroup[];
+  conflicts?: OpsConflict[];
+  upcoming?: OpsDashboardPayload['upcoming'];
+  todaySchedule?: OpsNewBookingCard[];
+  todayTrips?: OpsNewBookingCard[];
+  actionRequired?: OpsDashboardPayload['actionRequired'];
+  alerts?: Array<{ booking_id: string; type: string; label: string; customer_name: string }>;
+  schedule?: OpsDashboardPayload extends { schedule?: infer S } ? S : unknown;
+  boatStatus?: unknown[];
+};
+
 export type OpsDashboardQuery = OpsDashboardQueryParams;
 
-export { buildOperationsDashboardPath, normalizeOpsFilterFromApi, normalizeOpsSortFromApi };
+export { buildOperationsDashboardDeltaPath, buildOperationsDashboardPath, normalizeOpsFilterFromApi, normalizeOpsSortFromApi };
+export type { OpsDashboardDeltaQueryParams };
 export type { OpsDashboardSort, OpsDashboardFilter } from './adminOpsDashboardQuery';
 
 async function adminFetch<T>(token: string, path: string, init?: RequestInit): Promise<T> {
@@ -148,6 +180,57 @@ export async function fetchOperationsDashboard(
     cache: 'no-store',
     ...init,
   });
+}
+
+export async function fetchOperationsDashboardDelta(
+  token: string,
+  query: OpsDashboardDeltaQueryParams,
+  init?: RequestInit
+) {
+  const path = buildOperationsDashboardDeltaPath(query);
+  return adminFetch<OpsDashboardDeltaPayload>(token, path, {
+    cache: 'no-store',
+    ...init,
+  });
+}
+
+/** Merge a delta poll response into the last full dashboard payload. */
+export function mergeOperationsDashboardDelta(
+  prev: OpsDashboardPayload,
+  delta: OpsDashboardDeltaPayload
+): OpsDashboardPayload {
+  if (delta.changed) {
+    return {
+      ...prev,
+      generatedAt: delta.generatedAt,
+      businessTimezone: delta.businessTimezone ?? prev.businessTimezone,
+      sort: delta.sort ?? prev.sort,
+      filter: delta.filter ?? prev.filter,
+      lastReviewedAt: delta.lastReviewedAt ?? prev.lastReviewedAt,
+      counts: delta.counts ?? prev.counts,
+      newBookings: delta.newBookings ?? prev.newBookings,
+      newBookingsGrouped: delta.newBookingsGrouped ?? prev.newBookingsGrouped,
+      conflicts: delta.conflicts ?? prev.conflicts,
+      upcoming: delta.upcoming ?? prev.upcoming,
+      todaySchedule: delta.todaySchedule ?? prev.todaySchedule,
+      todayTrips: (delta.todayTrips ?? prev.todayTrips) as OpsDashboardPayload['todayTrips'],
+      actionRequired: delta.actionRequired ?? prev.actionRequired,
+    };
+  }
+
+  const counts = delta.quickCounts
+    ? {
+        ...prev.counts,
+        unreadMessages: delta.quickCounts.unreadMessages,
+        grouponPending: delta.quickCounts.grouponPending,
+      }
+    : prev.counts;
+
+  return {
+    ...prev,
+    generatedAt: delta.generatedAt,
+    counts,
+  };
 }
 
 export async function markBookingReviewed(token: string, bookingId: string) {

@@ -37,6 +37,7 @@ const REGISTERED_ADMIN_ROUTES = [
 const REQUIRED_ADMIN_APIS = [
   "app.get('/api/admin/verify'",
   "app.get('/api/admin/operations-dashboard'",
+  "app.get('/api/admin/operations-dashboard/delta'",
   "app.get('/api/admin/calendar-bookings'",
   "app.get('/api/admin/calendar-items'",
   "app.post('/api/admin/staff-bookings'",
@@ -76,7 +77,7 @@ const FRONTEND_API_WIRING = [
   { file: 'src/pages/AdminPreTripDetail.tsx', needle: 'PreTripReviewActions', label: 'pre-trip detail review actions' },
   { file: 'src/components/admin/AdminDocumentViewer.tsx', needle: 'AdminDocumentViewer', label: 'admin document viewer component' },
   { file: 'src/lib/publicBooking.ts', needle: '/suggestions', label: 'pre-trip suggestions GET' },
-  { file: 'src/pages/AdminOperationsDashboard.tsx', needle: '/api/admin/operations-dashboard', label: 'ops dashboard' },
+  { file: 'src/pages/AdminOperationsDashboard.tsx', needle: 'fetchOperationsDashboardDelta', label: 'ops dashboard delta poll' },
   { file: 'src/pages/Admin.tsx', needle: '/api/admin/payment-recovery', label: 'payment recovery' },
 ];
 

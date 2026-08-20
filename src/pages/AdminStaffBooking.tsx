@@ -234,6 +234,7 @@ export default function AdminStaffBooking() {
   const [rocketLaunchesLoading, setRocketLaunchesLoading] = useState(false);
   const availabilityCheckSeq = useRef(0);
   const lastSavedScheduleRef = useRef<ScheduleSnapshot | null>(null);
+  const idempotencyKeyByActionRef = useRef<Partial<Record<'hold' | 'booking', string>>>({});
 
   const selectedBoat = boats.find((boat) => boat.id === form.boatId) || null;
   const durationHours = useMemo(
@@ -700,6 +701,7 @@ export default function AdminStaffBooking() {
     setNotice(null);
     clearStaffBookingUrl();
     availabilityCheckSeq.current += 1;
+    idempotencyKeyByActionRef.current = {};
     setForm({
       ...blankForm(),
       date: snap?.date || todayYmd(),
@@ -718,6 +720,7 @@ export default function AdminStaffBooking() {
 
   const reset = (clearNotice = true) => {
     availabilityCheckSeq.current += 1;
+    idempotencyKeyByActionRef.current = {};
     setForm(blankForm());
     setAvailability({ status: 'idle', message: 'Select a boat first.' });
     setSaving(null);
@@ -736,10 +739,15 @@ export default function AdminStaffBooking() {
 
     setSaving(action);
     try {
+      if (!idempotencyKeyByActionRef.current[action]) {
+        idempotencyKeyByActionRef.current[action] = crypto.randomUUID();
+      }
+      const idempotencyKey = idempotencyKeyByActionRef.current[action];
       const res = await authedFetch('/api/admin/staff-bookings', {
         method: 'POST',
         body: JSON.stringify({
           action,
+          idempotency_key: idempotencyKey,
           customer_name: form.customerName,
           phone: form.phone,
           email: form.email,
@@ -767,6 +775,7 @@ export default function AdminStaffBooking() {
       });
       const payload = (await res.json().catch(() => ({}))) as {
         booking?: { id?: string };
+        duplicate?: boolean;
         error?: string;
         availability?: { conflict?: AvailabilityConflict };
       };
@@ -780,6 +789,7 @@ export default function AdminStaffBooking() {
         }
         throw new Error(payload.error || 'Could not save booking.');
       }
+      delete idempotencyKeyByActionRef.current[action];
       lastSavedScheduleRef.current = {
         date: form.date,
         startTime: form.startTime,
@@ -790,7 +800,14 @@ export default function AdminStaffBooking() {
       };
       setNotice({
         variant: 'success',
-        text: action === 'hold' ? 'Hold saved and availability blocked.' : 'Staff booking created.',
+        text:
+          payload.duplicate
+            ? action === 'hold'
+              ? 'Hold already saved (duplicate request ignored).'
+              : 'Staff booking already created (duplicate request ignored).'
+            : action === 'hold'
+              ? 'Hold saved and availability blocked.'
+              : 'Staff booking created.',
       });
       clearStaffBookingUrl();
       resetAvailability();

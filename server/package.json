@@ -13,6 +13,7 @@
     "test:lead-time": "node tests/bookingLeadTime.test.js",
     "test:booking-datetime-range": "node tests/bookingDateTimeRange.test.js",
     "test:staff-booking-duration": "node tests/staffBookingDuration.test.js",
+    "test:staff-booking-idempotency": "node --test tests/staffBookingIdempotency.test.js",
     "test:admin-login-redirect": "node tests/adminLoginRedirect.test.js",
     "test:captain-booking": "node tests/captainBookingService.test.js",
     "test:captain-portal": "node tests/captainBookingService.test.js && node ../scripts/captainPortalSmokeTest.mjs",

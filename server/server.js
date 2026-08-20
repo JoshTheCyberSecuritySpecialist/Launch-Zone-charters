@@ -69,6 +69,7 @@ const { sendGrouponRequestReceivedNotifications } = require('./services/grouponR
 const grouponApprovalService = require('./services/grouponApprovalService');
 const adminSupportService = require('./services/adminSupportService');
 const adminOperationsDashboard = require('./services/adminOperationsDashboardService');
+const staffBookingIdempotency = require('./lib/staffBookingIdempotency');
 const cron = require('node-cron');
 const { runMonitor } = require('./jobs/conditionMonitor');
 
@@ -2214,6 +2215,30 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
   if (!adminUser) return;
   try {
     const body = req.body || {};
+    const idemParsed = staffBookingIdempotency.parseStaffIdempotencyKey(
+      body.idempotency_key || body.idempotencyKey
+    );
+    if (idemParsed?.error) {
+      return res.status(400).json({ error: idemParsed.error });
+    }
+    if (idemParsed?.key) {
+      const replay = await staffBookingIdempotency.findStaffBookingReplay(
+        supabase,
+        idemParsed.key,
+        adminUser.id
+      );
+      if (replay?.conflict) {
+        return res.status(409).json({ error: 'This booking request was already submitted.' });
+      }
+      if (replay?.duplicate) {
+        return res.status(200).json({
+          booking: replay.booking,
+          customer: replay.customer,
+          duplicate: true,
+        });
+      }
+    }
+
     const action = cleanText(body.action, 20) === 'hold' ? 'hold' : 'booking';
     const customerName = cleanText(body.customer_name || body.customerName, 160);
     const phone = cleanText(body.phone, 40);
@@ -2441,6 +2466,7 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
           }
         : {}),
       ...staffRocketDepartureFields,
+      ...(idemParsed?.key ? { staff_idempotency_key: idemParsed.key } : {}),
     };
 
     if (bookingType === 'captain_charter') {
@@ -2487,6 +2513,23 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
       .select('id, status')
       .single();
     if (error) {
+      if (idemParsed?.key && staffBookingIdempotency.isStaffIdempotencyUniqueViolation(error)) {
+        const replay = await staffBookingIdempotency.findStaffBookingReplay(
+          supabase,
+          idemParsed.key,
+          adminUser.id
+        );
+        if (replay?.duplicate) {
+          return res.status(200).json({
+            booking: replay.booking,
+            customer: replay.customer,
+            duplicate: true,
+          });
+        }
+        if (replay?.conflict) {
+          return res.status(409).json({ error: 'This booking request was already submitted.' });
+        }
+      }
       const sharedMsg = sharedCharterErrorMessage(error);
       if (sharedMsg) {
         return res.status(409).json({ error: sharedMsg });

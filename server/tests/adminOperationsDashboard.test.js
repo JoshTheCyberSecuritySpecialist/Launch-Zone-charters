@@ -518,4 +518,53 @@ test('buildNewBookingCards omits ended trips even when unreviewed', () => {
   assert.ok(cards.some((c) => c.id === 'new-upcoming'));
 });
 
+test('buildNewBookingCards merges passed scheduleConflicts for recent bookings', () => {
+  const zone = 'America/New_York';
+  const rawRows = [
+    {
+      id: 'recent-1',
+      created_at: DateTime.now().toUTC().toISO(),
+      start_time: DateTime.now().plus({ days: 2 }).toUTC().toISO(),
+      end_time: DateTime.now().plus({ days: 2, hours: 1 }).toUTC().toISO(),
+      status: 'confirmed',
+      booking_type: 'charter',
+      charter_type: 'bio',
+      charter_seating: 'shared',
+      guest_count: 2,
+      boat_id: 'boat-a',
+      customers: { full_name: 'A', email: 'a@test.com', phone: '1' },
+      boats: { id: 'boat-a', name: 'Boat', type: 'premium' },
+    },
+  ];
+  const normalizeRow = (row) => ({
+    id: row.id,
+    customer_name: row.customers?.full_name || 'Guest',
+    start_time: row.start_time,
+    end_time: row.end_time,
+    status: row.status,
+    boat_id: row.boat_id,
+    booking_type: row.booking_type,
+  });
+  const scheduleConflicts = [
+    {
+      type: 'missing_captain',
+      label: 'Missing captain assignment',
+      booking_id: 'recent-1',
+      urgency: 5,
+    },
+  ];
+  const { cards } = buildNewBookingCards({
+    rawRows,
+    normalizeRow,
+    lastReviewedAt: '1970-01-01T00:00:00.000Z',
+    acknowledgedIds: new Set(),
+    scheduleConflicts,
+    sort: 'trip_date',
+    filter: null,
+    businessTimezone: zone,
+  });
+  assert.ok(cards.some((c) => c.id === 'recent-1'));
+  assert.ok(cards.find((c) => c.id === 'recent-1')?.conflictDetails?.length > 0);
+});
+
 console.log('adminOperationsDashboard.test.js: all tests passed');

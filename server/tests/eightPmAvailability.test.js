@@ -36,6 +36,7 @@ function bookingRow(partial) {
     start_time: partial.start_time,
     end_time: partial.end_time,
     expires_at: partial.expires_at ?? null,
+    hold_expires_at: partial.hold_expires_at ?? null,
   };
 }
 
@@ -154,6 +155,17 @@ function run() {
     end_time: eightEnd,
   });
   assert.strictEqual(bookingRowBlocksSlot(expiredPending), false, 'expired pending hold ignored');
+
+  const expiredStaffHold = bookingRow({
+    id: 'expired-staff-hold',
+    guest_count: 2,
+    status: 'hold',
+    hold_expires_at: new Date(Date.now() - 60_000).toISOString(),
+    start_time: eightStart,
+    end_time: eightEnd,
+  });
+  assert.strictEqual(bookingRowBlocksSlot(expiredStaffHold), false, 'expired staff hold ignored');
+
   cap = evaluateSharedCharterCapacity({
     overlappingBookings: [expiredPending],
     proposedGuestCount: 5,

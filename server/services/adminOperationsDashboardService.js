@@ -990,6 +990,25 @@ function groupNewBookingsByTripDate(cards, zone) {
   });
 }
 
+function mergeScheduleConflicts(primary, secondary) {
+  const seen = new Set();
+  const out = [];
+  for (const row of [...(primary || []), ...(secondary || [])]) {
+    if (!row) continue;
+    const key = [
+      row.type,
+      row.booking_id,
+      row.other_booking_id || '',
+      row.boat_id || '',
+      row.captain_id || '',
+    ].join('|');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(row);
+  }
+  return out;
+}
+
 function buildNewBookingCards({
   rawRows,
   normalizeRow,
@@ -1003,14 +1022,21 @@ function buildNewBookingCards({
   const zone = businessTimezone || getBusinessTimezone();
   const operationalRaw = filterOperationalBookingRows(rawRows || [], zone);
   const rawById = new Map(operationalRaw.map((r) => [String(r.id), r]));
-  let scheduleForRecent = [];
+  const recentIds = new Set(operationalRaw.map((r) => String(r.id)));
+  const fromUpcoming = (scheduleConflicts || []).filter(
+    (c) =>
+      recentIds.has(String(c.booking_id)) ||
+      (c.other_booking_id && recentIds.has(String(c.other_booking_id)))
+  );
+  let scheduleForRecent = fromUpcoming;
   try {
     const recentNormalized = operationalRaw.map((r) => normalizeRow(r));
-    scheduleForRecent = filterConflictsToOperational(
+    const internalRecent = filterConflictsToOperational(
       buildScheduleConflicts(recentNormalized, operationalRaw, zone),
       rawById,
       zone
     );
+    scheduleForRecent = mergeScheduleConflicts(fromUpcoming, internalRecent);
   } catch (err) {
     console.warn('[admin-ops] schedule conflicts for recent bookings:', err?.message || err);
   }

@@ -27,6 +27,10 @@ function bookingRowBlocksSlot(row) {
   if (String(row.status) === 'pending' && Number.isFinite(exp) && exp < Date.now()) {
     return false;
   }
+  const holdExp = row.hold_expires_at ? new Date(String(row.hold_expires_at)).getTime() : NaN;
+  if (String(row.status) === 'hold' && Number.isFinite(holdExp) && holdExp < Date.now()) {
+    return false;
+  }
   return true;
 }
 

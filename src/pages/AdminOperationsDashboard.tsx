@@ -131,6 +131,22 @@ function weatherDisplay(value: unknown): string {
   return '';
 }
 
+function dashboardPayloadSignature(data: OpsDashboardPayload): string {
+  const newIds = (data.newBookings || []).map((b) => b.id).join(',');
+  const todayIds = (data.todayTrips || []).map((b) => b.id).join(',');
+  const conflictCount = (data.conflicts || []).length;
+  const counts = data.counts;
+  return [
+    newIds,
+    todayIds,
+    conflictCount,
+    counts?.newBookings ?? 0,
+    counts?.pendingApprovals ?? 0,
+    counts?.conflicts ?? 0,
+    data.generatedAt || '',
+  ].join('|');
+}
+
 /** API may omit nested fields on errors or older backends — avoid render crashes. */
 function normalizeDashboardPayload(data: OpsDashboardPayload): DashboardPayload {
   const raw = data as OpsDashboardPayload & Partial<DashboardPayload>;
@@ -206,6 +222,7 @@ export default function AdminOperationsDashboard() {
   const [bookingsError, setBookingsError] = useState<string | null>(null);
   const knownNewBookingIdsRef = useRef<Set<string>>(new Set());
   const pollInFlightRef = useRef(false);
+  const payloadSignatureRef = useRef('');
   const opsSortRef = useRef(opsSort);
   const opsFilterRef = useRef(opsFilter);
   const fetchAbortRef = useRef<AbortController | null>(null);
@@ -280,7 +297,12 @@ export default function AdminOperationsDashboard() {
         }
       }
       knownNewBookingIdsRef.current = new Set(incomingNew);
-      setPayload(normalizeDashboardPayload(data));
+      const normalized = normalizeDashboardPayload(data);
+      const signature = dashboardPayloadSignature(data);
+      if (signature !== payloadSignatureRef.current) {
+        payloadSignatureRef.current = signature;
+        setPayload(normalized);
+      }
       setLastFetchedAt(Date.now());
       setAppliedSort(normalizeOpsSortFromApi(data.sort));
       setAppliedFilter(normalizeOpsFilterFromApi(data.filter));

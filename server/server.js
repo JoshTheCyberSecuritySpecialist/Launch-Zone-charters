@@ -2424,6 +2424,44 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
       ...staffRocketDepartureFields,
     };
 
+    if (bookingType === 'captain_charter') {
+      const recheck = await availabilityService.checkStaffBookingAvailability({
+        boatId,
+        startTime: times.startIso,
+        endTime: times.endIso,
+        bookingType,
+        location: location || null,
+        passengerCount,
+        charterType: staffCharterType,
+        launchId: staffLaunchId,
+      });
+      if (!recheck.available) {
+        if (recheck.reason === 'captain_window') {
+          return res.status(400).json({
+            error: recheck.message || 'Invalid charter time.',
+            availability: staffAvailabilityConflictPayload(recheck),
+          });
+        }
+        return res.status(409).json({
+          error: recheck.message || SLOT_TAKEN_USER_MESSAGE,
+          availability: staffAvailabilityConflictPayload(recheck),
+        });
+      }
+    } else {
+      try {
+        await availabilityService.assertBookingSlotAvailable({
+          boatId,
+          startTime: times.startIso,
+          endTime: times.endIso,
+          location: location || null,
+        });
+      } catch (slotErr) {
+        return res.status(slotErr.statusCode || 409).json({
+          error: slotErr.message || SLOT_TAKEN_USER_MESSAGE,
+        });
+      }
+    }
+
     const { data: booking, error } = await supabase
       .from('bookings')
       .insert(insert)
@@ -5213,17 +5251,17 @@ app.get('/api/admin/operations-dashboard', async (req, res) => {
       adminOperationsDashboard.fetchRecentBookingCandidates(supabase),
       supabase
         .from('bookings')
-        .select('*', { count: 'exact', head: true })
+        .select('id', { count: 'exact', head: true })
         .eq('booking_source', 'groupon')
         .in('status', ['pending', 'pending_verification']),
       supabase
         .from('payment_recovery_queue')
-        .select('*', { count: 'exact', head: true })
+        .select('id', { count: 'exact', head: true })
         .in('status', ['open', 'retrying']),
-      supabase.from('contact_messages').select('*', { count: 'exact', head: true }).eq('is_read', false),
+      supabase.from('contact_messages').select('id', { count: 'exact', head: true }).eq('is_read', false),
       supabase
         .from('pre_trip_submissions')
-        .select('*', { count: 'exact', head: true })
+        .select('id', { count: 'exact', head: true })
         .eq('admin_status', 'pending'),
     ]);
 
@@ -5262,7 +5300,8 @@ app.get('/api/admin/operations-dashboard', async (req, res) => {
     const comms =
       commsResult.status === 'fulfilled' && !commsResult.value.error ? commsResult.value.data || [] : [];
 
-    const alerts = actionItemsForBookings(upcomingBookings).filter((item) =>
+    const upcomingActionItems = actionItemsForBookings(upcomingBookings);
+    const alerts = upcomingActionItems.filter((item) =>
       ['hold_expires_today', 'upcoming_departure', 'missing_waiver', 'missing_insurance', 'missing_license'].includes(item.type)
     );
 
@@ -5306,7 +5345,7 @@ app.get('/api/admin/operations-dashboard', async (req, res) => {
       console.error('[admin-operations-dashboard] new booking cards:', cardErr);
     }
 
-    const actionRequired = actionItemsForBookings(upcomingBookings);
+    const actionRequired = upcomingActionItems;
     const pendingApprovals =
       upcomingBookings.filter((b) => ['pending', 'pending_verification'].includes(String(b.status))).length;
     const grouponPending =

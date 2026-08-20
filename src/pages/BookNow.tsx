@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { Link, useLocation, useSearchParams } from 'react-router-dom';
+import { Link, Navigate, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Calendar,
   Users,
@@ -80,6 +80,10 @@ import {
   SUNSET_WILDLIFE_DISCLAIMER,
   type SunsetPackageId,
 } from '../lib/sunsetPackages';
+import {
+  DIRECT_DEALS_PATH,
+  directExperienceChooserPath,
+} from '../lib/directBookingFlow.js';
 
 interface BookNowProps {
   onNavigate: (page: string) => void;
@@ -272,6 +276,7 @@ type CharterVariant = 'private' | 'shared';
 export default function BookNow({ onNavigate }: BookNowProps) {
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
   const bookingIdFromUrl = (searchParams.get('bookingId') || '').trim();
   const resumeTokenFromUrl = (searchParams.get('resume') || '').trim();
   const [bookingMode, setBookingMode] = useState<BookingMode>('rental');
@@ -846,6 +851,15 @@ export default function BookNow({ onNavigate }: BookNowProps) {
   const selectedSunsetPackage = isSunsetPackageFlow
     ? getSunsetPackageDisplay(sunsetPackageId) ?? sunsetPackageFromUrl
     : null;
+  const requiredDirectExperience = isBioPackageFlow
+    ? 'bio'
+    : isRocketPackageFlow
+      ? 'rocket'
+      : isSunsetPackageFlow
+        ? 'sunset'
+        : null;
+  const selectedDirectPackage = selectedBioPackage || selectedRocketPackage || selectedSunsetPackage;
+  const missingRequiredDirectPackage = Boolean(requiredDirectExperience) && !selectedDirectPackage;
   const charterAvailabilityQueryParams = (() => {
     if (isRocketPackageFlow && rocketPackageId && selectedRocketPackage) {
       const q = new URLSearchParams();
@@ -2386,6 +2400,14 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     productBookingTitle ??
     (showNeutralChooser ? 'What would you like to book?' : 'Book your adventure');
 
+  if (missingRequiredDirectPackage && requiredDirectExperience) {
+    const chooser = new URLSearchParams();
+    chooser.set('experience', requiredDirectExperience);
+    const dateParam = searchParams.get('date');
+    if (dateParam && /^\d{4}-\d{2}-\d{2}$/.test(dateParam)) chooser.set('date', dateParam);
+    return <Navigate to={`${DIRECT_DEALS_PATH}?${chooser.toString()}`} replace />;
+  }
+
   return (
     <div
       className={`relative min-h-screen ${bookingMode === 'charter' && step > 0 ? 'pb-36 lg:pb-24' : 'pb-20'}`}
@@ -2610,7 +2632,13 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                     </div>
                     <button
                       type="button"
-                      onClick={() => setStep(0)}
+                      onClick={() => {
+                        if (requiredDirectExperience) {
+                          navigate(DIRECT_DEALS_PATH);
+                          return;
+                        }
+                        setStep(0);
+                      }}
                       className="shrink-0 text-sm font-semibold text-cyan-400 underline decoration-cyan-500/30 hover:text-cyan-300"
                     >
                       Change
@@ -2986,17 +3014,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                               <button
                                 type="button"
                                 className="mt-4 text-sm font-semibold text-cyan-300 underline underline-offset-2"
-                                onClick={() => {
-                                  setBioPackageId(null);
-                                  setSearchParams(
-                                    (prev) => {
-                                      const next = new URLSearchParams(prev);
-                                      next.delete('package');
-                                      return next;
-                                    },
-                                    { replace: true }
-                                  );
-                                }}
+                                onClick={() => navigate(directExperienceChooserPath('bio'))}
                               >
                                 Change package
                               </button>
@@ -3069,18 +3087,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                               <button
                                 type="button"
                                 className="mt-4 text-sm font-semibold text-cyan-300 underline underline-offset-2"
-                                onClick={() => {
-                                  setRocketPackageId(null);
-                                  setRocketSharedMinimumAcknowledged(false);
-                                  setSearchParams(
-                                    (prev) => {
-                                      const next = new URLSearchParams(prev);
-                                      next.delete('package');
-                                      return next;
-                                    },
-                                    { replace: true }
-                                  );
-                                }}
+                                onClick={() => navigate(directExperienceChooserPath('rocket'))}
                               >
                                 Change package
                               </button>
@@ -3164,17 +3171,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                               <button
                                 type="button"
                                 className="mt-4 text-sm font-semibold text-cyan-300 underline underline-offset-2"
-                                onClick={() => {
-                                  setSunsetPackageId(null);
-                                  setSearchParams(
-                                    (prev) => {
-                                      const next = new URLSearchParams(prev);
-                                      next.delete('package');
-                                      return next;
-                                    },
-                                    { replace: true }
-                                  );
-                                }}
+                                onClick={() => navigate(directExperienceChooserPath('sunset'))}
                               >
                                 Change package
                               </button>

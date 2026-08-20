@@ -1,12 +1,12 @@
 /**
  * Direct-deals landing cards — one summary per experience.
- * Package SKUs stay on /booking. Prices here are previews from existing display modules.
+ * Package SKUs are chosen on /booking/direct?experience=… then BookNow receives package=.
  */
 import {
   BIO_PACKAGE_DISPLAY,
   formatBioPackagePriceUsd,
 } from './bioluminescencePackages';
-import { EXPERIENCE_ROCKET, EXPERIENCE_SUNSET } from './experienceCatalog';
+import { directExperienceChooserPath } from './directBookingFlow.js';
 import {
   ROCKET_PACKAGE_DISPLAY,
   formatRocketPackagePriceUsd,
@@ -16,12 +16,7 @@ import {
   formatSunsetPackagePriceUsd,
 } from './sunsetPackages';
 
-export const DIRECT_DEALS_PATH = '/booking/direct';
-
-/** Existing BookNow chooser — no package= so the form shows package cards. */
-export const BIO_CHARTER_BOOKING_URL = '/booking?bookingMode=charter&charterType=bio';
-export const ROCKET_CHARTER_BOOKING_URL = EXPERIENCE_ROCKET.bookingUrl;
-export const SUNSET_CHARTER_BOOKING_URL = EXPERIENCE_SUNSET.bookingUrl;
+export { DIRECT_DEALS_PATH, directExperienceChooserPath, bookingUrlForDirectPackage, parseDirectExperienceParam } from './directBookingFlow.js';
 
 export type DirectDealExperienceId = 'bio' | 'rocket_launch' | 'sunset';
 
@@ -75,7 +70,7 @@ export function buildDirectExperienceCards(flags: DirectDealFlags): DirectExperi
       supportingText: 'Shared packages available for individuals, couples, and groups.',
       fromPriceLabel: bioFrom,
       ctaLabel: 'View Bio Tours',
-      href: BIO_CHARTER_BOOKING_URL,
+      href: directExperienceChooserPath('bio'),
     },
     {
       id: 'rocket_launch',
@@ -85,7 +80,7 @@ export function buildDirectExperienceCards(flags: DirectDealFlags): DirectExperi
       supportingText: 'Shared seats and private charter options available.',
       fromPriceLabel: rocketFrom,
       ctaLabel: 'View Rocket Options',
-      href: ROCKET_CHARTER_BOOKING_URL,
+      href: directExperienceChooserPath('rocket'),
     },
     {
       id: 'sunset',
@@ -95,7 +90,7 @@ export function buildDirectExperienceCards(flags: DirectDealFlags): DirectExperi
       supportingText: 'Shared and private cruise options available.',
       fromPriceLabel: sunsetFrom,
       ctaLabel: 'View Sunset Options',
-      href: SUNSET_CHARTER_BOOKING_URL,
+      href: directExperienceChooserPath('sunset'),
     },
   ];
 }

@@ -1,8 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Helmet } from 'react-helmet-async';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import DirectPackageSelector from '../components/booking/DirectPackageSelector';
 import { env } from '../config/env.js';
-import { isDirectBioPackagePricingEnabled } from '../lib/bioluminescencePackages';
+import {
+  BIO_PACKAGE_PRICING_DISCLAIMER,
+  isDirectBioPackagePricingEnabled,
+} from '../lib/bioluminescencePackages';
+import {
+  bookingUrlForDirectPackage,
+  DIRECT_DEALS_PATH,
+  parseDirectExperienceParam,
+} from '../lib/directBookingFlow.js';
 import { trackDirectBookingEvent } from '../lib/directBookingMarketing';
 import {
   buildDirectExperienceCards,
@@ -15,6 +24,24 @@ import { isDirectSunsetPackagePricingEnabled } from '../lib/sunsetPackages';
 interface DirectDealsProps {
   onNavigate: (page: string) => void;
 }
+
+const EXPERIENCE_COPY = {
+  bio: {
+    title: 'Bioluminescence Night Tour',
+    heading: 'Choose your bio package',
+    note: BIO_PACKAGE_PRICING_DISCLAIMER,
+  },
+  rocket: {
+    title: 'Rocket Launch Experience',
+    heading: 'Choose your rocket launch package',
+    note: 'Guest packages — not boats. Launch Zone assigns your vessel based on availability.',
+  },
+  sunset: {
+    title: 'Sunset & Wildlife Cruise',
+    heading: 'Choose your sunset package',
+    note: 'Shared and private cruise options. Sunset Solo can only join an already-paid shared departure.',
+  },
+} as const;
 
 function ExperienceCard({ card }: { card: DirectExperienceCard }) {
   return (
@@ -46,6 +73,7 @@ function ExperienceCard({ card }: { card: DirectExperienceCard }) {
 
 export default function DirectDeals({ onNavigate }: DirectDealsProps) {
   void onNavigate;
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const viewedRef = useRef(false);
   const [serverBioEnabled, setServerBioEnabled] = useState<boolean | null>(null);
@@ -89,6 +117,9 @@ export default function DirectDeals({ onNavigate }: DirectDealsProps) {
     trackDirectBookingEvent('direct_deals_viewed');
   }, []);
 
+  const experienceParam = searchParams.get('experience');
+  const selectedExperience = parseDirectExperienceParam(experienceParam);
+  const unknownExperience = Boolean(experienceParam) && !selectedExperience;
   const packageParam = searchParams.get('package');
   const unknownPackage = Boolean(packageParam) && !isKnownDirectPackageId(packageParam);
 
@@ -107,6 +138,60 @@ export default function DirectDeals({ onNavigate }: DirectDealsProps) {
       }),
     [bioPackagesEnabled, rocketPackagesEnabled, sunsetPackagesEnabled]
   );
+
+  if (selectedExperience) {
+    const copy = EXPERIENCE_COPY[selectedExperience];
+    return (
+      <div className="min-h-screen bg-lz-bg text-slate-100">
+        <Helmet prioritizeSeoTags>
+          <title>{copy.title} | Book Direct | Launch Zone Charters</title>
+          <meta name="description" content={`${copy.heading} before choosing a date.`} />
+          <link rel="canonical" href="https://launchzonecharters.com/booking/direct" />
+        </Helmet>
+
+        <section className="lz-page-hero py-12 md:py-16">
+          <div className="mx-auto max-w-3xl px-4 text-center sm:px-6">
+            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-cyan-300/90">Direct booking</p>
+            <h1 className="lz-page-hero-heading mt-3 font-display text-white">{copy.title}</h1>
+            <p className="mx-auto mt-4 max-w-2xl text-base leading-relaxed text-slate-300 md:text-lg">
+              {copy.heading}
+            </p>
+            <p className="mx-auto mt-3 max-w-2xl text-sm leading-relaxed text-slate-400 md:text-base">
+              {copy.note}
+            </p>
+          </div>
+        </section>
+
+        <div className="mx-auto max-w-6xl px-4 pb-20 sm:px-6 lg:px-8">
+          <Link
+            to={DIRECT_DEALS_PATH}
+            className="inline-flex min-h-[44px] items-center text-sm font-semibold text-cyan-300 underline underline-offset-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/50"
+          >
+            All experiences
+          </Link>
+          <div className="mt-6">
+            <DirectPackageSelector
+              experience={selectedExperience}
+              onSelect={(packageId) => {
+                const href = bookingUrlForDirectPackage(selectedExperience, packageId);
+                if (!href) return;
+                trackDirectBookingEvent('direct_package_selected', {
+                  experienceId: selectedExperience,
+                  packageId,
+                });
+                const date = searchParams.get('date');
+                const next =
+                  date && /^\d{4}-\d{2}-\d{2}$/.test(date)
+                    ? `${href}&date=${encodeURIComponent(date)}`
+                    : href;
+                navigate(next);
+              }}
+            />
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-lz-bg text-slate-100">
@@ -138,12 +223,12 @@ export default function DirectDeals({ onNavigate }: DirectDealsProps) {
           role="note"
         >
           We assign your vessel — you do not pick a boat here. Choose an experience to see packages,
-          dates, and checkout.
+          then pick a date.
         </p>
 
-        {unknownPackage ? (
+        {unknownExperience || unknownPackage ? (
           <p className="mt-4 rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-3 text-sm text-slate-300">
-            That package link is no longer valid. Choose an experience below to continue.
+            That booking link is no longer valid. Choose an experience below to continue.
           </p>
         ) : null}
 

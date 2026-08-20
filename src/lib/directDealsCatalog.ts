@@ -1,75 +1,39 @@
 /**
- * Direct-deals landing cards.
- * Prices, guest counts, and booking URLs come from existing package/experience modules.
- * Do not add independent dollar amounts here.
+ * Direct-deals landing cards — one summary per experience.
+ * Package SKUs stay on /booking. Prices here are previews from existing display modules.
  */
 import {
   BIO_PACKAGE_DISPLAY,
-  bioBookingUrl,
   formatBioPackagePriceUsd,
-  type BioPackageDisplay,
 } from './bioluminescencePackages';
+import { EXPERIENCE_ROCKET, EXPERIENCE_SUNSET } from './experienceCatalog';
 import {
-  EXPERIENCE_BIO,
-  EXPERIENCE_ROCKET,
-  EXPERIENCE_SUNSET,
-} from './experienceCatalog';
-import {
-  ROCKET_DUO_EXTRA_DISCLOSURE,
   ROCKET_PACKAGE_DISPLAY,
-  ROCKET_PRIVATE_CHARTER_DESCRIPTION,
-  ROCKET_SHARED_CHARTER_DISCLOSURE,
-  rocketBookingUrl,
   formatRocketPackagePriceUsd,
-  type RocketPackageDisplay,
 } from './rocketLaunchPackages';
 import {
   SUNSET_PACKAGE_DISPLAY,
-  SUNSET_PRIVATE_CHARTER_DESCRIPTION,
-  SUNSET_SOLO_JOIN_DISCLOSURE,
-  SUNSET_TWO_OPENER_DISCLOSURE,
-  sunsetBookingUrl,
   formatSunsetPackagePriceUsd,
-  type SunsetPackageDisplay,
 } from './sunsetPackages';
 
 export const DIRECT_DEALS_PATH = '/booking/direct';
 
-const BIO_CHARTER_BOOKING_URL = '/booking?bookingMode=charter&charterType=bio';
+/** Existing BookNow chooser — no package= so the form shows package cards. */
+export const BIO_CHARTER_BOOKING_URL = '/booking?bookingMode=charter&charterType=bio';
+export const ROCKET_CHARTER_BOOKING_URL = EXPERIENCE_ROCKET.bookingUrl;
+export const SUNSET_CHARTER_BOOKING_URL = EXPERIENCE_SUNSET.bookingUrl;
 
 export type DirectDealExperienceId = 'bio' | 'rocket_launch' | 'sunset';
 
-export type DirectDealSeating = 'shared' | 'private';
-
-export type DirectDealDisclosureKind =
-  | 'bio_shared'
-  | 'rocket_shared'
-  | 'rocket_private'
-  | 'sunset_shared'
-  | 'sunset_private'
-  | 'none';
-
-export type DirectDealCard = {
-  id: string;
-  experienceId: DirectDealExperienceId;
-  packageId: string | null;
+export type DirectExperienceCard = {
+  id: DirectDealExperienceId;
+  category: string;
   name: string;
   description: string;
-  guestLabel: string;
-  seating: DirectDealSeating | null;
-  seatingLabel: string;
-  priceLabel: string | null;
+  supportingText: string;
+  fromPriceLabel: string | null;
+  ctaLabel: string;
   href: string;
-  disclosure: DirectDealDisclosureKind;
-  disclosureBody: string | null;
-  extraDisclosure: string | null;
-  badge: string | null;
-};
-
-export type DirectDealSection = {
-  id: 'bio' | 'rocket' | 'sunset';
-  heading: string;
-  cards: DirectDealCard[];
 };
 
 export type DirectDealFlags = {
@@ -78,150 +42,61 @@ export type DirectDealFlags = {
   sunsetPackagesEnabled: boolean;
 };
 
-function guestCountLabel(count: number): string {
-  return count === 1 ? '1 Guest' : `${count} Guests`;
+function lowestDirectPriceUsd(pkgs: ReadonlyArray<{ directPriceUsd: number }>): number | null {
+  const values = pkgs
+    .map((pkg) => Number(pkg.directPriceUsd))
+    .filter((n) => Number.isFinite(n) && n > 0);
+  if (!values.length) return null;
+  return Math.min(...values);
 }
 
-function bioSkuCard(pkg: BioPackageDisplay): DirectDealCard {
-  return {
-    id: pkg.id,
-    experienceId: 'bio',
-    packageId: pkg.id,
-    name: pkg.cardTitle,
-    description: 'Nighttime bioluminescence boat tour',
-    guestLabel: guestCountLabel(pkg.guestCount),
-    seating: 'shared',
-    seatingLabel: 'Shared Departure',
-    priceLabel: formatBioPackagePriceUsd(pkg.directPriceUsd),
-    href: bioBookingUrl(pkg.id),
-    disclosure: 'bio_shared',
-    disclosureBody:
-      'This booking reserves your seats on a shared trip. Launch Zone Charters assigns your vessel — you do not pick a boat here.',
-    extraDisclosure: null,
-    badge: pkg.badge,
-  };
+function packagesFromLabel(amount: number | null, format: (n: number) => string): string | null {
+  if (amount == null) return null;
+  return `Packages from ${format(amount)}`;
 }
 
-function rocketSkuCard(pkg: RocketPackageDisplay): DirectDealCard {
-  const isPrivate = pkg.seating === 'private';
-  return {
-    id: pkg.id,
-    experienceId: 'rocket_launch',
-    packageId: pkg.id,
-    name: pkg.cardTitle,
-    description: isPrivate
-      ? ROCKET_PRIVATE_CHARTER_DESCRIPTION
-      : EXPERIENCE_ROCKET.tagline,
-    guestLabel: isPrivate ? 'Up to 5 Guests' : guestCountLabel(pkg.guestCount),
-    seating: pkg.seating,
-    seatingLabel: isPrivate ? 'Private Charter' : 'Shared Departure',
-    priceLabel: formatRocketPackagePriceUsd(pkg.directPriceUsd),
-    href: rocketBookingUrl(pkg.id),
-    disclosure: isPrivate ? 'rocket_private' : 'rocket_shared',
-    disclosureBody: isPrivate ? null : ROCKET_SHARED_CHARTER_DISCLOSURE,
-    extraDisclosure: pkg.id === 'rocket_duo' ? ROCKET_DUO_EXTRA_DISCLOSURE : null,
-    badge: isPrivate ? 'Private Charter' : pkg.badge,
-  };
-}
-
-function bioFallbackCard(): DirectDealCard {
-  return {
-    id: 'bio_charter',
-    experienceId: 'bio',
-    packageId: null,
-    name: EXPERIENCE_BIO.publicName,
-    description: 'Nighttime bioluminescence boat tour',
-    guestLabel: 'Choose guests in booking',
-    seating: 'shared',
-    seatingLabel: 'Shared Departure',
-    priceLabel: null,
-    href: BIO_CHARTER_BOOKING_URL,
-    disclosure: 'bio_shared',
-    disclosureBody:
-      'This booking reserves your seats on a shared trip. Launch Zone Charters assigns your vessel — you do not pick a boat here.',
-    extraDisclosure: null,
-    badge: null,
-  };
-}
-
-function rocketFallbackCard(): DirectDealCard {
-  return {
-    id: 'rocket_charter',
-    experienceId: 'rocket_launch',
-    packageId: null,
-    name: EXPERIENCE_ROCKET.publicName,
-    description: EXPERIENCE_ROCKET.tagline,
-    guestLabel: 'Choose guests in booking',
-    seating: null,
-    seatingLabel: 'Captain-led charter',
-    priceLabel: null,
-    href: EXPERIENCE_ROCKET.bookingUrl,
-    disclosure: 'none',
-    disclosureBody: null,
-    extraDisclosure: null,
-    badge: null,
-  };
-}
-
-function sunsetSkuCard(pkg: SunsetPackageDisplay): DirectDealCard {
-  const isPrivate = pkg.seating === 'private';
-  return {
-    id: pkg.id,
-    experienceId: 'sunset',
-    packageId: pkg.id,
-    name: pkg.cardTitle,
-    description: isPrivate ? SUNSET_PRIVATE_CHARTER_DESCRIPTION : 'Relaxed captain-led cruise.',
-    guestLabel: isPrivate ? `Up to ${pkg.maxGuests ?? 5} Guests` : guestCountLabel(pkg.guestCount),
-    seating: pkg.seating,
-    seatingLabel: isPrivate ? 'Private Charter' : 'Shared Departure',
-    priceLabel: formatSunsetPackagePriceUsd(pkg.directPriceUsd),
-    href: sunsetBookingUrl(pkg.id),
-    disclosure: isPrivate ? 'sunset_private' : 'sunset_shared',
-    disclosureBody: isPrivate
-      ? null
-      : pkg.id === 'sunset_solo'
-        ? SUNSET_SOLO_JOIN_DISCLOSURE
-        : SUNSET_TWO_OPENER_DISCLOSURE,
-    extraDisclosure: null,
-    badge: isPrivate ? 'Private Charter' : pkg.badge,
-  };
-}
-
-function sunsetCard(): DirectDealCard {
-  return {
-    id: 'sunset_charter',
-    experienceId: 'sunset',
-    packageId: null,
-    name: EXPERIENCE_SUNSET.publicName,
-    description: 'Relaxed captain-led cruise.',
-    guestLabel: 'Choose guests in booking',
-    seating: null,
-    seatingLabel: 'Captain-led charter',
-    priceLabel: null,
-    href: EXPERIENCE_SUNSET.bookingUrl,
-    disclosure: 'none',
-    // Section heading already prints the wildlife disclaimer.
-    disclosureBody: null,
-    extraDisclosure: null,
-    badge: null,
-  };
-}
-
-export function buildDirectDealSections(flags: DirectDealFlags): DirectDealSection[] {
-  const bioCards = flags.bioPackagesEnabled
-    ? BIO_PACKAGE_DISPLAY.map(bioSkuCard)
-    : [bioFallbackCard()];
-  const rocketCards = flags.rocketPackagesEnabled
-    ? ROCKET_PACKAGE_DISPLAY.map(rocketSkuCard)
-    : [rocketFallbackCard()];
-  const sunsetCards = flags.sunsetPackagesEnabled
-    ? SUNSET_PACKAGE_DISPLAY.map(sunsetSkuCard)
-    : [sunsetCard()];
+export function buildDirectExperienceCards(flags: DirectDealFlags): DirectExperienceCard[] {
+  const bioFrom = flags.bioPackagesEnabled
+    ? packagesFromLabel(lowestDirectPriceUsd(BIO_PACKAGE_DISPLAY), formatBioPackagePriceUsd)
+    : null;
+  const rocketFrom = flags.rocketPackagesEnabled
+    ? packagesFromLabel(lowestDirectPriceUsd(ROCKET_PACKAGE_DISPLAY), formatRocketPackagePriceUsd)
+    : null;
+  const sunsetFrom = flags.sunsetPackagesEnabled
+    ? packagesFromLabel(lowestDirectPriceUsd(SUNSET_PACKAGE_DISPLAY), formatSunsetPackagePriceUsd)
+    : null;
 
   return [
-    { id: 'bio', heading: 'Bioluminescence Tours', cards: bioCards },
-    { id: 'rocket', heading: 'Rocket Launch Experiences', cards: rocketCards },
-    { id: 'sunset', heading: 'Sunset and Wildlife', cards: sunsetCards },
+    {
+      id: 'bio',
+      category: 'Bioluminescence',
+      name: 'Bioluminescence Night Tour',
+      description: "See Florida's glowing waters on a captain-led nighttime boat tour.",
+      supportingText: 'Shared packages available for individuals, couples, and groups.',
+      fromPriceLabel: bioFrom,
+      ctaLabel: 'View Bio Tours',
+      href: BIO_CHARTER_BOOKING_URL,
+    },
+    {
+      id: 'rocket_launch',
+      category: 'Rocket Launch',
+      name: 'Rocket Launch Experience',
+      description: 'Watch a Space Coast rocket launch from the water with a licensed captain.',
+      supportingText: 'Shared seats and private charter options available.',
+      fromPriceLabel: rocketFrom,
+      ctaLabel: 'View Rocket Options',
+      href: ROCKET_CHARTER_BOOKING_URL,
+    },
+    {
+      id: 'sunset',
+      category: 'Sunset & Wildlife',
+      name: 'Sunset & Wildlife Cruise',
+      description: 'Relax on the Indian River Lagoon while enjoying sunset views and local wildlife.',
+      supportingText: 'Shared and private cruise options available.',
+      fromPriceLabel: sunsetFrom,
+      ctaLabel: 'View Sunset Options',
+      href: SUNSET_CHARTER_BOOKING_URL,
+    },
   ];
 }
 

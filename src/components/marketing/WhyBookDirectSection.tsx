@@ -97,36 +97,15 @@ export default function WhyBookDirectSection() {
           ))}
         </div>
 
-        <div className="lz-card-glass mx-auto mt-10 max-w-3xl border border-cyan-400/20 p-6 md:p-8">
-          <p className="text-center font-display text-lg font-bold text-white md:text-xl">
-            Bioluminescence tours starting at {formatBioPackagePriceUsd(startingAtUsd)} when booked directly
-          </p>
-          <ul className="mt-6 space-y-3">
-            {BIO_PACKAGE_DISPLAY.map((pkg) => (
-              <li
-                key={pkg.id}
-                className="flex flex-col gap-1 border-b border-white/10 pb-3 last:border-0 last:pb-0 sm:flex-row sm:items-center sm:justify-between"
-              >
-                <span className="text-sm font-semibold text-slate-100">{pkg.cardTitle}</span>
-                <span className="text-sm text-slate-300">
-                  {pkg.guestCount === 1 ? '1 Person' : `${pkg.guestCount} People`} ·{' '}
-                  {formatBioPackagePriceUsd(pkg.directPriceUsd)} total
-                  {pkg.guestCount > 1 ? ` · ${formatBioPackagePriceUsd(pkg.perGuestUsd)}/person` : ''}
-                </span>
-              </li>
-            ))}
-          </ul>
-          <p className="mt-5 text-center text-xs leading-relaxed text-slate-400 md:text-sm">
-            Promotional pricing on third-party marketplaces may vary. Direct reservations are booked
-            and managed through Launch Zone Charters.
-          </p>
-        </div>
-
         <DirectBookingSteps />
 
         <DirectBookingFAQ />
 
         <div className="mt-10 flex flex-col items-center gap-4">
+          <p className="text-center text-sm text-slate-300 md:text-base">
+            Direct charter packages from {formatBioPackagePriceUsd(startingAtUsd)}. Choose bioluminescence,
+            rocket launch, or sunset after you book direct.
+          </p>
           <button
             type="button"
             onClick={() => {

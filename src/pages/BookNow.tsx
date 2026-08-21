@@ -861,9 +861,9 @@ export default function BookNow({ onNavigate }: BookNowProps) {
   const selectedDirectPackage = selectedBioPackage || selectedRocketPackage || selectedSunsetPackage;
   const missingRequiredDirectPackage = Boolean(requiredDirectExperience) && !selectedDirectPackage;
   const charterAvailabilityQueryParams = (() => {
-    if (isRocketPackageFlow && rocketPackageId && selectedRocketPackage) {
+    if (isRocketPackageFlow && selectedRocketPackage) {
       const q = new URLSearchParams();
-      q.set('package', rocketPackageId);
+      q.set('package', selectedRocketPackage.id);
       q.set('charterVariant', selectedRocketPackage.seating === 'private' ? 'private' : 'shared');
       q.set(
         'passengerCount',
@@ -875,9 +875,9 @@ export default function BookNow({ onNavigate }: BookNowProps) {
       );
       return q.toString();
     }
-    if (isSunsetPackageFlow && sunsetPackageId && selectedSunsetPackage) {
+    if (isSunsetPackageFlow && selectedSunsetPackage) {
       const q = new URLSearchParams();
-      q.set('package', sunsetPackageId);
+      q.set('package', selectedSunsetPackage.id);
       q.set('charterVariant', selectedSunsetPackage.seating === 'private' ? 'private' : 'shared');
       q.set(
         'passengerCount',
@@ -1303,7 +1303,10 @@ export default function BookNow({ onNavigate }: BookNowProps) {
   }, []);
 
   useEffect(() => {
-    if (bookingMode !== 'rental' || !env.apiUrlConfigured || !env.apiUrl || !selectedBoat?.id || !bookingData.date) {
+    if (bookingMode !== 'rental') {
+      return;
+    }
+    if (!env.apiUrlConfigured || !env.apiUrl || !selectedBoat?.id || !bookingData.date) {
       setTimeSlots([]);
       setTimesManualFallback(false);
       return;
@@ -2856,6 +2859,11 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                         )}
                         {isRocketCharter ? (
                           <div className="space-y-3">
+                            {availTimesLoading ? (
+                              <p className="rounded-xl border border-white/10 bg-slate-950/40 px-4 py-3 text-sm text-slate-300">
+                                Looking up launches for this date…
+                              </p>
+                            ) : null}
                             {timeSlots.map((slot) => {
                               const active =
                                 Boolean(bookingData.slotStartIso && slot.start === bookingData.slotStartIso) ||
@@ -2906,6 +2914,13 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                                 </button>
                               );
                             })}
+                            {!availTimesLoading && bookingData.date && timeSlots.length === 0 ? (
+                              <p className="rounded-xl border border-amber-400/30 bg-amber-950/25 px-4 py-3 text-sm text-amber-100">
+                                {timesManualFallback
+                                  ? 'Could not load launch times for this date. Try again, or pick another day.'
+                                  : 'No bookable rocket launches on this date. A rocket icon means a launch is on the calendar, but it may not have a confirmed time yet. Try another launch day.'}
+                              </p>
+                            ) : null}
                           </div>
                         ) : (
                         <div className="flex flex-wrap gap-3">
@@ -2950,16 +2965,18 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                           })}
                         </div>
                         )}
-                        {charterTimesFromApi && availTimesLoading && (
+                        {charterTimesFromApi && availTimesLoading && !isRocketCharter && (
                           <p className="mt-2 text-xs text-slate-500">Checking captain availability…</p>
                         )}
-                        {charterTimesFromApi && !availTimesLoading && bookingData.date && timeSlots.length === 0 && (
+                        {charterTimesFromApi &&
+                          !availTimesLoading &&
+                          bookingData.date &&
+                          timeSlots.length === 0 &&
+                          !isRocketCharter && (
                           <p className="mt-2 text-sm text-amber-200">
-                            {isRocketCharter
-                              ? 'No bookable rocket launches on this date. Try another day or check the launch schedule.'
-                              : isSunsetPackageFlow && selectedSunsetPackage?.id === 'sunset_solo'
-                                ? SUNSET_SOLO_NO_DEPARTURE_MESSAGE
-                                : 'No captain availability that night. Try another evening start (5:00 PM or later).'}
+                            {isSunsetPackageFlow && selectedSunsetPackage?.id === 'sunset_solo'
+                              ? SUNSET_SOLO_NO_DEPARTURE_MESSAGE
+                              : 'No captain availability that night. Try another evening start (5:00 PM or later).'}
                           </p>
                         )}
                         {isRocketPackageFlow && selectedRocketDepartureLabel ? (

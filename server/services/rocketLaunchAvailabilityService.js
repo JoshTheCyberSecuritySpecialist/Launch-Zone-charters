@@ -90,15 +90,23 @@ function launchPreviewFromRecord(launch) {
 
 function candidateSlotsForLaunchesOnDate(launches, dateStr) {
   const out = [];
+  const seen = new Set();
   for (const launch of launches || []) {
     const net = launch?.net || launch?.window_start || null;
     if (!net) continue;
     const window = computeRocketCharterWindowFromNet(net);
-    if (!window || window.launchCalendarDate !== dateStr) continue;
+    if (!window) continue;
+    const windowStartDate = launch.window_start ? launchCalendarDateInZone(launch.window_start) : null;
+    const matchesSelectedDay =
+      window.launchCalendarDate === dateStr || Boolean(windowStartDate && windowStartDate === dateStr);
+    if (!matchesSelectedDay) continue;
+    const launchId = String(launch.id);
+    if (seen.has(launchId)) continue;
+    seen.add(launchId);
     out.push({
       launch,
       window,
-      launchId: String(launch.id),
+      launchId,
     });
   }
   out.sort((a, b) => a.window.departureStart.toMillis() - b.window.departureStart.toMillis());

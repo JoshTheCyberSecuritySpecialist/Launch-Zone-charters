@@ -93,6 +93,23 @@ async function run() {
   );
   assert.strictEqual(aug28Candidates.length, 1, 'after-midnight launch stays on Aug 28 calendar date');
 
+  const splitWindowLaunch = mockLaunch(
+    'split-window',
+    'Window opens previous evening',
+    '2026-08-26T05:30:00.000Z'
+  );
+  splitWindowLaunch.window_start = '2026-08-25T23:00:00.000Z';
+  const windowOpenDay = rocketLaunchAvailability.candidateSlotsForLaunchesOnDate(
+    [splitWindowLaunch],
+    '2026-08-25'
+  );
+  assert.strictEqual(windowOpenDay.length, 1, 'launch listed on window-start calendar date');
+  const netDay = rocketLaunchAvailability.candidateSlotsForLaunchesOnDate(
+    [splitWindowLaunch],
+    '2026-08-26'
+  );
+  assert.strictEqual(netDay.length, 1, 'launch still listed on NET calendar date');
+
   const validate = (charterType, startLocal, endLocal) =>
     availabilityService.validateCharterSlotWindow({
       charterType,

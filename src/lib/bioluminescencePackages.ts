@@ -26,10 +26,10 @@ export const BIO_PACKAGE_DISPLAY: BioPackageDisplay[] = [
     cardTitle: 'Solo Glow Tour',
     guestCount: 1,
     standardValueUsd: 75,
-    directPriceUsd: 58.5,
-    perGuestUsd: 58.5,
-    savingsUsd: 16.5,
-    discountPercentLabel: '22% off',
+    directPriceUsd: 46.89,
+    perGuestUsd: 46.89,
+    savingsUsd: 28.11,
+    discountPercentLabel: '37% off',
     badge: null,
     ctaLabel: 'Select Solo Tour',
     included: ['Captain included', 'Fuel included'],
@@ -39,10 +39,10 @@ export const BIO_PACKAGE_DISPLAY: BioPackageDisplay[] = [
     cardTitle: 'Glow Tour for Two',
     guestCount: 2,
     standardValueUsd: 150,
-    directPriceUsd: 120,
-    perGuestUsd: 60,
-    savingsUsd: 30,
-    discountPercentLabel: '20% off',
+    directPriceUsd: 96.09,
+    perGuestUsd: 48.045,
+    savingsUsd: 53.91,
+    discountPercentLabel: '36% off',
     badge: null,
     ctaLabel: 'Select Tour for Two',
     included: ['Captain included', 'Fuel included'],
@@ -52,10 +52,10 @@ export const BIO_PACKAGE_DISPLAY: BioPackageDisplay[] = [
     cardTitle: 'Glow Tour for Four',
     guestCount: 4,
     standardValueUsd: 300,
-    directPriceUsd: 240,
-    perGuestUsd: 60,
-    savingsUsd: 60,
-    discountPercentLabel: '20% off',
+    directPriceUsd: 192.09,
+    perGuestUsd: 48.0225,
+    savingsUsd: 107.91,
+    discountPercentLabel: '36% off',
     badge: 'Best Value',
     ctaLabel: 'Select Tour for Four',
     included: ['Captain included', 'Fuel included'],
@@ -80,7 +80,7 @@ export function bioBookingUrl(packageId: BioPackageId): string {
 }
 
 export const BIO_PACKAGE_PRICING_DISCLAIMER =
-  'Direct prices match our standard Groupon deal prices. Groupon-issued promotional codes may vary.';
+  'Direct prices match the current Groupon promotional prices. Groupon-issued promotional codes may vary.';
 
 export const BIO_LEGACY_PRICING_LABEL = 'Legacy bioluminescence pricing';
 

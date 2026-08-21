@@ -18,8 +18,10 @@ import { beginAsyncInteraction, wrapRouterNavigate, wrapSyncClick } from '../lib
 import { CHARTER_GUEST_LIMIT_LABEL, EXPERIENCE_BIO } from '../lib/experienceCatalog';
 import BioluminescencePackageCards from '../components/booking/BioluminescencePackageCards';
 import {
+  BIO_PACKAGE_DISPLAY,
   BIO_PACKAGE_PRICING_DISCLAIMER,
   bioBookingUrl,
+  formatBioPackagePriceUsd,
   type BioPackageId,
 } from '../lib/bioluminescencePackages';
 
@@ -284,7 +286,7 @@ export default function BioluminescentTours({ onNavigate }: BioluminescentToursP
               className="mt-3 text-pretty text-sm font-semibold leading-snug tracking-wide text-cyan-100 sm:text-base"
               style={{ textShadow: BIO_HERO_LINE_SHADOW }}
             >
-              Direct booking from $58.50
+              Direct booking from {formatBioPackagePriceUsd(Math.min(...BIO_PACKAGE_DISPLAY.map((p) => p.directPriceUsd)))}
             </p>
             <p
               className="mt-2 text-xs font-normal leading-relaxed text-white/85 sm:text-[0.8125rem]"

@@ -17,14 +17,14 @@ function stripeCentsFromPackageId(id) {
 }
 
 function run() {
-  assert.strictEqual(stripeCentsFromPackageId('bio_solo'), 5850);
-  assert.strictEqual(stripeCentsFromPackageId('bio_two'), 12000);
-  assert.strictEqual(stripeCentsFromPackageId('bio_four'), 24000);
+  assert.strictEqual(stripeCentsFromPackageId('bio_solo'), 4689);
+  assert.strictEqual(stripeCentsFromPackageId('bio_two'), 9609);
+  assert.strictEqual(stripeCentsFromPackageId('bio_four'), 19209);
 
   const twoPkg = getBioluminescencePackage('bio_two');
   const twoTotals = bioPackageExpectedTotals(twoPkg);
-  assert.strictEqual(Math.round(twoTotals.amountDueToday * 100), 12000);
-  assert.strictEqual(twoPkg.priceCents, 12000);
+  assert.strictEqual(Math.round(twoTotals.amountDueToday * 100), 9609);
+  assert.strictEqual(twoPkg.priceCents, 9609);
 
   const solo = getBioluminescencePackage('bio_solo');
   assert.match(stripeLineItemNameForBioPackage(solo), /1 Guest/);
@@ -36,6 +36,14 @@ function run() {
     bookingSource: 'website',
   });
   assert.strictEqual(tampered.ok, false);
+
+  const unknown = validateDirectBioPackageCheckout({
+    charterType: 'bio',
+    pricingPackageId: 'bio_free',
+    passengerCountFromClient: 1,
+    bookingSource: 'website',
+  });
+  assert.strictEqual(unknown.ok, false);
 
   const grouponPkg = validateDirectBioPackageCheckout({
     charterType: 'bio',

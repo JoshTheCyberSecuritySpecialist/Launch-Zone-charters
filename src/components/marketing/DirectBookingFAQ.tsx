@@ -15,7 +15,7 @@ const FAQ_ITEMS = [
   },
   {
     q: 'Is the direct price the same as the Groupon deal?',
-    a: 'Our standard direct bioluminescence package prices match the regular package prices offered through our Groupon deal. Groupon may occasionally apply its own temporary promotions.',
+    a: 'Current direct bioluminescence package prices match the Groupon promotional prices shown to customers. Groupon may also apply its own temporary codes.',
   },
   {
     q: 'Am I charged when I submit my preferred date?',

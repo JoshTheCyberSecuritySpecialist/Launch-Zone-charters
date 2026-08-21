@@ -192,7 +192,18 @@ export default function Pricing({ onNavigate }: PricingProps) {
                         </span>
                       ) : null}
                     </span>
-                    <span className="text-lg font-bold text-lz-cta">{formatBioPackagePriceUsd(pkg.directPriceUsd)}</span>
+                    <span className="text-lg font-bold text-lz-cta">
+                      {pkg.promotionActive ? (
+                        <>
+                          <span className="mr-2 text-sm font-medium text-slate-500 line-through">
+                            {formatBioPackagePriceUsd(pkg.regularPriceUsd)}
+                          </span>
+                          {formatBioPackagePriceUsd(pkg.directPriceUsd)}
+                        </>
+                      ) : (
+                        formatBioPackagePriceUsd(pkg.directPriceUsd)
+                      )}
+                    </span>
                   </li>
                 ))}
               </ul>

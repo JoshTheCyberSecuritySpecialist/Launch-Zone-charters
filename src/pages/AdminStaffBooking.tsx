@@ -1529,7 +1529,10 @@ export default function AdminStaffBooking() {
                     ${staffBioPackageSummary.directPriceUsd.toFixed(2)}
                   </p>
                   <p className="mt-1 text-xs text-slate-500">
-                    Standard ${staffBioPackageSummary.standardValueUsd} · Save ${staffBioPackageSummary.savingsUsd}
+                    Regular ${staffBioPackageSummary.standardValueUsd.toFixed(2)}
+                    {staffBioPackageSummary.savingsUsd > 0
+                      ? ` · Direct Booking Special · Save $${staffBioPackageSummary.savingsUsd.toFixed(2)}`
+                      : ''}
                   </p>
                 </>
               ) : (

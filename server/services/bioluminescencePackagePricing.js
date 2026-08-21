@@ -118,15 +118,17 @@ function resolveCharterBioPricing({
 }
 
 function bioPackageBookingFields(pkg) {
-  const discountCents = Math.max(0, pkg.standardValueCents - pkg.priceCents);
+  const chargedCents = Number(pkg.priceCents);
+  const regularCents = Number(pkg.regularPriceCents ?? pkg.standardValueCents ?? chargedCents);
+  const discountCents = Math.max(0, regularCents - chargedCents);
   return {
     pricing_package_id: pkg.id,
     pricing_package_name: pkg.name,
     package_guest_count: pkg.guestCount,
-    standard_value_cents: pkg.standardValueCents,
-    package_price_cents: pkg.priceCents,
+    standard_value_cents: regularCents,
+    package_price_cents: chargedCents,
     discount_amount_cents: discountCents,
-    final_amount_cents: pkg.priceCents,
+    final_amount_cents: chargedCents,
   };
 }
 

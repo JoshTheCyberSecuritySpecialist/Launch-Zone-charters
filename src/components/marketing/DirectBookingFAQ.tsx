@@ -15,7 +15,7 @@ const FAQ_ITEMS = [
   },
   {
     q: 'Is the direct price the same as the Groupon deal?',
-    a: 'Current direct bioluminescence package prices match the Groupon promotional prices shown to customers. Groupon may also apply its own temporary codes.',
+    a: 'Direct bioluminescence package prices are set by Launch Zone Charters. Third-party promotional prices, including Groupon, may differ.',
   },
   {
     q: 'Am I charged when I submit my preferred date?',

@@ -1113,24 +1113,25 @@ export default function AdminBookingDetails() {
               <li>Name: {String(booking.pricing_package_name || '—')}</li>
               <li>Guests: {String(booking.package_guest_count ?? booking.guest_count ?? '—')}</li>
               <li>
-                Standard value:{' '}
+                Regular:{' '}
                 {booking.standard_value_cents != null
                   ? `$${(Number(booking.standard_value_cents) / 100).toFixed(2)}`
                   : '—'}
               </li>
               <li>
-                Package price:{' '}
-                {booking.package_price_cents != null
-                  ? `$${(Number(booking.package_price_cents) / 100).toFixed(2)}`
-                  : '—'}
+                Paid:{' '}
+                {booking.final_amount_cents != null
+                  ? `$${(Number(booking.final_amount_cents) / 100).toFixed(2)}`
+                  : form.finalPrice}
               </li>
-              <li>
-                Savings:{' '}
-                {booking.discount_amount_cents != null
-                  ? `$${(Number(booking.discount_amount_cents) / 100).toFixed(2)}`
-                  : '—'}
-              </li>
-              <li>Final amount: {form.finalPrice}</li>
+              {Number(booking.discount_amount_cents) > 0 ? (
+                <li>
+                  {[5850, 12000, 24000].includes(Number(booking.standard_value_cents))
+                    ? 'Promotion: Direct Booking Special'
+                    : 'Savings'}{' '}
+                  (save ${(Number(booking.discount_amount_cents) / 100).toFixed(2)})
+                </li>
+              ) : null}
               <li>Source: {form.source || 'website'}</li>
               <li>Payment: {form.paymentStatus}</li>
             </ul>

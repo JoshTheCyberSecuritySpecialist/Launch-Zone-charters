@@ -1,15 +1,30 @@
 /**
- * Authoritative direct-booking bioluminescence packages (Groupon deal parity).
+ * Authoritative direct-booking bioluminescence packages.
  * Prices are integer cents only — never trust browser-supplied amounts.
+ *
+ * Stripe charges `priceCents` resolved from regular vs promotional config.
+ * Toggle or date-bound the sale here; do not change Stripe Checkout logic.
  */
+
+const { DateTime } = require('luxon');
+
+const BUSINESS_TZ = String(process.env.BUSINESS_TIMEZONE || 'America/New_York').trim();
+
+/** Direct Booking Special — server decides whether it is active. */
+const BIO_DIRECT_PROMOTION = {
+  enabled: true,
+  label: 'Direct Booking Special',
+  startsAt: null,
+  endsAt: null,
+};
 
 const BIOLUMINESCENCE_PACKAGES = {
   bio_solo: {
     id: 'bio_solo',
     name: 'Solo Bioluminescence Tour',
     guestCount: 1,
-    standardValueCents: 7500,
-    priceCents: 4689,
+    regularPriceCents: 5850,
+    promotionalPriceCents: 4499,
     badge: null,
     active: true,
   },
@@ -17,8 +32,8 @@ const BIOLUMINESCENCE_PACKAGES = {
     id: 'bio_two',
     name: 'Bioluminescence Tour for Two',
     guestCount: 2,
-    standardValueCents: 15000,
-    priceCents: 9609,
+    regularPriceCents: 12000,
+    promotionalPriceCents: 8999,
     badge: null,
     active: true,
   },
@@ -26,8 +41,8 @@ const BIOLUMINESCENCE_PACKAGES = {
     id: 'bio_four',
     name: 'Bioluminescence Tour for Four',
     guestCount: 4,
-    standardValueCents: 30000,
-    priceCents: 19209,
+    regularPriceCents: 24000,
+    promotionalPriceCents: 17999,
     badge: 'Best Value',
     active: true,
   },
@@ -44,7 +59,49 @@ function isDirectBioPackagePricingEnabled() {
   return process.env.DIRECT_BIO_PACKAGE_PRICING_ENABLED === 'true';
 }
 
-function getBioluminescencePackage(packageId) {
+function parsePromotionBound(raw, { endOfDay } = {}) {
+  const text = String(raw || '').trim();
+  if (!text) return null;
+  let dt = DateTime.fromISO(text, { zone: BUSINESS_TZ });
+  if (!dt.isValid) return null;
+  if (endOfDay && !text.includes('T')) {
+    dt = dt.endOf('day');
+  }
+  return dt;
+}
+
+function asBusinessDateTime(now) {
+  if (now && typeof now.toMillis === 'function') {
+    return now.setZone(BUSINESS_TZ);
+  }
+  if (now instanceof Date) {
+    return DateTime.fromJSDate(now, { zone: BUSINESS_TZ });
+  }
+  if (typeof now === 'string' && now.trim()) {
+    const parsed = DateTime.fromISO(now.trim(), { zone: BUSINESS_TZ });
+    if (parsed.isValid) return parsed;
+  }
+  return DateTime.now().setZone(BUSINESS_TZ);
+}
+
+function isBioDirectPromotionActive(now) {
+  if (!BIO_DIRECT_PROMOTION.enabled) return false;
+  const current = asBusinessDateTime(now);
+  const startsAt = parsePromotionBound(BIO_DIRECT_PROMOTION.startsAt);
+  if (startsAt && current < startsAt) return false;
+  const endsAt = parsePromotionBound(BIO_DIRECT_PROMOTION.endsAt, { endOfDay: true });
+  if (endsAt && current > endsAt) return false;
+  return true;
+}
+
+function resolveBioPackageChargeCents(pkg, now) {
+  if (isBioDirectPromotionActive(now)) {
+    return Number(pkg.promotionalPriceCents);
+  }
+  return Number(pkg.regularPriceCents);
+}
+
+function getBioluminescencePackage(packageId, options = {}) {
   const id = String(packageId || '').trim();
   if (!id) {
     const err = new Error('Bioluminescence package is required.');
@@ -62,12 +119,23 @@ function getBioluminescencePackage(packageId) {
     err.statusCode = 400;
     throw err;
   }
-  return pkg;
+  const promotionActive = isBioDirectPromotionActive(options.now);
+  const priceCents = resolveBioPackageChargeCents(pkg, options.now);
+  return {
+    ...pkg,
+    priceCents,
+    standardValueCents: Number(pkg.regularPriceCents),
+    promotionActive,
+    promotionLabel: promotionActive ? BIO_DIRECT_PROMOTION.label : null,
+  };
 }
 
 module.exports = {
   BIOLUMINESCENCE_PACKAGES,
   BIOLUMINESCENCE_PACKAGE_IDS,
+  BIO_DIRECT_PROMOTION,
   getBioluminescencePackage,
   isDirectBioPackagePricingEnabled,
+  isBioDirectPromotionActive,
+  resolveBioPackageChargeCents,
 };

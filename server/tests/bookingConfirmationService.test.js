@@ -172,6 +172,28 @@ async function runAsync() {
   });
   assert.strictEqual(sendCount, 2, 'admin force resend sends intentionally');
 
+  const unpaidHold = bioBooking({
+    status: 'pending',
+    payment_status: 'pending',
+    deposit_paid: 0,
+    stripe_checkout_session_id: 'cs_test_unpaid_hold',
+    booking_confirmation_sent_at: null,
+  });
+  Object.assign(bookingRow, unpaidHold);
+  await assert.rejects(
+    () =>
+      sendBookingConfirmation({
+        supabase,
+        resend: fakeResend,
+        resendFrom: 'Launch Zone <test@example.com>',
+        bookingId: unpaidHold.id,
+        source: 'test_hold',
+        verifyEmailMatch: false,
+      }),
+    (err) => err.statusCode === 400 && /Payment not completed/.test(err.message)
+  );
+  assert.strictEqual(sendCount, 2, 'unpaid website checkout hold must not send confirmation');
+
   console.log('bookingConfirmationService.test: async idempotency assertions passed');
 }
 

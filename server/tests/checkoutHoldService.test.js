@@ -5,6 +5,9 @@ const {
   isUnpaidWebsiteCheckoutHold,
   isExpiredCheckoutHold,
   isProtectedBookingSource,
+  canSendCustomerBookingConfirmation,
+  canAccessCustomerTripDocuments,
+  resolveExistingCheckoutBooking,
   shouldHideFromOperationsCalendar,
   releaseUnpaidCheckoutHold,
   cleanupExpiredCheckoutHolds,
@@ -93,6 +96,28 @@ function runPredicateTests() {
   assert.strictEqual(isUnpaidWebsiteCheckoutHold(websiteHold({ stripe_payment_id: 'pi_paid' })), false);
   assert.strictEqual(isUnpaidWebsiteCheckoutHold(websiteHold({ deposit_paid: 179.99 })), false);
   assert.strictEqual(isUnpaidWebsiteCheckoutHold(websiteHold({ stripe_checkout_session_id: '' })), false);
+}
+
+function runConfirmationAndDocumentGateTests() {
+  const hold = websiteHold();
+  assert.strictEqual(canSendCustomerBookingConfirmation(hold), false);
+  assert.strictEqual(canAccessCustomerTripDocuments(hold), false);
+  assert.deepStrictEqual(resolveExistingCheckoutBooking(hold, false), { kind: 'payment_incomplete' });
+  assert.deepStrictEqual(resolveExistingCheckoutBooking(hold, true), { kind: 'continue_finalize' });
+
+  const paid = websiteHold({ stripe_payment_id: 'cs_paid', payment_status: 'paid', deposit_paid: 179.99 });
+  assert.strictEqual(canSendCustomerBookingConfirmation(paid), true);
+  assert.strictEqual(canAccessCustomerTripDocuments(paid), true);
+  assert.deepStrictEqual(resolveExistingCheckoutBooking(paid, true), { kind: 'already_finalized' });
+
+  const groupon = { id: 'g1', status: 'pending', booking_source: 'groupon', stripe_checkout_session_id: '' };
+  assert.strictEqual(canSendCustomerBookingConfirmation(groupon), true);
+  assert.strictEqual(canAccessCustomerTripDocuments(groupon), true);
+  assert.deepStrictEqual(resolveExistingCheckoutBooking(groupon, false), { kind: 'already_finalized' });
+
+  const staff = { id: 's1', status: 'confirmed', staff_created: true, booking_source: 'admin' };
+  assert.strictEqual(canSendCustomerBookingConfirmation(staff), true);
+  assert.strictEqual(canAccessCustomerTripDocuments(staff), true);
 }
 
 function runCalendarHideTests() {
@@ -189,6 +214,7 @@ async function runReleaseAndCleanupTests() {
 
 async function run() {
   runPredicateTests();
+  runConfirmationAndDocumentGateTests();
   runCalendarHideTests();
   await runReleaseAndCleanupTests();
   console.log('checkoutHoldService.test.js: all tests passed');

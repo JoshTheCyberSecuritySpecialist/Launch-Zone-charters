@@ -11,6 +11,7 @@ const {
   TITUSVILLE_MEETING_LOCATION,
 } = require('../lib/meetingLocations');
 const { publicAppBase } = require('./verificationReminder');
+const checkoutHoldService = require('./checkoutHoldService');
 
 const BUSINESS_TZ = String(process.env.BUSINESS_TIMEZONE || 'America/New_York').trim();
 const ARRIVAL_MINUTES_EARLY = 15;
@@ -247,7 +248,7 @@ async function loadBookingForConfirmation(supabase, bookingId) {
   const { data: booking, error } = await supabase
     .from('bookings')
     .select(
-      'id, customer_id, boat_id, start_time, end_time, status, payment_status, payment_method, booking_source, booking_type, charter_type, charter_seating, rental_type, rental_location, guest_count, package_guest_count, pricing_package_name, pricing_package_id, is_night_tour, is_rocket_tour, captain_included, waiver_signed, license_status, insurance_status, deposit_paid, deposit_amount, balance_due, total_price, final_total, final_amount_cents, booking_confirmation_sent_at, departure_confirmation_status, shared_departure_id, boats(id, name, type), customers(id, full_name, email, phone)'
+      `id, customer_id, boat_id, start_time, end_time, status, payment_status, payment_method, booking_source, staff_created, booking_type, charter_type, charter_seating, rental_type, rental_location, guest_count, package_guest_count, pricing_package_name, pricing_package_id, is_night_tour, is_rocket_tour, captain_included, waiver_signed, license_status, insurance_status, deposit_paid, deposit_amount, amount_collected, stripe_checkout_session_id, checkout_session_id, stripe_payment_id, payment_intent_id, balance_due, total_price, final_total, final_amount_cents, booking_confirmation_sent_at, departure_confirmation_status, shared_departure_id, boats(id, name, type), customers(id, full_name, email, phone)`
     )
     .eq('id', bookingId)
     .maybeSingle();
@@ -280,6 +281,11 @@ async function sendBookingConfirmation({
 
   if (!CONFIRMATION_ELIGIBLE_STATUSES.has(String(booking.status || ''))) {
     const err = new Error('Booking is not eligible for confirmation email');
+    err.statusCode = 400;
+    throw err;
+  }
+  if (!checkoutHoldService.canSendCustomerBookingConfirmation(booking)) {
+    const err = new Error('Payment not completed');
     err.statusCode = 400;
     throw err;
   }

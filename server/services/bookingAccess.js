@@ -1,6 +1,7 @@
 /**
  * Shared booking + customer verification for public document endpoints.
  */
+const checkoutHoldService = require('./checkoutHoldService');
 
 function normalizeEmailParam(email) {
   return String(email || '').trim().toLowerCase();
@@ -37,13 +38,16 @@ async function loadBookingWithCustomer(supabase, bookingId) {
   const { data: booking, error: bErr } = await supabase
     .from('bookings')
     .select(
-      'id, customer_id, boat_id, start_time, end_time, rental_type, captain_included, status, payment_status, waiver_signed, license_status, insurance_status, license_url, insurance_url, booking_confirmation_sent_at, boats(id, name, type)'
+      `id, customer_id, boat_id, start_time, end_time, rental_type, captain_included, waiver_signed, license_status, insurance_status, license_url, insurance_url, booking_confirmation_sent_at, ${checkoutHoldService.UNPAID_HOLD_GATE_SELECT}, boats(id, name, type)`
     )
     .eq('id', bookingId)
     .maybeSingle();
 
   if (bErr || !booking) {
     return { ok: false, statusCode: 404, message: 'Booking not found' };
+  }
+  if (checkoutHoldService.isUnpaidWebsiteCheckoutHold(booking)) {
+    return { ok: false, statusCode: 404, message: 'Booking not found or no longer active' };
   }
 
   const { data: customer, error: cErr } = await supabase

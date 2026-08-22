@@ -11,6 +11,9 @@ function asIso(value) {
   return Number.isFinite(d.getTime()) ? d.toISOString() : new Date().toISOString();
 }
 
+const UNPAID_HOLD_GATE_SELECT =
+  'status, payment_status, booking_source, staff_created, stripe_checkout_session_id, checkout_session_id, stripe_payment_id, payment_intent_id, deposit_paid, amount_collected';
+
 function sessionIdOf(row) {
   return String(row?.stripe_checkout_session_id || row?.checkout_session_id || '').trim();
 }
@@ -44,6 +47,24 @@ function isExpiredCheckoutHold(row, now = Date.now()) {
   if (!isUnpaidWebsiteCheckoutHold(row)) return false;
   const exp = row.expires_at ? new Date(String(row.expires_at)).getTime() : NaN;
   return Number.isFinite(exp) && exp < now;
+}
+
+function canSendCustomerBookingConfirmation(row) {
+  return Boolean(row?.id) && !isUnpaidWebsiteCheckoutHold(row);
+}
+
+function canAccessCustomerTripDocuments(row) {
+  if (!row?.id) return false;
+  if (['cancelled', 'completed'].includes(String(row.status || '').toLowerCase())) return false;
+  return !isUnpaidWebsiteCheckoutHold(row);
+}
+
+function resolveExistingCheckoutBooking(row, sessionPaid) {
+  if (!row?.id) return { kind: 'none' };
+  if (isUnpaidWebsiteCheckoutHold(row)) {
+    return sessionPaid ? { kind: 'continue_finalize' } : { kind: 'payment_incomplete' };
+  }
+  return { kind: 'already_finalized' };
 }
 
 function shouldHideFromOperationsCalendar(row, now = Date.now()) {
@@ -148,9 +169,13 @@ async function cleanupExpiredCheckoutHolds(supabase, now = Date.now()) {
 }
 
 module.exports = {
+  UNPAID_HOLD_GATE_SELECT,
   isUnpaidWebsiteCheckoutHold,
   isExpiredCheckoutHold,
   isProtectedBookingSource,
+  canSendCustomerBookingConfirmation,
+  canAccessCustomerTripDocuments,
+  resolveExistingCheckoutBooking,
   shouldHideFromOperationsCalendar,
   releaseUnpaidCheckoutHold,
   cleanupExpiredCheckoutHolds,

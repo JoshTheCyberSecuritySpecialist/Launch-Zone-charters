@@ -873,6 +873,16 @@ async function ensureBookingConfirmationSent(bookingId, email, source, session =
 }
 
 async function finalizeAlreadyFinalizedBooking(bookingId, customerId, options = {}) {
+  const { data: existingRow } = await supabase
+    .from('bookings')
+    .select(`id, ${checkoutHoldService.UNPAID_HOLD_GATE_SELECT}`)
+    .eq('id', bookingId)
+    .maybeSingle();
+  if (existingRow && !checkoutHoldService.canSendCustomerBookingConfirmation(existingRow)) {
+    const err = new Error('Payment not completed');
+    err.statusCode = 400;
+    throw err;
+  }
   const email = await resolveCustomerEmail(customerId);
   await ensureBookingConfirmationSent(bookingId, email, options.source || 'finalize_idempotent', options.session || null);
   return { bookingId, email, alreadyFinalized: true };
@@ -910,9 +920,12 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
   const paymentIntentId = sessionIds.paymentIntentId || '';
   const stripeChargeId = sessionIds.chargeId || '';
 
+  const sessionPaid = session.payment_status === 'paid';
+  const existingCheckoutSelect = `id, customer_id, ${checkoutHoldService.UNPAID_HOLD_GATE_SELECT}`;
+
   const { data: existingBySession } = await supabase
     .from('bookings')
-    .select('id, customer_id')
+    .select(existingCheckoutSelect)
     .or(
       [
         `stripe_payment_id.eq.${stripeSessionId}`,
@@ -921,7 +934,16 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
       ].join(',')
     )
     .maybeSingle();
-  if (existingBySession?.id) {
+  const existingBySessionKind = checkoutHoldService.resolveExistingCheckoutBooking(
+    existingBySession,
+    sessionPaid
+  );
+  if (existingBySessionKind.kind === 'payment_incomplete') {
+    const err = new Error('Payment not completed');
+    err.statusCode = 400;
+    throw err;
+  }
+  if (existingBySessionKind.kind === 'already_finalized') {
     return finalizeAlreadyFinalizedBooking(existingBySession.id, existingBySession.customer_id, {
       source: options.source || 'finalize_idempotent',
       session,
@@ -931,10 +953,16 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
   if (paymentIntentId) {
     const { data: existingByPi } = await supabase
       .from('bookings')
-      .select('id, customer_id')
+      .select(existingCheckoutSelect)
       .or(`stripe_payment_id.eq.${paymentIntentId},payment_intent_id.eq.${paymentIntentId}`)
       .maybeSingle();
-    if (existingByPi?.id) {
+    const existingByPiKind = checkoutHoldService.resolveExistingCheckoutBooking(existingByPi, sessionPaid);
+    if (existingByPiKind.kind === 'payment_incomplete') {
+      const err = new Error('Payment not completed');
+      err.statusCode = 400;
+      throw err;
+    }
+    if (existingByPiKind.kind === 'already_finalized') {
       return finalizeAlreadyFinalizedBooking(existingByPi.id, existingByPi.customer_id, {
         source: options.source || 'finalize_idempotent',
         session,
@@ -7927,7 +7955,7 @@ app.get('/api/checkout-status', async (req, res) => {
 
     const { data: booking } = await supabase
       .from('bookings')
-      .select('id, status, payment_status, booking_confirmation_sent_at')
+      .select(`id, booking_confirmation_sent_at, ${checkoutHoldService.UNPAID_HOLD_GATE_SELECT}`)
       .or(
         [
           `checkout_session_id.eq.${sessionId}`,
@@ -7936,7 +7964,7 @@ app.get('/api/checkout-status', async (req, res) => {
         ].join(',')
       )
       .maybeSingle();
-    if (booking?.id) {
+    if (booking?.id && !checkoutHoldService.isUnpaidWebsiteCheckoutHold(booking)) {
       return res.json({
         status: 'confirmed',
         bookingId: booking.id,
@@ -8459,13 +8487,13 @@ app.get('/api/public/waivers-booking', async (req, res) => {
     const { data: booking, error: bErr } = await supabase
       .from('bookings')
       .select(
-        'id, customer_id, boat_id, start_time, end_time, rental_type, booking_type, guest_count, captain_included, status, payment_status, waiver_signed, license_status, insurance_status, license_url, insurance_url, boats(id, name, type)'
+        `id, customer_id, boat_id, start_time, end_time, rental_type, booking_type, guest_count, captain_included, waiver_signed, license_status, insurance_status, license_url, insurance_url, ${checkoutHoldService.UNPAID_HOLD_GATE_SELECT}, boats(id, name, type)`
       )
       .eq('id', bookingId)
       .maybeSingle();
 
     if (bErr || !booking) return res.status(404).json(notFound);
-    if (['cancelled', 'completed'].includes(String(booking.status || ''))) {
+    if (!checkoutHoldService.canAccessCustomerTripDocuments(booking)) {
       return res.status(404).json(notFound);
     }
 
@@ -8514,7 +8542,7 @@ app.post('/api/public/confirm-waivers-access', async (req, res) => {
     }
 
     const { booking, customer, boat } = verified;
-    if (['cancelled', 'completed'].includes(String(booking.status || ''))) {
+    if (!checkoutHoldService.canAccessCustomerTripDocuments(booking)) {
       return res.status(404).json({ error: 'Booking not found or no longer active' });
     }
 
@@ -9018,11 +9046,11 @@ app.post('/api/booking-sign-waiver', async (req, res) => {
 
     const { data: booking, error: bErr } = await supabase
       .from('bookings')
-      .select('id, customer_id, waiver_signed, status, booking_type')
+      .select(`id, customer_id, waiver_signed, booking_type, ${checkoutHoldService.UNPAID_HOLD_GATE_SELECT}`)
       .eq('id', bookingId)
       .maybeSingle();
     if (bErr || !booking) return res.status(404).json({ error: 'Booking not found' });
-    if (['cancelled', 'completed'].includes(String(booking.status || ''))) {
+    if (!checkoutHoldService.canAccessCustomerTripDocuments(booking)) {
       return res.status(400).json({ error: 'This booking is no longer open for document updates.' });
     }
 
@@ -9589,14 +9617,16 @@ app.get('/api/public/booking-insurance-status', async (req, res) => {
     if (!isBookingUuidParam(bookingId)) return res.status(400).json({ error: 'Invalid booking id' });
     const { data, error } = await supabase
       .from('bookings')
-      .select('insurance_status, status')
+      .select(`insurance_status, ${checkoutHoldService.UNPAID_HOLD_GATE_SELECT}`)
       .eq('id', bookingId)
       .maybeSingle();
     if (error) {
       console.error('[booking-insurance-status]', error.message);
       return res.status(500).json({ error: 'Could not load booking' });
     }
-    if (!data) return res.status(404).json({ error: 'Not found' });
+    if (!data || checkoutHoldService.isUnpaidWebsiteCheckoutHold(data)) {
+      return res.status(404).json({ error: 'Not found' });
+    }
     return res.json({ insurance_status: data.insurance_status, status: data.status });
   } catch (err) {
     console.error('[booking-insurance-status]', err);
@@ -9614,6 +9644,9 @@ app.get('/api/public/booking-confirmation-summary', async (req, res) => {
       supabase,
       bookingId
     );
+    if (!checkoutHoldService.canSendCustomerBookingConfirmation(booking)) {
+      return res.status(404).json({ error: 'Booking not found' });
+    }
     return res.json(buildPublicConfirmationSummary({ booking, customer, boat }));
   } catch (err) {
     console.error('[booking-confirmation-summary]', err);

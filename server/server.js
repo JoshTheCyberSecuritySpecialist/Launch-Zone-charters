@@ -27,6 +27,7 @@ const waiverPassengerService = require('./services/waiverPassengerService');
 const boatSafetyCapacity = require('./lib/boatSafetyCapacity');
 const waiverContent = require('./content/waiverContent');
 const bookingReliability = require('./services/bookingReliability');
+const checkoutHoldService = require('./services/checkoutHoldService');
 const captainBookingService = require('./services/captainBookingService');
 const bookingCommunications = require('./services/bookingCommunications');
 const bookingConfirmationService = require('./services/bookingConfirmationService');
@@ -288,21 +289,11 @@ function assertCharterStartTimeAllowed(charterType, startIso, endIso = null) {
 async function cleanupExpiredBookingHolds() {
   if (!supabaseConfigured) return { deleted: 0, cancelled: 0 };
   const nowIso = new Date().toISOString();
-  const { data, error } = await supabase
-    .from('bookings')
-    .delete()
-    .eq('status', 'pending')
-    .is('stripe_payment_id', null)
-    .not('expires_at', 'is', null)
-    .lt('expires_at', nowIso)
-    .select('id');
-  if (error) {
-    console.warn('[booking-hold-cleanup]', error.message);
-    return { deleted: 0, cancelled: 0, error };
-  }
-  const deleted = Array.isArray(data) ? data.length : 0;
-  if (deleted > 0) {
-    console.log('[booking-hold-cleanup] removed', deleted, 'expired pending hold(s)');
+  const checkoutCleanup = await checkoutHoldService.cleanupExpiredCheckoutHolds(supabase);
+  const deleted = 0;
+  const checkoutCancelled = Number(checkoutCleanup.cancelled || 0);
+  if (checkoutCleanup.error) {
+    console.warn('[booking-hold-cleanup]', checkoutCleanup.error.message);
   }
 
   const { data: cancelledRows, error: cancelErr } = await supabase
@@ -317,13 +308,13 @@ async function cleanupExpiredBookingHolds() {
     .select('id');
   if (cancelErr) {
     console.warn('[booking-hold-cleanup:staff]', cancelErr.message);
-    return { deleted, cancelled: 0, error: cancelErr };
+    return { deleted, cancelled: checkoutCancelled, error: cancelErr };
   }
   const cancelled = Array.isArray(cancelledRows) ? cancelledRows.length : 0;
   if (cancelled > 0) {
     console.log('[booking-hold-cleanup] cancelled', cancelled, 'expired staff hold(s)');
   }
-  return { deleted, cancelled };
+  return { deleted, cancelled: cancelled + checkoutCancelled };
 }
 
 async function refundStripeCheckoutSession(session) {
@@ -1844,6 +1835,10 @@ async function processStripeWebhookEvent(event) {
       error: 'Stripe payment failed.',
       status: 'ignored',
     });
+    await checkoutHoldService.releaseUnpaidCheckoutHold(supabase, {
+      sessionId: ids.checkoutSessionId || null,
+      reason: 'stripe_payment_failed',
+    });
     await bookingReliability.updateWebhookEventStatus(supabase, eventId, 'processed');
     return { ok: true };
   }
@@ -1857,6 +1852,10 @@ async function processStripeWebhookEvent(event) {
         source: 'stripe_session_expired',
       });
     }
+    await checkoutHoldService.releaseUnpaidCheckoutHold(supabase, {
+      sessionId: session.id,
+      reason: 'stripe_checkout_expired',
+    });
     await bookingReliability.createOrUpdateBookingDraft(supabase, {
       checkout_session_id: session.id,
       payment_intent_id: ids.paymentIntentId || null,
@@ -2920,6 +2919,7 @@ app.get('/api/admin/calendar-bookings', async (req, res) => {
   const adminUser = await verifyAdminRequest(req, res);
   if (!adminUser) return;
   try {
+    await cleanupExpiredBookingHolds();
     const { fromIso, toIso } = calendarRangeFromQuery(req.query || {});
     const location = cleanText(req.query.location, 80);
     const boatId = cleanText(req.query.boatId || req.query.boat_id, 80);
@@ -2936,7 +2936,7 @@ app.get('/api/admin/calendar-bookings', async (req, res) => {
     let query = supabase
       .from('bookings')
       .select(
-        'id, customer_id, boat_id, captain_id, start_time, end_time, duration_hours, status, payment_status, booking_source, staff_created, rental_location, booking_type, charter_type, guest_count, total_price, total_amount, staff_notes, admin_notes, customers(full_name, email, phone), boats(id, name, type), captains(id, full_name)'
+        'id, customer_id, boat_id, captain_id, start_time, end_time, duration_hours, status, payment_status, booking_source, staff_created, rental_location, booking_type, charter_type, guest_count, total_price, total_amount, staff_notes, admin_notes, expires_at, stripe_checkout_session_id, stripe_payment_id, deposit_paid, customers(full_name, email, phone), boats(id, name, type), captains(id, full_name)'
       )
       .lt('start_time', toIso)
       .gt('end_time', fromIso)
@@ -2965,6 +2965,7 @@ app.get('/api/admin/calendar-bookings', async (req, res) => {
     if (error) throw error;
     const bookings = (Array.isArray(data) ? data : [])
       .map(normalizeCalendarBooking)
+      .filter((row) => !checkoutHoldService.shouldHideFromOperationsCalendar(row))
       .filter((row) => bookingMatchesCalendarSearch(row, search));
     return res.json({ bookings, blockedDates, from: fromIso, to: toIso });
   } catch (err) {
@@ -7680,6 +7681,7 @@ app.post('/api/create-checkout-session', async (req, res) => {
       balance_due: roundMoney(expected.totalPrice - expected.amountDueToday),
       payment_status: 'pending',
       status: 'pending',
+      booking_source: 'website',
       expires_at: expiresAt,
       stripe_checkout_session_id: session.id,
       stripe_payment_id: null,

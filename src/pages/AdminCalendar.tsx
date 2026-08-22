@@ -10,6 +10,7 @@ import StatusBadge from '../components/admin/StatusBadge';
 import { humanizeLabel } from '../components/admin/adminDisplay';
 import { env } from '../config/env.js';
 import { adminCharterCapacityLines, isCaptainLedCharter } from '../lib/charterCapacity';
+import { isCalendarCheckoutHold, shouldHideCheckoutHoldFromCalendar } from '../lib/checkoutHold';
 import { fetchActiveCaptains, type AdminCaptainListItem } from '../lib/adminCaptains';
 
 type CalendarView = 'day' | 'week' | 'month';
@@ -38,6 +39,11 @@ type CalendarBooking = {
   guest_count?: number | null;
   total_price?: number | string | null;
   staff_notes?: string | null;
+  admin_notes?: string | null;
+  expires_at?: string | null;
+  stripe_checkout_session_id?: string | null;
+  stripe_payment_id?: string | null;
+  deposit_paid?: number | string | null;
 };
 
 type BlockedDate = {
@@ -241,10 +247,14 @@ function durationHours(start: string, end: string) {
   return Math.round(((e - s) / 36e5) * 100) / 100;
 }
 
+function usesHoldFilter(booking: CalendarBooking) {
+  return booking.status === 'hold' || isCalendarCheckoutHold(booking);
+}
+
 function cardClass(booking: CalendarBooking) {
   if (booking.status === 'cancelled') return 'border-red-200 bg-red-100 text-red-950';
   if (booking.status === 'completed') return 'border-slate-200 bg-slate-200 text-slate-800';
-  if (booking.status === 'hold') return 'border-orange-200 bg-orange-100 text-orange-950';
+  if (booking.status === 'hold' || isCalendarCheckoutHold(booking)) return 'border-orange-200 bg-orange-100 text-orange-950';
   if (
     booking.booking_source === 'groupon' &&
     (booking.status === 'pending_verification' || booking.status === 'pending')
@@ -265,6 +275,10 @@ function cardClass(booking: CalendarBooking) {
 
 function calendarEventTitle(booking: CalendarBooking, compact = false) {
   const guests = booking.guest_count || 1;
+  if (isCalendarCheckoutHold(booking)) {
+    if (compact) return `${hhmmFromIso(booking.start_time)} CHECKOUT HOLD`;
+    return `CHECKOUT HOLD — ${booking.customer_name}`;
+  }
   if (
     booking.booking_source === 'groupon' &&
     (booking.status === 'pending_verification' || booking.status === 'pending')
@@ -283,6 +297,7 @@ function captainAssignmentLine(booking: CalendarBooking) {
 }
 
 function sourceLabel(booking: CalendarBooking) {
+  if (isCalendarCheckoutHold(booking)) return 'Website checkout hold';
   if (booking.staff_created || booking.booking_source === 'admin') return 'Staff';
   return booking.booking_source || 'Website';
 }
@@ -442,7 +457,11 @@ export default function AdminCalendar() {
       if (!res.ok) throw new Error(payload.error || 'Could not load calendar.');
       const itemPayload = (await itemRes.json().catch(() => ({}))) as { items?: CalendarItem[]; error?: string };
       if (!itemRes.ok) throw new Error(itemPayload.error || 'Could not load duties and blocked times.');
-      setBookings(Array.isArray(payload.bookings) ? payload.bookings : []);
+      setBookings(
+        (Array.isArray(payload.bookings) ? payload.bookings : []).filter(
+          (row) => !shouldHideCheckoutHoldFromCalendar(row)
+        )
+      );
       setBlockedDates(Array.isArray(payload.blockedDates) ? payload.blockedDates : []);
       setCalendarItems(Array.isArray(itemPayload.items) ? itemPayload.items : []);
     } catch (err) {
@@ -921,7 +940,7 @@ export default function AdminCalendar() {
   const sidebar = {
     today: bookings.filter((b) => ymd(new Date(b.start_time)) === ymd(new Date())),
     upcoming: bookings.filter((b) => new Date(b.start_time).getTime() > Date.now() && b.status !== 'cancelled').slice(0, 8),
-    holds: bookings.filter((b) => b.status === 'hold'),
+    holds: bookings.filter((b) => b.status === 'hold' || isCalendarCheckoutHold(b)),
     pending: bookings.filter((b) => b.status === 'pending_verification'),
   };
 
@@ -933,7 +952,7 @@ export default function AdminCalendar() {
 
   const dayAgenda = useMemo(() => {
     const dayBookings = (byDate.get(selectedDayKey) || []).filter((booking) =>
-      booking.status === 'hold' ? filters.showHolds : filters.showBookings
+      usesHoldFilter(booking) ? filters.showHolds : filters.showBookings
     );
     const dayItems = itemsByDate.get(selectedDayKey) || [];
     const entries: Array<
@@ -1224,7 +1243,7 @@ export default function AdminCalendar() {
                       const active = key === selectedDayKey;
                       const count =
                         ((byDate.get(key) || []).filter((b) =>
-                          b.status === 'hold' ? filters.showHolds : filters.showBookings
+                          usesHoldFilter(b) ? filters.showHolds : filters.showBookings
                         ).length || 0) + ((itemsByDate.get(key) || []).length || 0);
                       return (
                         <button
@@ -1368,12 +1387,14 @@ export default function AdminCalendar() {
                                 tone={
                                   entry.booking.status === 'cancelled'
                                     ? 'danger'
-                                    : entry.booking.status === 'hold'
+                                    : usesHoldFilter(entry.booking)
                                       ? 'warning'
                                       : 'success'
                                 }
                               >
-                                {humanizeLabel(entry.booking.status)}
+                                {isCalendarCheckoutHold(entry.booking)
+                                  ? 'Checkout hold'
+                                  : humanizeLabel(entry.booking.status)}
                               </StatusBadge>
                             </div>
                             <div className="mt-3 flex flex-wrap gap-3 text-sm font-bold">
@@ -1420,7 +1441,7 @@ export default function AdminCalendar() {
                 {range.days.map((day) => {
                   const key = ymd(day);
                   const rows = (byDate.get(key) || []).filter((booking) =>
-                    booking.status === 'hold' ? filters.showHolds : filters.showBookings
+                    usesHoldFilter(booking) ? filters.showHolds : filters.showBookings
                   );
                   const itemRows = itemsByDate.get(key) || [];
                   const inMonth = day.getMonth() === anchor.getMonth();
@@ -1481,7 +1502,7 @@ export default function AdminCalendar() {
                         const rows = (byDate.get(key) || []).filter(
                           (booking) =>
                             new Date(booking.start_time).getHours() === hour &&
-                            (booking.status === 'hold' ? filters.showHolds : filters.showBookings)
+                            (usesHoldFilter(booking) ? filters.showHolds : filters.showBookings)
                         );
                         const itemRows = (itemsByDate.get(key) || []).filter((item) => new Date(item.start_time).getHours() === hour);
                         const targetBoatId = filters.boatId || null;

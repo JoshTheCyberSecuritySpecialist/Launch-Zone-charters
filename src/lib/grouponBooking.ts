@@ -139,7 +139,7 @@ export async function submitGrouponBooking(input: {
   waiver: { accepted: boolean; signature: string };
   legal: {
     termsAccepted: boolean;
-    damageFeeAcknowledged: boolean;
+    damageFeeAcknowledged?: boolean;
     signaturePresent: boolean;
   };
 }): Promise<{ ok: true; bookingId: string } | { ok: false; message: string }> {

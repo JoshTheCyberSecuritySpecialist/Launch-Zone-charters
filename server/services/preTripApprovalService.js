@@ -1,4 +1,5 @@
 const waiverContent = require('../content/waiverContent');
+const damageFeeAcknowledgment = require('../lib/damageFeeAcknowledgment');
 
 const REVIEWABLE_STATUSES = ['pending', 'matched'];
 
@@ -33,7 +34,11 @@ function buildBookingUpdatesFromSubmission(submission, booking, options = {}) {
     updates.waiver_signed = true;
     updates.waiver_signed_at = submission.waiver_signed_at || new Date().toISOString();
     updates.terms_accepted = true;
-    updates.damage_fee_acknowledged = true;
+    updates.damage_fee_acknowledged = damageFeeAcknowledgment.storedDamageFeeAcknowledged({
+      damageFeeAcknowledged: true,
+      bookingType: booking.booking_type,
+      tripType: submission.trip_type,
+    });
   }
 
   return updates;
@@ -42,7 +47,7 @@ function buildBookingUpdatesFromSubmission(submission, booking, options = {}) {
 async function loadBookingForPreTripSync(supabase, bookingId) {
   const { data, error } = await supabase
     .from('bookings')
-    .select('id, customer_id, waiver_signed, license_url, insurance_url, license_status, insurance_status')
+    .select('id, customer_id, waiver_signed, license_url, insurance_url, license_status, insurance_status, booking_type')
     .eq('id', bookingId)
     .maybeSingle();
 

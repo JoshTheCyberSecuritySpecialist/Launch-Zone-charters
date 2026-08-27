@@ -159,7 +159,13 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
 
   const fieldClass = WI_FIELD;
 
-  const isRental = booking ? !booking.captain_included : true;
+  const isRental = booking
+    ? booking.booking_type === 'charter'
+      ? false
+      : booking.booking_type === 'rental'
+        ? true
+        : !booking.captain_included
+    : true;
   const bookingMode = isRental ? 'rental' : 'charter';
 
   const insuranceConfig = useMemo(
@@ -324,7 +330,7 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
       setWaiverMessage('Complete passenger and safety information in the section above first.');
       return;
     }
-    if (!waiverFormComplete(waiverData, termsAccepted, damageFeeAcknowledged)) {
+    if (!waiverFormComplete(waiverData, termsAccepted, damageFeeAcknowledged, bookingMode)) {
       setWaiverMessage('Complete all agreement checkboxes and your signature.');
       return;
     }
@@ -336,7 +342,7 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
       phone: contactPhone,
       signature: waiverData.signature.trim(),
       termsAccepted,
-      damageFeeAcknowledged,
+      ...(bookingMode === 'rental' ? { damageFeeAcknowledged } : {}),
       waiverAgreed: waiverData.agreed,
     });
     setWaiverBusy(false);

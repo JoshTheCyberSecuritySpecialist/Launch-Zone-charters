@@ -1735,7 +1735,8 @@ export default function BookNow({ onNavigate }: BookNowProps) {
   const checkoutRequirementsMet = waiverFormComplete(
     waiverData,
     termsAccepted,
-    damageFeeAcknowledged
+    damageFeeAcknowledged,
+    bookingMode
   );
   const licensePreviewUrl = verificationData.licenseProofUrl.trim();
   const insurancePreviewUrl = verificationData.insuranceProofUrl.trim();
@@ -1995,7 +1996,9 @@ export default function BookNow({ onNavigate }: BookNowProps) {
 
     if (!checkoutRequirementsMet) {
       setCheckoutError(
-        'Please accept Terms, accept the waiver, acknowledge financial responsibility, and provide your signature before payment.'
+        bookingMode === 'rental'
+          ? 'Please accept Terms, accept the waiver, acknowledge financial responsibility, and provide your signature before payment.'
+          : 'Please accept Terms, accept the waiver, and provide your signature before payment.'
       );
       checkoutPerf.end('aborted_missing_required_ack');
       return;
@@ -2137,7 +2140,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
             },
             legal: {
               termsAccepted,
-              damageFeeAcknowledged,
+              ...(bookingMode === 'rental' ? { damageFeeAcknowledged } : {}),
               sharedCharterMinimumAcknowledged: requiresRocketSharedAck
                 ? rocketSharedMinimumAcknowledged
                 : undefined,

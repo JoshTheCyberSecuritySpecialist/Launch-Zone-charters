@@ -7,6 +7,7 @@ import {
   SECURITY_DEPOSIT_AUTHORIZATION_CLAUSE,
   SECURITY_DEPOSIT_TERMS_PARAGRAPH,
 } from '../../content/securityDeposit';
+import { requiresDamageFeeAcknowledgment } from '../../lib/damageFeeAcknowledgment';
 
 export type WaiverFormData = {
   agreed: boolean;
@@ -34,14 +35,16 @@ const DEFAULT_FIELD_CLASS =
 export function waiverFormComplete(
   waiverData: WaiverFormData,
   termsAccepted: boolean,
-  damageFeeAcknowledged: boolean
+  damageFeeAcknowledged: boolean,
+  bookingMode: 'rental' | 'charter'
 ): boolean {
-  return (
-    termsAccepted &&
-    waiverData.agreed &&
-    waiverData.signature.trim().length > 0 &&
-    damageFeeAcknowledged
-  );
+  if (!termsAccepted || !waiverData.agreed || waiverData.signature.trim().length === 0) {
+    return false;
+  }
+  if (requiresDamageFeeAcknowledgment(bookingMode) && !damageFeeAcknowledged) {
+    return false;
+  }
+  return true;
 }
 
 export default function WaiverBlock({
@@ -196,19 +199,21 @@ export default function WaiverBlock({
           <p className="mt-1 text-xs text-slate-500">{signatureHelperText}</p>
         </div>
 
-        <div className="flex items-start gap-3">
-          <input
-            type="checkbox"
-            id={damageId}
-            checked={damageFeeAcknowledged}
-            onChange={(e) => onDamageFeeAcknowledgedChange(e.target.checked)}
-            className="mt-1 h-5 w-5 shrink-0 rounded border-white/20 text-[var(--lz-cta)] focus:ring-cyan-500/40"
-          />
-          <label htmlFor={damageId} className="text-sm font-semibold text-slate-100">
-            I understand I am financially responsible for damage, prop strikes, grounding, towing, excessive
-            cleaning, and missing equipment.
-          </label>
-        </div>
+        {bookingMode === 'rental' ? (
+          <div className="flex items-start gap-3">
+            <input
+              type="checkbox"
+              id={damageId}
+              checked={damageFeeAcknowledged}
+              onChange={(e) => onDamageFeeAcknowledgedChange(e.target.checked)}
+              className="mt-1 h-5 w-5 shrink-0 rounded border-white/20 text-[var(--lz-cta)] focus:ring-cyan-500/40"
+            />
+            <label htmlFor={damageId} className="text-sm font-semibold text-slate-100">
+              I understand I am financially responsible for damage, prop strikes, grounding, towing, excessive
+              cleaning, and missing equipment.
+            </label>
+          </div>
+        ) : null}
       </div>
     </>
   );

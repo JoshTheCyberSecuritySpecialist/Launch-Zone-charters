@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const PDFDocument = require('pdfkit');
+const damageFeeAcknowledgment = require('../lib/damageFeeAcknowledgment');
 
 const LOGO_CANDIDATES = [
   'rocket-launch-boat-rentals-titusville-florida-launch-zone-charters-logo-indian-river-lagoon.png',
@@ -67,18 +68,28 @@ function writeSection(doc, title, lines) {
 }
 
 function writeAcknowledgements(doc, pkg) {
-  writeSection(doc, 'Acknowledgements captured at sign time', [
+  const lines = [
     `${pkg.termsAccepted ? '[x]' : '[ ]'} Terms & Conditions accepted`,
     `${pkg.waiverAccepted ? '[x]' : '[ ]'} Liability waiver accepted`,
-    `${pkg.damageFeeAcknowledged ? '[x]' : '[ ]'} Damage / financial responsibility policy acknowledged`,
-  ]);
+  ];
+  if (
+    damageFeeAcknowledgment.requiresDamageFeeAcknowledgment({
+      bookingType: pkg.bookingType,
+      tripType: pkg.tripType,
+    })
+  ) {
+    lines.push(
+      `${pkg.damageFeeAcknowledged ? '[x]' : '[ ]'} Damage / financial responsibility policy acknowledged`
+    );
+  }
+  writeSection(doc, 'Acknowledgements captured at sign time', lines);
 }
 
 async function loadBookingWaiverPackage(supabase, bookingId) {
   const { data, error } = await supabase
     .from('bookings')
     .select(
-      'id, waiver_signed, waiver_signed_at, terms_accepted, damage_fee_acknowledged, customers(full_name, email), waivers(electronic_signature, signature_date, ip_address, waiver_content, waiver_version, waiver_version_effective_at, accepted)'
+      'id, waiver_signed, waiver_signed_at, terms_accepted, damage_fee_acknowledged, booking_type, customers(full_name, email), waivers(electronic_signature, signature_date, ip_address, waiver_content, waiver_version, waiver_version_effective_at, accepted)'
     )
     .eq('id', bookingId)
     .maybeSingle();
@@ -121,6 +132,7 @@ async function loadBookingWaiverPackage(supabase, bookingId) {
     waiverAccepted: waiver?.accepted !== false,
     source: inferBookingSource(waiver?.waiver_content),
     tripType: null,
+    bookingType: data.booking_type || null,
   };
 }
 
@@ -161,7 +173,10 @@ async function loadPreTripWaiverPackage(supabase, submissionId) {
     waiverVersion: null,
     waiverVersionEffectiveAt: null,
     termsAccepted: true,
-    damageFeeAcknowledged: true,
+    damageFeeAcknowledged: damageFeeAcknowledgment.storedDamageFeeAcknowledged({
+      damageFeeAcknowledged: true,
+      tripType: data.trip_type,
+    }),
     waiverAccepted: true,
     source: 'Off-platform pre-trip form',
     tripType: data.trip_type,

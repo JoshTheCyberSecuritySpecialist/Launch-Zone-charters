@@ -33,6 +33,7 @@ const bookingCommunications = require('./services/bookingCommunications');
 const bookingConfirmationService = require('./services/bookingConfirmationService');
 const adminBookingUpdate = require('./services/adminBookingUpdate');
 const customerCancellationRefundService = require('./services/customerCancellationRefundService');
+const damageFeeAcknowledgment = require('./lib/damageFeeAcknowledgment');
 const bookingDateTimeRange = require('./lib/bookingDateTimeRange');
 const { isSharedCharterBooking, formatCapacityMessage } = require('./lib/sharedCharterCapacity');
 const shopService = require('./services/shopService');
@@ -1033,8 +1034,18 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
     ? new Date(legalAcceptedAtRaw).toISOString()
     : new Date().toISOString();
   const requestIp = options.requestIp || null;
+  const payloadBookingMode = typeof booking.bookingMode === 'string' ? booking.bookingMode.trim().toLowerCase() : '';
 
-  if (!termsAccepted || !damageFeeAcknowledged || !waiverAccepted || waiverSignature.length === 0 || !signaturePresent) {
+  if (
+    !termsAccepted ||
+    !waiverAccepted ||
+    waiverSignature.length === 0 ||
+    !signaturePresent ||
+    damageFeeAcknowledgment.damageFeeAcknowledgmentMissing({
+      damageFeeAcknowledged,
+      bookingMode: payloadBookingMode,
+    })
+  ) {
     const err = new Error('Legal acceptance validation failed for this checkout session.');
     err.statusCode = 400;
     throw err;
@@ -1343,7 +1354,10 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
     waiver_signed: waiverAccepted && waiverSignature.length > 0,
     waiver_signed_at: legalAcceptedAt,
     terms_accepted: true,
-    damage_fee_acknowledged: true,
+    damage_fee_acknowledged: damageFeeAcknowledgment.storedDamageFeeAcknowledged({
+      damageFeeAcknowledged,
+      bookingMode,
+    }),
     stripe_payment_id: stripeSessionId,
     payment_intent_id: paymentIntentId || null,
     checkout_session_id: stripeSessionId,
@@ -7280,7 +7294,12 @@ app.post('/api/create-checkout-session', async (req, res) => {
         error: 'Waiver acceptance and electronic signature are required to continue.',
       });
     }
-    if (!damageFeeAcknowledged) {
+    if (
+      damageFeeAcknowledgment.damageFeeAcknowledgmentMissing({
+        damageFeeAcknowledged,
+        bookingMode,
+      })
+    ) {
       return res.status(400).json({
         error: 'Damage fee acknowledgment is required to continue.',
       });
@@ -7869,7 +7888,10 @@ app.post('/api/create-checkout-session', async (req, res) => {
           legal: {
             termsAccepted: true,
             waiverAccepted: true,
-            damageFeeAcknowledged: true,
+            damageFeeAcknowledged: damageFeeAcknowledgment.storedDamageFeeAcknowledged({
+              damageFeeAcknowledged,
+              bookingMode,
+            }),
             signaturePresent: true,
             legalAcceptedAt,
           },
@@ -7896,7 +7918,10 @@ app.post('/api/create-checkout-session', async (req, res) => {
         legal: {
           termsAccepted: true,
           waiverAccepted: true,
-          damageFeeAcknowledged: true,
+          damageFeeAcknowledged: damageFeeAcknowledgment.storedDamageFeeAcknowledged({
+            damageFeeAcknowledged,
+            bookingMode,
+          }),
           signaturePresent: true,
           legalAcceptedAt,
         },
@@ -9090,7 +9115,7 @@ app.post('/api/booking-sign-waiver', async (req, res) => {
     if (!isBookingUuidParam(bookingId) || !email || !phone) {
       return res.status(400).json({ error: 'bookingId, email, and phone are required' });
     }
-    if (!termsAccepted || !damageFeeAcknowledged || !waiverAgreed || !signature) {
+    if (!termsAccepted || !waiverAgreed || !signature) {
       return res.status(400).json({ error: 'Complete all agreement checkboxes and your signature.' });
     }
 
@@ -9100,6 +9125,14 @@ app.post('/api/booking-sign-waiver', async (req, res) => {
       .eq('id', bookingId)
       .maybeSingle();
     if (bErr || !booking) return res.status(404).json({ error: 'Booking not found' });
+    if (
+      damageFeeAcknowledgment.damageFeeAcknowledgmentMissing({
+        damageFeeAcknowledged,
+        bookingType: booking.booking_type,
+      })
+    ) {
+      return res.status(400).json({ error: 'Complete all agreement checkboxes and your signature.' });
+    }
     if (!checkoutHoldService.canAccessCustomerTripDocuments(booking)) {
       return res.status(400).json({ error: 'This booking is no longer open for document updates.' });
     }
@@ -9124,7 +9157,10 @@ app.post('/api/booking-sign-waiver', async (req, res) => {
           waiver_signed: true,
           waiver_signed_at: signedAt,
           terms_accepted: true,
-          damage_fee_acknowledged: true,
+          damage_fee_acknowledged: damageFeeAcknowledgment.storedDamageFeeAcknowledged({
+            damageFeeAcknowledged,
+            bookingType: booking.booking_type,
+          }),
         })
         .eq('id', bookingId);
       if (uErr) {
@@ -9237,7 +9273,15 @@ app.post('/api/public/pre-trip-submission', async (req, res) => {
     if (!PRE_TRIP_TYPES.has(tripType)) {
       return res.status(400).json({ error: 'Invalid trip type.' });
     }
-    if (!termsAccepted || !damageFeeAcknowledged || !waiverAgreed || !waiverSignature) {
+    if (!termsAccepted || !waiverAgreed || !waiverSignature) {
+      return res.status(400).json({ error: 'Complete waiver, terms, and signature before submitting.' });
+    }
+    if (
+      damageFeeAcknowledgment.damageFeeAcknowledgmentMissing({
+        damageFeeAcknowledged,
+        tripType,
+      })
+    ) {
       return res.status(400).json({ error: 'Complete waiver, terms, and signature before submitting.' });
     }
 

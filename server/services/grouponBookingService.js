@@ -5,6 +5,7 @@ const { DateTime } = require('luxon');
 const availabilityService = require('./availabilityService');
 const boatCapacityService = require('./boatCapacityService');
 const waiverContent = require('../content/waiverContent');
+const damageFeeAcknowledgment = require('../lib/damageFeeAcknowledgment');
 const bookingReliability = require('./bookingReliability');
 const {
   loadReservedVoucherByClientToken,
@@ -101,7 +102,17 @@ async function createGrouponBooking(supabase, deps, input) {
   const waiverAccepted = Boolean(waiver?.accepted);
   const waiverSignature = String(waiver?.signature || '').trim();
   const signaturePresent = Boolean(legal?.signaturePresent ?? waiverSignature.length > 0);
-  if (!termsAccepted || !damageFeeAcknowledged || !waiverAccepted || !waiverSignature || !signaturePresent) {
+  if (!termsAccepted || !waiverAccepted || !waiverSignature || !signaturePresent) {
+    const err = new Error('Terms, waiver, and signature are required to complete your booking.');
+    err.statusCode = 400;
+    throw err;
+  }
+  if (
+    damageFeeAcknowledgment.damageFeeAcknowledgmentMissing({
+      damageFeeAcknowledged,
+      bookingType: mapping.booking_type,
+    })
+  ) {
     const err = new Error('Terms, waiver, and signature are required to complete your booking.');
     err.statusCode = 400;
     throw err;
@@ -264,7 +275,10 @@ async function createGrouponBooking(supabase, deps, input) {
     waiver_signed: true,
     waiver_signed_at: legalAcceptedAt,
     terms_accepted: true,
-    damage_fee_acknowledged: true,
+    damage_fee_acknowledged: damageFeeAcknowledgment.storedDamageFeeAcknowledged({
+      damageFeeAcknowledged,
+      bookingType: mapping.booking_type,
+    }),
     admin_notes: [
       'Booking source: Groupon voucher',
       `Groupon deal: ${voucher.deal_name || '—'}`,

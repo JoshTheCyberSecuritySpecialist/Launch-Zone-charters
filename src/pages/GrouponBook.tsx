@@ -177,8 +177,12 @@ export default function GrouponBook() {
   async function handleSubmitBooking(e: React.FormEvent) {
     e.preventDefault();
     if (!clientToken || !session || !selectedSlotIso) return;
-    if (!waiverFormComplete(waiverData, termsAccepted, damageFeeAcknowledged)) {
-      setError('Accept the terms, waiver, and financial responsibility acknowledgment to continue.');
+    if (!waiverFormComplete(waiverData, termsAccepted, damageFeeAcknowledged, bookingMode)) {
+      setError(
+        bookingMode === 'rental'
+          ? 'Accept the terms, waiver, and financial responsibility acknowledgment to continue.'
+          : 'Accept the terms and waiver, and provide your signature to continue.'
+      );
       return;
     }
     setBusy(true);
@@ -202,7 +206,7 @@ export default function GrouponBook() {
       waiver: { accepted: waiverData.agreed, signature: waiverData.signature.trim() },
       legal: {
         termsAccepted,
-        damageFeeAcknowledged,
+        ...(bookingMode === 'rental' ? { damageFeeAcknowledged } : {}),
         signaturePresent: waiverData.signature.trim().length > 0,
       },
     });

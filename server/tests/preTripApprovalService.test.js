@@ -26,6 +26,20 @@ test('buildBookingUpdatesFromSubmission omits updated_at and skips unchanged fie
   assert.equal(updates.insurance_status, 'submitted');
   assert.equal(updates.waiver_signed, true);
   assert.equal(updates.waiver_signed_at, submission.waiver_signed_at);
+  assert.equal(updates.damage_fee_acknowledged, true);
+});
+
+test('buildBookingUpdatesFromSubmission does not record a rental damage ack on charter bookings', () => {
+  const updates = preTripApprovalService.buildBookingUpdatesFromSubmission(
+    {
+      waiver_signed: true,
+      waiver_signed_at: '2026-07-16T12:00:00.000Z',
+      trip_type: 'captain_charter',
+    },
+    { waiver_signed: false, booking_type: 'charter' }
+  );
+  assert.equal(updates.waiver_signed, true);
+  assert.equal(updates.damage_fee_acknowledged, false);
 });
 
 test('buildBookingUpdatesFromSubmission returns empty when nothing to copy', () => {

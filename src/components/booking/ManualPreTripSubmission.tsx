@@ -128,7 +128,7 @@ export default function ManualPreTripSubmission({
   const insuranceConfig = useMemo(() => getInsuranceConfigForTripType(tripType), [tripType]);
   const uploadKey = `pre-trip/${draftId}`;
 
-  const waiverComplete = waiverFormComplete(waiverData, termsAccepted, damageFeeAcknowledged);
+  const waiverComplete = waiverFormComplete(waiverData, termsAccepted, damageFeeAcknowledged, bookingMode);
   const waiverStatus: DocStatusText = waiverComplete
     ? 'Completed'
     : waiverData.agreed || termsAccepted || damageFeeAcknowledged || waiverData.signature
@@ -334,7 +334,7 @@ export default function ManualPreTripSubmission({
       waiverSignature: waiverData.signature.trim(),
       waiverAgreed: waiverData.agreed,
       termsAccepted,
-      damageFeeAcknowledged,
+      ...(isRental ? { damageFeeAcknowledged } : {}),
       licenseUrl,
       insuranceUrl,
       clientDraftId: resolvedClientDraftId,

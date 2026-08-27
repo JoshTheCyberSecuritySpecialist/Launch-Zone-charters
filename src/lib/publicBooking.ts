@@ -354,7 +354,7 @@ export async function signBookingWaiver(input: {
   phone: string;
   signature: string;
   termsAccepted: boolean;
-  damageFeeAcknowledged: boolean;
+  damageFeeAcknowledged?: boolean;
   waiverAgreed: boolean;
 }): Promise<{ ok: boolean; error?: string }> {
   if (!env.apiUrlConfigured || !env.apiUrl) {
@@ -454,7 +454,7 @@ export async function submitPreTripSubmission(input: {
   waiverSignature: string;
   waiverAgreed: boolean;
   termsAccepted: boolean;
-  damageFeeAcknowledged: boolean;
+  damageFeeAcknowledged?: boolean;
   licenseUrl?: string | null;
   insuranceUrl?: string | null;
   /** Stable client draft UUID — used for server-side idempotency. */
@@ -498,7 +498,7 @@ export async function submitPreTripSubmission(input: {
       waiverSignature: input.waiverSignature,
       waiverAgreed: input.waiverAgreed,
       termsAccepted: input.termsAccepted,
-      damageFeeAcknowledged: input.damageFeeAcknowledged,
+      ...(input.damageFeeAcknowledged != null ? { damageFeeAcknowledged: input.damageFeeAcknowledged } : {}),
       licenseUrl: input.licenseUrl || undefined,
       insuranceUrl: input.insuranceUrl || undefined,
       clientDraftId,

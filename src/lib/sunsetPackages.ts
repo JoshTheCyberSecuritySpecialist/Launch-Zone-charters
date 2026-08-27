@@ -3,6 +3,8 @@
  * Checkout amounts and guest counts are enforced on the server — never send prices in URLs.
  */
 
+import { DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES } from './charterDuration';
+
 export type SunsetPackageId = 'sunset_solo' | 'sunset_two' | 'sunset_three' | 'sunset_family' | 'sunset_private';
 
 export type SunsetPackageDisplay = {
@@ -18,6 +20,7 @@ export type SunsetPackageDisplay = {
   badge: string | null;
   ctaLabel: string;
   included: readonly string[];
+  durationMinutes: number;
 };
 
 /** Must stay aligned with server/config/sunsetPackages.js */
@@ -34,6 +37,7 @@ export const SUNSET_PACKAGE_DISPLAY: SunsetPackageDisplay[] = [
     badge: null,
     ctaLabel: 'Select Solo Seat',
     included: ['Captain included', 'Fuel included', 'Joins an open shared sunset'],
+    durationMinutes: DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES,
   },
   {
     id: 'sunset_two',
@@ -47,6 +51,7 @@ export const SUNSET_PACKAGE_DISPLAY: SunsetPackageDisplay[] = [
     badge: null,
     ctaLabel: 'Select Sunset for Two',
     included: ['Captain included', 'Fuel included', 'Opens a shared sunset departure'],
+    durationMinutes: DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES,
   },
   {
     id: 'sunset_three',
@@ -60,6 +65,7 @@ export const SUNSET_PACKAGE_DISPLAY: SunsetPackageDisplay[] = [
     badge: null,
     ctaLabel: 'Select Sunset for Three',
     included: ['Captain included', 'Fuel included', 'Opens a shared sunset departure'],
+    durationMinutes: DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES,
   },
   {
     id: 'sunset_family',
@@ -74,6 +80,7 @@ export const SUNSET_PACKAGE_DISPLAY: SunsetPackageDisplay[] = [
     badge: 'Private boat',
     ctaLabel: 'Select Family Charter',
     included: ['Captain included', 'Fuel included', 'Up to 5 guests · Exclusive boat'],
+    durationMinutes: DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES,
   },
   {
     id: 'sunset_private',
@@ -88,6 +95,7 @@ export const SUNSET_PACKAGE_DISPLAY: SunsetPackageDisplay[] = [
     badge: 'Entire boat',
     ctaLabel: 'Select Private Charter',
     included: ['Captain included', 'Fuel included', 'Up to 5 guests · Exclusive boat'],
+    durationMinutes: DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES,
   },
 ];
 

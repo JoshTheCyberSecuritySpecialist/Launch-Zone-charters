@@ -62,6 +62,10 @@ import {
   type BioPackageId,
 } from '../lib/bioluminescencePackages';
 import {
+  formatCharterDurationLabel,
+  resolvePackageDurationMinutes,
+} from '../lib/charterDuration';
+import {
   getRocketPackageDisplay,
   isDirectRocketPackagePricingEnabled,
   isSharedRocketPackage,
@@ -870,6 +874,9 @@ export default function BookNow({ onNavigate }: BookNowProps) {
         : null;
   const selectedDirectPackage = selectedBioPackage || selectedRocketPackage || selectedSunsetPackage;
   const missingRequiredDirectPackage = Boolean(requiredDirectExperience) && !selectedDirectPackage;
+  const charterDurationLabel = formatCharterDurationLabel(
+    resolvePackageDurationMinutes(selectedDirectPackage)
+  );
   const charterAvailabilityQueryParams = (() => {
     if (isRocketPackageFlow && selectedRocketPackage) {
       const q = new URLSearchParams();
@@ -1762,23 +1769,23 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     isBioPackageFlow && selectedBioPackage
       ? {
           primary: `${selectedBioPackage.cardTitle} — $${selectedBioPackage.directPriceUsd.toFixed(2)}`,
-          sub: `${selectedBioPackage.guestCount} guest${selectedBioPackage.guestCount === 1 ? '' : 's'} · $${selectedBioPackage.perGuestUsd} per guest`,
+          sub: `${selectedBioPackage.guestCount} guest${selectedBioPackage.guestCount === 1 ? '' : 's'} · ${formatCharterDurationLabel(selectedBioPackage.durationMinutes)} · $${selectedBioPackage.perGuestUsd} per guest`,
         }
       : isRocketPackageFlow && selectedRocketPackage
         ? {
             primary: `${selectedRocketPackage.cardTitle} — $${selectedRocketPackage.directPriceUsd.toFixed(2)}`,
             sub:
               selectedRocketPackage.id === 'rocket_private'
-                ? `Up to ${selectedRocketPackage.maxGuests ?? 5} guests · private charter`
-                : `${selectedRocketPackage.guestCount} guest${selectedRocketPackage.guestCount === 1 ? '' : 's'} · shared charter`,
+                ? `Up to ${selectedRocketPackage.maxGuests ?? 5} guests · private charter · ${formatCharterDurationLabel(selectedRocketPackage.durationMinutes)}`
+                : `${selectedRocketPackage.guestCount} guest${selectedRocketPackage.guestCount === 1 ? '' : 's'} · shared charter · ${formatCharterDurationLabel(selectedRocketPackage.durationMinutes)}`,
           }
       : isSunsetPackageFlow && selectedSunsetPackage
         ? {
             primary: `${selectedSunsetPackage.cardTitle} — $${selectedSunsetPackage.directPriceUsd.toFixed(2)}`,
             sub:
               selectedSunsetPackage.seating === 'private'
-                ? `Up to ${selectedSunsetPackage.maxGuests ?? 5} guests · private charter`
-                : `${selectedSunsetPackage.guestCount} guest${selectedSunsetPackage.guestCount === 1 ? '' : 's'} · shared charter`,
+                ? `Up to ${selectedSunsetPackage.maxGuests ?? 5} guests · private charter · ${formatCharterDurationLabel(selectedSunsetPackage.durationMinutes)}`
+                : `${selectedSunsetPackage.guestCount} guest${selectedSunsetPackage.guestCount === 1 ? '' : 's'} · shared charter · ${formatCharterDurationLabel(selectedSunsetPackage.durationMinutes)}`,
           }
         : isSharedTour
         ? {
@@ -2592,7 +2599,9 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                       🚀
                     </span>
                     <p className="mt-3 text-lg font-bold text-white">Rocket Launch Charter</p>
-                    <p className="mt-2 text-sm text-slate-400">On-water launch viewing · typical 4-hour window</p>
+                    <p className="mt-2 text-sm text-slate-400">
+                      On-water launch viewing · {formatCharterDurationLabel()} charter · typical 4-hour window
+                    </p>
                   </button>
                   <button
                     type="button"
@@ -2603,7 +2612,9 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                       ✨
                     </span>
                     <p className="mt-3 text-lg font-bold text-white">Bioluminescence Tour</p>
-                    <p className="mt-2 text-sm text-slate-400">Night glow on the lagoon · ~3 hours</p>
+                    <p className="mt-2 text-sm text-slate-400">
+                      Night glow on the lagoon · {formatCharterDurationLabel()}
+                    </p>
                   </button>
                   <button
                     type="button"
@@ -2614,7 +2625,9 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                       🌅
                     </span>
                     <p className="mt-3 text-lg font-bold text-white">Sunset Cruise</p>
-                    <p className="mt-2 text-sm text-slate-400">Golden hour on the water · ~2 hours</p>
+                    <p className="mt-2 text-sm text-slate-400">
+                      Golden hour on the water · {formatCharterDurationLabel()}
+                    </p>
                   </button>
                   <button
                     type="button"
@@ -3980,7 +3993,9 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                       <span>
                         {bookingMode === 'charter' ? 'Charter duration (included):' : 'Duration:'}
                       </span>
-                      <span className="font-semibold">{bookingData.hours} hours</span>
+                      <span className="font-semibold">
+                        {bookingMode === 'charter' ? charterDurationLabel : `${bookingData.hours} hours`}
+                      </span>
                     </div>
                     <div className="my-3 border-t border-white/10"></div>
                     {bookingMode === 'charter' ? (

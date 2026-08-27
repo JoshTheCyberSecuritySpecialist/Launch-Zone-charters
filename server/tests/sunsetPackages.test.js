@@ -34,6 +34,7 @@ function runPackageLookupTests() {
   assert.strictEqual(solo.guestCount, 1);
   assert.strictEqual(solo.seating, 'shared');
   assert.strictEqual(solo.canOpenSharedDeparture, false);
+  assert.strictEqual(solo.durationMinutes, 60);
   assert.strictEqual(sunsetPackageSavingsCents(solo), 1000);
 
   const two = getSunsetPackage('sunset_two');

@@ -1,4 +1,5 @@
 import { Check } from 'lucide-react';
+import PackageDurationLine from './PackageDurationLine';
 import {
   BIO_PACKAGE_DISPLAY,
   type BioPackageDisplay,
@@ -44,6 +45,7 @@ function PackageCard({
       <p className="mt-1 text-sm text-slate-400">
         {pkg.guestCount === 1 ? '1 Guest' : `${pkg.guestCount} Guests`}
       </p>
+      <PackageDurationLine durationMinutes={pkg.durationMinutes} />
       <div className="mt-4">
         {pkg.promotionActive ? (
           <>

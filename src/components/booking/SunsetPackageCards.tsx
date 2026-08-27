@@ -1,4 +1,5 @@
 import { Check } from 'lucide-react';
+import PackageDurationLine from './PackageDurationLine';
 import {
   SUNSET_PACKAGE_DISPLAY,
   SUNSET_PRIVATE_CHARTER_DESCRIPTION,
@@ -68,6 +69,7 @@ function PackageCard({
             ? '1 Person · Shared'
             : `${pkg.guestCount} People · Shared`}
       </p>
+      <PackageDurationLine durationMinutes={pkg.durationMinutes} />
       <div className="mt-4">
         <p className="text-3xl font-bold text-white md:text-4xl">{formatUsd(pkg.directPriceUsd)}</p>
         {!isPrivate ? (

@@ -3,6 +3,8 @@
  * Prices are integer cents only — never trust browser-supplied amounts.
  */
 
+const { DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES } = require('../lib/charterDuration');
+
 const ROCKET_LAUNCH_PACKAGES = {
   rocket_solo: {
     id: 'rocket_solo',
@@ -11,6 +13,7 @@ const ROCKET_LAUNCH_PACKAGES = {
     priceCents: 10000,
     seating: 'shared',
     capacityReserved: 1,
+    durationMinutes: DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES,
     active: true,
   },
   rocket_duo: {
@@ -20,6 +23,7 @@ const ROCKET_LAUNCH_PACKAGES = {
     priceCents: 19000,
     seating: 'shared',
     capacityReserved: 2,
+    durationMinutes: DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES,
     active: true,
   },
   rocket_three: {
@@ -29,6 +33,7 @@ const ROCKET_LAUNCH_PACKAGES = {
     priceCents: 28000,
     seating: 'shared',
     capacityReserved: 3,
+    durationMinutes: DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES,
     active: true,
   },
   rocket_private: {
@@ -38,6 +43,7 @@ const ROCKET_LAUNCH_PACKAGES = {
     priceCents: 45000,
     seating: 'private',
     capacityReserved: 5,
+    durationMinutes: DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES,
     active: true,
   },
 };

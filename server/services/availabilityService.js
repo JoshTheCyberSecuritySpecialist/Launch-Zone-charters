@@ -28,6 +28,7 @@ const DEFAULT_CLOSE_HOUR = Number(process.env.AVAILABILITY_CLOSE_HOUR || 20);
 const DEFAULT_STEP_MINUTES = Number(process.env.AVAILABILITY_SLOT_MINUTES || 30);
 const DEFAULT_RANGE_DAYS = Number(process.env.AVAILABILITY_CALENDAR_DAYS || 60);
 const MIN_LEAD_HOURS = Math.max(0, Number(process.env.BOOKING_MIN_LEAD_HOURS || 2));
+/** Scheduled captain-led window. Catalog durationMinutes is display-only until this is package-driven. */
 const CHARTER_DURATION_HOURS = 1;
 const CHARTER_END_TOO_LATE_MESSAGE = 'Bookings must finish by 4:00 AM.';
 const BIO_CHARTER_START_HOURS = new Set([20, 21, 22, 23, 0, 1, 2, 3, 4]);

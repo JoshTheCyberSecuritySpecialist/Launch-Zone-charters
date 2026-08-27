@@ -1,4 +1,5 @@
 import { Check } from 'lucide-react';
+import PackageDurationLine from './PackageDurationLine';
 import {
   ROCKET_DUO_EXTRA_DISCLOSURE,
   ROCKET_LAUNCH_MIN_GUESTS,
@@ -65,6 +66,7 @@ function PackageCard({
       <p className="mt-1 text-sm text-slate-400">
         {isPrivate ? 'Up to 5 guests' : pkg.guestCount === 1 ? '1 Person · Shared' : `${pkg.guestCount} People · Shared`}
       </p>
+      <PackageDurationLine durationMinutes={pkg.durationMinutes} />
       <div className="mt-4">
         <p className="text-3xl font-bold text-white md:text-4xl">{formatUsd(pkg.directPriceUsd)}</p>
         {!isPrivate ? (

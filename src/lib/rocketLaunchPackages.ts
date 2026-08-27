@@ -3,6 +3,8 @@
  * Checkout amounts and guest counts are enforced on the server — never send prices in URLs.
  */
 
+import { DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES } from './charterDuration';
+
 export type RocketPackageId = 'rocket_solo' | 'rocket_duo' | 'rocket_three' | 'rocket_private';
 
 export type RocketPackageDisplay = {
@@ -16,6 +18,7 @@ export type RocketPackageDisplay = {
   badge: string | null;
   ctaLabel: string;
   included: readonly string[];
+  durationMinutes: number;
 };
 
 /** Operational minimum for shared rocket departures — keep aligned with server config when Slice C lands. */
@@ -33,6 +36,7 @@ export const ROCKET_PACKAGE_DISPLAY: RocketPackageDisplay[] = [
     badge: null,
     ctaLabel: 'Select Solo Seat',
     included: ['Captain included', 'Fuel included', 'Shared departure'],
+    durationMinutes: DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES,
   },
   {
     id: 'rocket_duo',
@@ -44,6 +48,7 @@ export const ROCKET_PACKAGE_DISPLAY: RocketPackageDisplay[] = [
     badge: null,
     ctaLabel: 'Select Duo Package',
     included: ['Captain included', 'Fuel included', 'Shared departure · 2 seats'],
+    durationMinutes: DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES,
   },
   {
     id: 'rocket_three',
@@ -55,6 +60,7 @@ export const ROCKET_PACKAGE_DISPLAY: RocketPackageDisplay[] = [
     badge: null,
     ctaLabel: 'Select Three-Guest Package',
     included: ['Captain included', 'Fuel included', 'Shared departure · 3 seats'],
+    durationMinutes: DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES,
   },
   {
     id: 'rocket_private',
@@ -67,6 +73,7 @@ export const ROCKET_PACKAGE_DISPLAY: RocketPackageDisplay[] = [
     badge: 'Entire boat',
     ctaLabel: 'Select Private Charter',
     included: ['Captain included', 'Fuel included', 'Up to 5 guests · No shared minimum'],
+    durationMinutes: DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES,
   },
 ];
 

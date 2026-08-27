@@ -5,6 +5,7 @@
 
 import { DateTime } from 'luxon';
 import { BUSINESS_TZ } from './bookingDateTimeRange';
+import { DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES } from './charterDuration';
 
 export type BioPackageId = 'bio_solo' | 'bio_two' | 'bio_three' | 'bio_four';
 
@@ -24,6 +25,7 @@ type BioPackageBase = {
   badge: string | null;
   ctaLabel: string;
   included: readonly string[];
+  durationMinutes: number;
 };
 
 export type BioPackageDisplay = BioPackageBase & {
@@ -48,6 +50,7 @@ const BIO_PACKAGE_BASE: readonly BioPackageBase[] = [
     badge: null,
     ctaLabel: 'Select Solo Tour',
     included: ['Captain included', 'Fuel included'],
+    durationMinutes: DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES,
   },
   {
     id: 'bio_two',
@@ -58,6 +61,7 @@ const BIO_PACKAGE_BASE: readonly BioPackageBase[] = [
     badge: null,
     ctaLabel: 'Select Tour for Two',
     included: ['Captain included', 'Fuel included'],
+    durationMinutes: DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES,
   },
   {
     id: 'bio_three',
@@ -68,6 +72,7 @@ const BIO_PACKAGE_BASE: readonly BioPackageBase[] = [
     badge: null,
     ctaLabel: 'Select Tour for Three',
     included: ['Captain included', 'Fuel included'],
+    durationMinutes: DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES,
   },
   {
     id: 'bio_four',
@@ -78,6 +83,7 @@ const BIO_PACKAGE_BASE: readonly BioPackageBase[] = [
     badge: 'Best Value',
     ctaLabel: 'Select Tour for Four',
     included: ['Captain included', 'Fuel included'],
+    durationMinutes: DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES,
   },
 ];
 

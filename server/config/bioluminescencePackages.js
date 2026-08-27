@@ -7,6 +7,7 @@
  */
 
 const { DateTime } = require('luxon');
+const { DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES } = require('../lib/charterDuration');
 
 const BUSINESS_TZ = String(process.env.BUSINESS_TIMEZONE || 'America/New_York').trim();
 
@@ -26,6 +27,7 @@ const BIOLUMINESCENCE_PACKAGES = {
     regularPriceCents: 5850,
     promotionalPriceCents: 4499,
     badge: null,
+    durationMinutes: DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES,
     active: true,
   },
   bio_two: {
@@ -35,6 +37,7 @@ const BIOLUMINESCENCE_PACKAGES = {
     regularPriceCents: 12000,
     promotionalPriceCents: 8999,
     badge: null,
+    durationMinutes: DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES,
     active: true,
   },
   bio_three: {
@@ -44,6 +47,7 @@ const BIOLUMINESCENCE_PACKAGES = {
     regularPriceCents: 18000,
     promotionalPriceCents: 13499,
     badge: null,
+    durationMinutes: DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES,
     active: true,
   },
   bio_four: {
@@ -53,6 +57,7 @@ const BIOLUMINESCENCE_PACKAGES = {
     regularPriceCents: 24000,
     promotionalPriceCents: 17999,
     badge: 'Best Value',
+    durationMinutes: DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES,
     active: true,
   },
 };

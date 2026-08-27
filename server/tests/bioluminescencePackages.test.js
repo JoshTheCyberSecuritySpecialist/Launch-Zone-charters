@@ -31,6 +31,7 @@ function runPackageLookupTests() {
   assert.strictEqual(solo.guestCount, 1);
   assert.strictEqual(solo.priceCents, 4499);
   assert.strictEqual(solo.regularPriceCents, 5850);
+  assert.strictEqual(solo.durationMinutes, 60);
 
   const two = getBioluminescencePackage('bio_two');
   assert.strictEqual(two.guestCount, 2);

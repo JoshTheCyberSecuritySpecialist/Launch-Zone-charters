@@ -7,6 +7,8 @@
  * Exclusive: sunset_family and sunset_private.
  */
 
+const { DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES } = require('../lib/charterDuration');
+
 const SUNSET_PACKAGES = {
   sunset_solo: {
     id: 'sunset_solo',
@@ -18,6 +20,7 @@ const SUNSET_PACKAGES = {
     seating: 'shared',
     canOpenSharedDeparture: false,
     capacityReserved: 1,
+    durationMinutes: DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES,
     active: true,
   },
   sunset_two: {
@@ -30,6 +33,7 @@ const SUNSET_PACKAGES = {
     seating: 'shared',
     canOpenSharedDeparture: true,
     capacityReserved: 2,
+    durationMinutes: DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES,
     active: true,
   },
   sunset_three: {
@@ -42,6 +46,7 @@ const SUNSET_PACKAGES = {
     seating: 'shared',
     canOpenSharedDeparture: true,
     capacityReserved: 3,
+    durationMinutes: DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES,
     active: true,
   },
   sunset_family: {
@@ -54,6 +59,7 @@ const SUNSET_PACKAGES = {
     seating: 'private',
     canOpenSharedDeparture: false,
     capacityReserved: 5,
+    durationMinutes: DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES,
     active: true,
   },
   sunset_private: {
@@ -66,6 +72,7 @@ const SUNSET_PACKAGES = {
     seating: 'private',
     canOpenSharedDeparture: false,
     capacityReserved: 5,
+    durationMinutes: DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES,
     active: true,
   },
 };

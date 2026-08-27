@@ -24,6 +24,7 @@ function runPackageLookupTests() {
   const solo = getRocketLaunchPackage('rocket_solo');
   assert.strictEqual(solo.guestCount, 1);
   assert.strictEqual(solo.priceCents, 10000);
+  assert.strictEqual(solo.durationMinutes, 60);
 
   const duo = getRocketLaunchPackage('rocket_duo');
   assert.strictEqual(duo.guestCount, 2);

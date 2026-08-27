@@ -30,6 +30,11 @@ import AdminGrouponReviewPanel from '../components/admin/AdminGrouponReviewPanel
 import AdminRocketDeparturePanel from '../components/admin/AdminRocketDeparturePanel';
 import { BIO_LEGACY_PRICING_LABEL } from '../lib/bioluminescencePackages';
 import { fetchActiveCaptains, type AdminCaptainListItem } from '../lib/adminCaptains';
+import {
+  CUSTOMER_CANCELLATION_FEE_FLAT_USD,
+  CUSTOMER_CANCELLATION_FEE_PERCENT,
+  CUSTOMER_REFUND_MIN_HOURS,
+} from '../lib/customerCancellationRefund';
 
 type BoatRow = { id: string; name: string; type?: string | null };
 type TimelineEvent = {
@@ -102,6 +107,27 @@ type DisputeNote = {
   admin_id: string | null;
   note_text: string;
   created_at: string;
+};
+
+type RefundQuote = {
+  kind: 'customer' | 'operator';
+  amountPaidUsd: number;
+  feeUsd: number;
+  netRefundUsd: number;
+  alreadyRefundedUsd: number;
+  remainingUsd: number;
+  hoursUntilStart: number | null;
+  customerWindowOpen: boolean;
+  feePercent: number;
+  feeFlatCents: number;
+  minHours: number;
+};
+
+type RefundPreview = {
+  ok: boolean;
+  error?: string | null;
+  paymentIntentId?: string | null;
+  quote?: RefundQuote;
 };
 
 const statusOptions = ['hold', 'pending', 'pending_verification', 'confirmed', 'ready_for_departure', 'completed', 'cancelled'];
@@ -239,6 +265,10 @@ export default function AdminBookingDetails() {
   const [evidenceLoading, setEvidenceLoading] = useState(false);
   const [exportLoading, setExportLoading] = useState<'pdf' | 'zip' | 'stripe' | null>(null);
   const [activeAction, setActiveAction] = useState<string | null>(null);
+  const [refundPreview, setRefundPreview] = useState<{ customer: RefundPreview | null; operator: RefundPreview | null }>({
+    customer: null,
+    operator: null,
+  });
   const [linkFallback, setLinkFallback] = useState<string | null>(null);
   const [updatedConfirmationPrompt, setUpdatedConfirmationPrompt] = useState(false);
   const availabilityCheckSeq = useRef(0);
@@ -273,6 +303,30 @@ export default function AdminBookingDetails() {
       );
     },
     [getAdminToken]
+  );
+
+  const refreshRefundPreview = useCallback(
+    async (bookingId: string) => {
+      try {
+        const [customerRes, operatorRes] = await Promise.all([
+          authedFetch(`/api/admin/bookings/${bookingId}/refund-preview?kind=customer`),
+          authedFetch(`/api/admin/bookings/${bookingId}/refund-preview?kind=operator`),
+        ]);
+        const customerPreview = (await customerRes.json().catch(() => ({}))) as RefundPreview;
+        const operatorPreview = (await operatorRes.json().catch(() => ({}))) as RefundPreview;
+        setRefundPreview({
+          customer: customerRes.ok
+            ? customerPreview
+            : { ok: false, error: customerPreview.error || 'Could not load refund preview.' },
+          operator: operatorRes.ok
+            ? operatorPreview
+            : { ok: false, error: operatorPreview.error || 'Could not load refund preview.' },
+        });
+      } catch {
+        setRefundPreview({ customer: null, operator: null });
+      }
+    },
+    [authedFetch]
   );
 
   const load = useCallback(async () => {
@@ -330,6 +384,7 @@ export default function AdminBookingDetails() {
       setBookingDispute(disputePayload.dispute || null);
       setDisputeNotes(Array.isArray(disputePayload.notes) ? disputePayload.notes : []);
       setDisputeNoteText('');
+      void refreshRefundPreview(id);
       const b = bookingPayload.booking;
       const times = bookingFormTimesFromIso(String(b.start_time || ''), String(b.end_time || ''));
       const resolved = times.date
@@ -380,7 +435,7 @@ export default function AdminBookingDetails() {
     } finally {
       setLoading(false);
     }
-  }, [authedFetch, id, isAdmin]);
+  }, [authedFetch, id, isAdmin, refreshRefundPreview]);
 
   const addDisputeNote = async () => {
     if (!bookingDispute?.id || !disputeNoteText.trim()) return;
@@ -698,7 +753,7 @@ export default function AdminBookingDetails() {
     if (action === 'cancel') {
       if (
         !window.confirm(
-          'Cancel this booking? The reservation will be marked cancelled but the record will remain for audit history.'
+          'Cancel this booking? The reservation will be marked cancelled but the record will remain for audit history. This does not refund the customer — use Issue refund in the Payment card if a refund is due.'
         )
       ) {
         return;
@@ -757,6 +812,39 @@ export default function AdminBookingDetails() {
     } catch (err) {
       console.error(`Booking action "${action}" failed:`, err);
       setNotice({ variant: 'error', text: describeError(err, 'Action failed.') });
+    } finally {
+      setActiveAction(null);
+    }
+  };
+
+  const issueRefund = async (kind: 'customer' | 'operator') => {
+    if (activeAction) return;
+    const preview = kind === 'customer' ? refundPreview.customer : refundPreview.operator;
+    const quote = preview?.quote;
+    if (!preview?.ok || !quote) {
+      window.alert(preview?.error || 'Refund is not available for this booking.');
+      return;
+    }
+    const title = kind === 'customer' ? 'Customer-cancellation refund' : 'Operator refund (no fee)';
+    const confirmed = window.confirm(
+      `${title}\n\nOriginal payment: $${quote.amountPaidUsd.toFixed(2)}\nProcessing/admin fee: $${quote.feeUsd.toFixed(2)}\nRefund to customer: $${quote.netRefundUsd.toFixed(2)}\nAlready refunded: $${quote.alreadyRefundedUsd.toFixed(2)}\n\nThis issues a Stripe refund and marks the booking cancelled. Continue?`
+    );
+    if (!confirmed) return;
+    setActiveAction(`refund-${kind}`);
+    try {
+      const res = await authedFetch(`/api/admin/bookings/${id}/refund`, {
+        method: 'POST',
+        body: JSON.stringify({ kind }),
+      });
+      const payload = (await res.json().catch(() => ({}))) as { error?: string; refundId?: string };
+      if (!res.ok) throw new Error(payload.error || 'Refund failed.');
+      setNotice({
+        variant: 'success',
+        text: `Refund issued (${payload.refundId || 'Stripe'}). Original $${quote.amountPaidUsd.toFixed(2)} − fee $${quote.feeUsd.toFixed(2)} = $${quote.netRefundUsd.toFixed(2)} to the customer.`,
+      });
+      await load();
+    } catch (err) {
+      setNotice({ variant: 'error', text: describeError(err, 'Refund failed.') });
     } finally {
       setActiveAction(null);
     }
@@ -1536,6 +1624,75 @@ export default function AdminBookingDetails() {
               <div>
                 <span className="font-bold">Charge:</span>{' '}
                 <AdminId value={booking.stripe_charge_id} len={14} />
+              </div>
+            </div>
+            <div className="admin-booking-no-print mt-5 border-t border-slate-200 pt-4">
+              <h3 className="text-sm font-black uppercase tracking-wide text-slate-500">Refund</h3>
+              <p className="mt-2 text-xs text-slate-500">
+                Customer cancellations {CUSTOMER_REFUND_MIN_HOURS}+ hours out deduct {CUSTOMER_CANCELLATION_FEE_PERCENT}% of
+                the original payment plus ${CUSTOMER_CANCELLATION_FEE_FLAT_USD.toFixed(2)}. Operator / weather refunds
+                return the remaining paid amount with no fee. Amounts are calculated on the server.
+              </p>
+              {refundPreview.customer?.quote || refundPreview.operator?.quote ? (
+                <div className="mt-3 space-y-1 text-sm text-slate-700">
+                  <div>
+                    <span className="font-bold">Original paid:</span> $
+                    {money((refundPreview.customer?.quote || refundPreview.operator?.quote)?.amountPaidUsd)}
+                  </div>
+                  <div>
+                    <span className="font-bold">Already refunded:</span> $
+                    {money((refundPreview.customer?.quote || refundPreview.operator?.quote)?.alreadyRefundedUsd)}
+                  </div>
+                  {refundPreview.customer?.quote ? (
+                    <>
+                      <div>
+                        <span className="font-bold">Customer fee:</span> ${money(refundPreview.customer.quote.feeUsd)}
+                      </div>
+                      <div>
+                        <span className="font-bold">Customer refund:</span> $
+                        {money(refundPreview.customer.quote.netRefundUsd)}
+                      </div>
+                    </>
+                  ) : null}
+                  {refundPreview.operator?.quote ? (
+                    <div>
+                      <span className="font-bold">Operator refund (no fee):</span> $
+                      {money(refundPreview.operator.quote.netRefundUsd)}
+                    </div>
+                  ) : null}
+                  {refundPreview.customer?.quote?.hoursUntilStart != null ? (
+                    <div>
+                      <span className="font-bold">Hours until start:</span>{' '}
+                      {refundPreview.customer.quote.hoursUntilStart.toFixed(1)}
+                    </div>
+                  ) : null}
+                </div>
+              ) : (
+                <p className="mt-3 text-sm text-slate-500">Refund preview is not available for this booking.</p>
+              )}
+              {refundPreview.customer && !refundPreview.customer.ok ? (
+                <p className="mt-2 text-xs text-amber-800">{refundPreview.customer.error}</p>
+              ) : null}
+              {refundPreview.operator && !refundPreview.operator.ok && refundPreview.operator.error !== refundPreview.customer?.error ? (
+                <p className="mt-2 text-xs text-amber-800">{refundPreview.operator.error}</p>
+              ) : null}
+              <div className="mt-3 grid gap-2">
+                <button
+                  type="button"
+                  disabled={Boolean(activeAction) || !refundPreview.customer?.ok}
+                  onClick={() => void issueRefund('customer')}
+                  className={`${actionBtnClass} bg-amber-600 text-white`}
+                >
+                  {activeAction === 'refund-customer' ? 'Issuing…' : 'Issue customer refund (with fee)'}
+                </button>
+                <button
+                  type="button"
+                  disabled={Boolean(activeAction) || !refundPreview.operator?.ok}
+                  onClick={() => void issueRefund('operator')}
+                  className={`${actionBtnClass} border border-slate-300 bg-white text-slate-900`}
+                >
+                  {activeAction === 'refund-operator' ? 'Issuing…' : 'Issue operator refund (no fee)'}
+                </button>
               </div>
             </div>
           </div>

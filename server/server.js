@@ -32,6 +32,7 @@ const captainBookingService = require('./services/captainBookingService');
 const bookingCommunications = require('./services/bookingCommunications');
 const bookingConfirmationService = require('./services/bookingConfirmationService');
 const adminBookingUpdate = require('./services/adminBookingUpdate');
+const customerCancellationRefundService = require('./services/customerCancellationRefundService');
 const bookingDateTimeRange = require('./lib/bookingDateTimeRange');
 const { isSharedCharterBooking, formatCapacityMessage } = require('./lib/sharedCharterCapacity');
 const shopService = require('./services/shopService');
@@ -4090,6 +4091,55 @@ app.patch('/api/admin/bookings/:id', async (req, res) => {
   } catch (err) {
     console.error('[admin-booking-detail:update]', err);
     return res.status(err.statusCode || 500).json({ error: err.message || 'Could not update booking.' });
+  }
+});
+
+app.get('/api/admin/bookings/:id/refund-preview', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const id = cleanText(req.params.id, 80);
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid booking id.' });
+    const kind = String(req.query.kind || 'customer').trim().toLowerCase() === 'operator' ? 'operator' : 'customer';
+    const { data: booking, error } = await supabase.from('bookings').select('*').eq('id', id).maybeSingle();
+    if (error) throw error;
+    if (!booking?.id) return res.status(404).json({ error: 'Booking not found.' });
+    const preview = await customerCancellationRefundService.previewBookingRefund({
+      stripe,
+      booking,
+      kind,
+    });
+    return res.json(preview);
+  } catch (err) {
+    console.error('[admin-booking-refund-preview]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not preview refund.' });
+  }
+});
+
+app.post('/api/admin/bookings/:id/refund', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const id = cleanText(req.params.id, 80);
+    if (!isBookingUuidParam(id)) return res.status(400).json({ error: 'Invalid booking id.' });
+    const kind = String(req.body?.kind || 'customer').trim().toLowerCase() === 'operator' ? 'operator' : 'customer';
+    const { data: booking, error } = await supabase.from('bookings').select('*').eq('id', id).maybeSingle();
+    if (error) throw error;
+    if (!booking?.id) return res.status(404).json({ error: 'Booking not found.' });
+    if (!stripe) return res.status(503).json({ error: 'Stripe is not configured.' });
+    const result = await customerCancellationRefundService.issueBookingRefund({
+      stripe,
+      supabase,
+      bookingReliability,
+      booking,
+      adminUserId: adminUser.id,
+      kind,
+    });
+    const detail = await loadAdminBookingDetail(id);
+    return res.json({ ...result, ...detail });
+  } catch (err) {
+    console.error('[admin-booking-refund]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not issue refund.' });
   }
 });
 

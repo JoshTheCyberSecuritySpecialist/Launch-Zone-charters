@@ -3,25 +3,10 @@
  * Keep aligned with src/components/booking/WaiverBlock.tsx and src/content/* policy files.
  */
 
-const WAIVER_VERSION = '1.0';
-const WAIVER_VERSION_EFFECTIVE_AT = '2026-01-01T00:00:00.000Z';
+const policy = require('./cancellationRefundPolicy');
 
-const CANCELLATION_REFUND_POLICY_TITLE = '5. Cancellation and Refund Policy';
-const CANCELLATION_REFUND_POLICY_SUBSECTIONS = [
-  { heading: '48+ Hours Before Rental', body: 'Full refund of all payments.' },
-  {
-    heading: '24–48 Hours Before Rental',
-    body: 'No refund. A credit may be issued toward a future rental at the sole discretion of Launch Zone Charters.',
-  },
-  { heading: 'Less Than 24 Hours Before Rental', body: 'No refund or credit.' },
-  { heading: 'No-Shows', body: 'Charged in full with no refund or credit.' },
-  {
-    heading: 'Weather Cancellations',
-    body: 'Weather-related cancellations are determined solely by Launch Zone Charters. If we cancel due to unsafe conditions, a refund, credit, or reschedule option may be provided at our discretion. Rain alone does not qualify for cancellation.',
-  },
-];
-const CANCELLATION_REFUND_POLICY_WAIVER_ACKNOWLEDGMENT =
-  'I acknowledge and agree to the Cancellation and Refund Policy stated above and understand that refunds, credits, or rescheduling are subject to these terms.';
+const WAIVER_VERSION = '1.1';
+const WAIVER_VERSION_EFFECTIVE_AT = '2026-08-27T00:00:00.000Z';
 
 const SECURITY_DEPOSIT_TERMS_PARAGRAPH =
   'A refundable security deposit of $300 is charged at booking and held by our payment processor (Stripe). It is refunded after the vessel is returned and inspected. The deposit may be partially or fully retained for damage, excessive cleaning, fuel discrepancies, or late return. Any deductions are limited to the actual cost of repair, replacement, or related service or labor. Pre-existing conditions are documented before departure and are not charged to you. Photos and inspection notes may be used to assess charges. Refunds are issued to the original payment method; banks typically process refunds in 5–10 business days.';
@@ -39,12 +24,7 @@ function normalizeBookingMode(raw) {
 }
 
 function buildCancellationSection() {
-  const lines = [CANCELLATION_REFUND_POLICY_TITLE];
-  for (const section of CANCELLATION_REFUND_POLICY_SUBSECTIONS) {
-    lines.push(`${section.heading}: ${section.body}`);
-  }
-  lines.push(CANCELLATION_REFUND_POLICY_WAIVER_ACKNOWLEDGMENT);
-  return lines.join('\n\n');
+  return policy.formatRefundPolicyText();
 }
 
 function buildWaiverContent(bookingMode = 'rental') {

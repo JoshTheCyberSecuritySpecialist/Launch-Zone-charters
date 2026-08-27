@@ -754,7 +754,7 @@ export default function Admin({ onNavigate }: AdminProps) {
   const handleCancelBooking = async (id: string) => {
     if (
       !window.confirm(
-        'Cancel this booking?\n\nStatus will change to Cancelled and the booking will stay on file for your records. Refunds or credits are handled separately per your policy — this button does not refund in Stripe.'
+        'Cancel this booking?\n\nStatus will change to Cancelled and the booking will stay on file for your records. This button does not refund the customer — open the booking and use Issue refund in the Payment card if a refund is due.'
       )
     ) {
       return;

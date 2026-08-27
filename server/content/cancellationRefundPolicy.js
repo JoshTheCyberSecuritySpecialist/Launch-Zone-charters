@@ -3,12 +3,14 @@
  * Keep wording aligned when policy changes.
  */
 
+const calc = require('../lib/customerCancellationRefund');
+
 const CANCELLATION_REFUND_POLICY_TITLE = '5. Cancellation and Refund Policy';
 
 const CANCELLATION_REFUND_POLICY_SUBSECTIONS = [
   {
-    heading: '48+ Hours Before Rental',
-    body: 'Full refund of all payments.',
+    heading: `${calc.CUSTOMER_REFUND_MIN_HOURS}+ Hours Before Rental`,
+    body: `Refund of the amount paid, minus the payment processing and administrative fee of ${calc.FEE_PERCENT}% of the original payment plus $${(calc.FEE_FLAT_CENTS / 100).toFixed(2)}.`,
   },
   {
     heading: '24–48 Hours Before Rental',
@@ -26,12 +28,16 @@ const CANCELLATION_REFUND_POLICY_SUBSECTIONS = [
   {
     heading: 'Weather Cancellations',
     body:
-      'Weather-related cancellations are determined solely by Launch Zone Charters. If we cancel due to unsafe conditions, a refund, credit, or reschedule option may be provided at our discretion. Rain alone does not qualify for cancellation.',
+      'Weather-related cancellations are determined solely by Launch Zone Charters. If we cancel due to unsafe conditions, a refund, credit, or reschedule option may be provided at our discretion and is not reduced by the payment processing and administrative fee. Rain alone does not qualify for cancellation.',
+  },
+  {
+    heading: 'Payment Processing and Administrative Fee',
+    body: calc.feePolicySentence(),
   },
 ];
 
 const CANCELLATION_REFUND_POLICY_WAIVER_ACKNOWLEDGMENT =
-  'I acknowledge and agree to the Cancellation and Refund Policy stated above and understand that refunds, credits, or rescheduling are subject to these terms.';
+  'I acknowledge and agree to the Cancellation and Refund Policy stated above, including that approved customer-cancellation refunds may have a payment processing and administrative fee deducted, and I understand that refunds, credits, or rescheduling are subject to these terms.';
 
 function formatRefundPolicyText() {
   const lines = [CANCELLATION_REFUND_POLICY_TITLE, ''];

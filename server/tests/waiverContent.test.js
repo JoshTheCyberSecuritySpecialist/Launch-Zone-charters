@@ -4,9 +4,11 @@ const waiverContent = require('../content/waiverContent');
 
 test('buildWaiverContent includes version and full legal sections', () => {
   const rental = waiverContent.buildWaiverContent('rental');
-  assert.match(rental, /Version 1\.0/);
+  assert.match(rental, /Version 1\.1/);
   assert.match(rental, /Assumption of Risk/);
   assert.match(rental, /Security deposit/);
+  assert.match(rental, /payment processing and administrative fee/);
+  assert.match(rental, /2\.9%/);
 
   const charter = waiverContent.buildWaiverContent('charter');
   assert.match(charter, /captain safety instructions/i);
@@ -15,7 +17,7 @@ test('buildWaiverContent includes version and full legal sections', () => {
 
 test('waiverInsertFields returns content and version metadata', () => {
   const fields = waiverContent.waiverInsertFields('rental');
-  assert.equal(fields.waiver_version, '1.0');
+  assert.equal(fields.waiver_version, '1.1');
   assert.ok(fields.waiver_content.length > 500);
   assert.ok(fields.waiver_version_effective_at);
 });

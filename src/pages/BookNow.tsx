@@ -24,6 +24,7 @@ import {
   SECURITY_DEPOSIT_SECTION_HEADING,
   SECURITY_DEPOSIT_SHORT_SUMMARY,
 } from '../content/securityDeposit';
+import { CANCELLATION_REFUND_POLICY_CHECKOUT_NOTE } from '../content/cancellationRefundPolicy';
 import Spinner from '../components/Spinner';
 import SafeImage from '../components/SafeImage';
 import { getBoatPlaceholderImage } from '../lib/boatPlaceholders';
@@ -4147,7 +4148,8 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                           : 'Your reservation total includes the refundable $300 security deposit; remaining trip balance is due before or at pickup.'}
                       </p>
                       <p className="mt-2 text-xs text-slate-400">
-                        Cancellation terms are in our FAQ &amp; Terms; contact us if your plans change.
+                        Cancellation terms are in our FAQ &amp; Terms; contact us if your plans change.{' '}
+                        {CANCELLATION_REFUND_POLICY_CHECKOUT_NOTE}
                       </p>
                     </div>
                   </div>

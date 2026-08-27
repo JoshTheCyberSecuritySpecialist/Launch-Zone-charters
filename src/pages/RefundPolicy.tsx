@@ -2,7 +2,7 @@ import { Clock, DollarSign, CloudRain, Rocket, AlertCircle } from 'lucide-react'
 import { CANCELLATION_REFUND_POLICY_SUBSECTIONS } from '../content/cancellationRefundPolicy';
 
 export default function RefundPolicy() {
-  const [sub48, sub24, subLt24, subNoShow, subWeather] = CANCELLATION_REFUND_POLICY_SUBSECTIONS;
+  const [sub48, sub24, subLt24, subNoShow, subWeather, subFee] = CANCELLATION_REFUND_POLICY_SUBSECTIONS;
   return (
     <div className="min-h-screen bg-slate-50">
       <section className="lz-page-hero py-20">
@@ -27,7 +27,7 @@ export default function RefundPolicy() {
                   <div>
                     <h3 className="text-xl font-bold text-green-900 mb-2">{sub48.heading}</h3>
                     <p className="text-green-800 mb-3">
-                      <strong>Full refund</strong>
+                      <strong>Refund minus processing/admin fee</strong>
                     </p>
                     <p className="text-green-700">{sub48.body}</p>
                   </div>
@@ -87,6 +87,16 @@ export default function RefundPolicy() {
                     Your safety is our priority.
                   </p>
                 </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-xl shadow-lg p-8 mb-8">
+            <div className="flex items-start space-x-4 mb-6">
+              <DollarSign className="h-10 w-10 text-amber-600 flex-shrink-0" />
+              <div>
+                <h2 className="text-2xl font-bold text-slate-900 mb-4">{subFee.heading}</h2>
+                <p className="text-slate-600 leading-relaxed">{subFee.body}</p>
               </div>
             </div>
           </div>

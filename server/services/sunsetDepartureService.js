@@ -1,6 +1,6 @@
 /**
  * Sunset shared departures:
- * - sunset_two may open a shared departure (immediately confirmed).
+ * - sunset_two and sunset_three may open a shared departure (immediately confirmed).
  * - sunset_solo may only join a paid, open shared sunset departure.
  * Unpaid checkout holds do not count as joinable.
  */
@@ -30,7 +30,7 @@ const PAID_SHARED_STATUSES = new Set([
 const PAID_PAYMENT_STATUSES = new Set(['paid', 'deposit_paid']);
 
 const SOLO_NO_DEPARTURE_MESSAGE =
-  'No shared sunset departure is open for this time yet. You can choose another shared departure, book Sunset for Two, or book a private sunset experience.';
+  'No shared sunset departure is open for this time yet. You can choose another shared departure, book Sunset for Two or Three, or book a private sunset experience.';
 
 function normalizeSunsetCharterType(charterType) {
   const t = String(charterType || '').trim().toLowerCase();

@@ -36,6 +36,11 @@ function runPackageLookupTests() {
   assert.strictEqual(two.guestCount, 2);
   assert.strictEqual(two.priceCents, 8999);
 
+  const three = getBioluminescencePackage('bio_three');
+  assert.strictEqual(three.guestCount, 3);
+  assert.strictEqual(three.priceCents, 13499);
+  assert.strictEqual(three.regularPriceCents, 18000);
+
   const four = getBioluminescencePackage('bio_four');
   assert.strictEqual(four.guestCount, 4);
   assert.strictEqual(four.priceCents, 17999);
@@ -61,6 +66,23 @@ function runTamperingTests() {
   });
   assert.strictEqual(mismatch.ok, false);
 
+  const threeOk = validateDirectBioPackageCheckout({
+    charterType: 'bio',
+    pricingPackageId: 'bio_three',
+    passengerCountFromClient: 3,
+    bookingSource: 'website',
+  });
+  assert.strictEqual(threeOk.ok, true);
+  assert.strictEqual(threeOk.passengerCount, 3);
+
+  const threeMismatch = validateDirectBioPackageCheckout({
+    charterType: 'bio',
+    pricingPackageId: 'bio_three',
+    passengerCountFromClient: 2,
+    bookingSource: 'website',
+  });
+  assert.strictEqual(threeMismatch.ok, false);
+
   const soloMismatch = validateDirectBioPackageCheckout({
     charterType: 'bio',
     pricingPackageId: 'bio_two',
@@ -85,6 +107,13 @@ function runStripeTotalsTests() {
 
   const twoTotals = bioPackageExpectedTotals(getBioluminescencePackage('bio_two'));
   assert.strictEqual(Math.round(twoTotals.amountDueToday * 100), 8999);
+
+  const threeTotals = bioPackageExpectedTotals(getBioluminescencePackage('bio_three'));
+  assert.strictEqual(Math.round(threeTotals.amountDueToday * 100), 13499);
+  assert.strictEqual(
+    stripeLineItemNameForBioPackage(getBioluminescencePackage('bio_three')),
+    'Bioluminescence Night Tour — 3 Guests'
+  );
 
   const fourTotals = bioPackageExpectedTotals(getBioluminescencePackage('bio_four'));
   assert.strictEqual(Math.round(fourTotals.amountDueToday * 100), 17999);

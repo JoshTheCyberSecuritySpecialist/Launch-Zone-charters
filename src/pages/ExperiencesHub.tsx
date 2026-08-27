@@ -78,7 +78,7 @@ function ExperienceCard({ entry }: { entry: ExperienceCatalogEntry }) {
       <h2 className="mt-3 font-display text-xl font-bold text-white">{entry.publicName}</h2>
       <p className="mt-2 text-sm text-slate-300">{entry.tagline}</p>
       {entry.id === 'bio' ? (
-        <p className="mt-2 text-sm font-semibold text-cyan-100/90">Packages available for one, two, or four guests.</p>
+        <p className="mt-2 text-sm font-semibold text-cyan-100/90">Packages available for one, two, three, or four guests.</p>
       ) : null}
       {entry.wildlifeDisclaimer ? (
         <p className="mt-2 text-xs text-slate-400">{entry.wildlifeDisclaimer}</p>

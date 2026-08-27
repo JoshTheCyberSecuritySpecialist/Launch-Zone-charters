@@ -2,7 +2,7 @@
  * Authoritative direct-booking Sunset & Wildlife packages.
  * Prices are integer cents only — never trust browser-supplied amounts.
  *
- * Shared openers: sunset_two only (exactly $140).
+ * Shared openers: sunset_two and sunset_three.
  * Shared joiners: sunset_solo only (cannot open a departure).
  * Exclusive: sunset_family and sunset_private.
  */
@@ -30,6 +30,18 @@ const SUNSET_PACKAGES = {
     seating: 'shared',
     canOpenSharedDeparture: true,
     capacityReserved: 2,
+    active: true,
+  },
+  sunset_three: {
+    id: 'sunset_three',
+    name: 'Sunset for Three',
+    guestCount: 3,
+    maxGuests: 3,
+    standardValueCents: 24000,
+    priceCents: 21000,
+    seating: 'shared',
+    canOpenSharedDeparture: true,
+    capacityReserved: 3,
     active: true,
   },
   sunset_family: {

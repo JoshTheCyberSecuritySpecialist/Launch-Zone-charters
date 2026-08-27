@@ -29,6 +29,12 @@ function runPackageLookupTests() {
   assert.strictEqual(duo.guestCount, 2);
   assert.strictEqual(duo.priceCents, 19000);
 
+  const three = getRocketLaunchPackage('rocket_three');
+  assert.strictEqual(three.guestCount, 3);
+  assert.strictEqual(three.priceCents, 28000);
+  assert.strictEqual(three.seating, 'shared');
+  assert.strictEqual(three.capacityReserved, 3);
+
   const priv = getRocketLaunchPackage('rocket_private');
   assert.strictEqual(priv.priceCents, 45000);
   assert.strictEqual(priv.seating, 'private');
@@ -54,6 +60,24 @@ function runTamperingTests() {
     bookingSource: 'website',
   });
   assert.strictEqual(mismatch.ok, false);
+
+  const threeOk = validateDirectRocketPackageCheckout({
+    charterType: 'rocket',
+    pricingPackageId: 'rocket_three',
+    passengerCountFromClient: 3,
+    bookingSource: 'website',
+  });
+  assert.strictEqual(threeOk.ok, true);
+  assert.strictEqual(threeOk.passengerCount, 3);
+  assert.strictEqual(threeOk.charterVariant, 'shared');
+
+  const threeMismatch = validateDirectRocketPackageCheckout({
+    charterType: 'rocket',
+    pricingPackageId: 'rocket_three',
+    passengerCountFromClient: 2,
+    bookingSource: 'website',
+  });
+  assert.strictEqual(threeMismatch.ok, false);
 
   const missing = validateDirectRocketPackageCheckout({
     charterType: 'rocket',
@@ -95,6 +119,13 @@ function runStripeTotalsTests() {
 
   const duoTotals = rocketPackageExpectedTotals(getRocketLaunchPackage('rocket_duo'), 2);
   assert.strictEqual(Math.round(duoTotals.amountDueToday * 100), 19000);
+
+  const threeTotals = rocketPackageExpectedTotals(getRocketLaunchPackage('rocket_three'), 3);
+  assert.strictEqual(Math.round(threeTotals.amountDueToday * 100), 28000);
+  assert.strictEqual(
+    stripeLineItemNameForRocketPackage(getRocketLaunchPackage('rocket_three')),
+    'Rocket Launch for Three — 3 Guests'
+  );
 
   const privateTotals = rocketPackageExpectedTotals(getRocketLaunchPackage('rocket_private'), 4);
   assert.strictEqual(Math.round(privateTotals.amountDueToday * 100), 45000);

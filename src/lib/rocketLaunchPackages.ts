@@ -3,7 +3,7 @@
  * Checkout amounts and guest counts are enforced on the server — never send prices in URLs.
  */
 
-export type RocketPackageId = 'rocket_solo' | 'rocket_duo' | 'rocket_private';
+export type RocketPackageId = 'rocket_solo' | 'rocket_duo' | 'rocket_three' | 'rocket_private';
 
 export type RocketPackageDisplay = {
   id: RocketPackageId;
@@ -46,6 +46,17 @@ export const ROCKET_PACKAGE_DISPLAY: RocketPackageDisplay[] = [
     included: ['Captain included', 'Fuel included', 'Shared departure · 2 seats'],
   },
   {
+    id: 'rocket_three',
+    cardTitle: 'Rocket Launch for Three',
+    guestCount: 3,
+    directPriceUsd: 280,
+    perGuestUsd: 280 / 3,
+    seating: 'shared',
+    badge: null,
+    ctaLabel: 'Select Three-Guest Package',
+    included: ['Captain included', 'Fuel included', 'Shared departure · 3 seats'],
+  },
+  {
     id: 'rocket_private',
     cardTitle: 'Private Rocket Launch Charter',
     guestCount: 5,
@@ -85,7 +96,7 @@ export const ROCKET_SHARED_CHARTER_DISCLOSURE =
   'Your seats are reserved on a shared rocket launch charter. This trip requires a minimum number of booked guests before the departure is fully confirmed. If the minimum is not reached, Launch Zone Charters will contact you regarding your available options.';
 
 export const ROCKET_DUO_EXTRA_DISCLOSURE =
-  'Your two seats are reserved, but additional guests may still be required before the charter can operate.';
+  'Your seats are reserved, but additional guests may still be required before the charter can operate.';
 
 export const ROCKET_PRIVATE_CHARTER_DESCRIPTION =
   'Reserve the entire boat for your group of up to 5 guests. No shared-charter minimum applies.';

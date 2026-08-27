@@ -42,6 +42,12 @@ function runPackageLookupTests() {
   assert.strictEqual(two.canOpenSharedDeparture, true);
   assert.strictEqual(sunsetPackageSavingsCents(two), 2000);
 
+  const three = getSunsetPackage('sunset_three');
+  assert.strictEqual(three.priceCents, 21000);
+  assert.strictEqual(three.guestCount, 3);
+  assert.strictEqual(three.canOpenSharedDeparture, true);
+  assert.strictEqual(sunsetPackageSavingsCents(three), 3000);
+
   const family = getSunsetPackage('sunset_family');
   assert.strictEqual(family.priceCents, 25000);
   assert.strictEqual(family.maxGuests, 5);
@@ -82,6 +88,24 @@ function runGuestRuleTests() {
     bookingSource: 'website',
   });
   assert.strictEqual(twoBad.ok, false);
+
+  const threeOk = validateDirectSunsetPackageCheckout({
+    charterType: 'sunset',
+    pricingPackageId: 'sunset_three',
+    passengerCountFromClient: 3,
+    bookingSource: 'website',
+  });
+  assert.strictEqual(threeOk.ok, true);
+  assert.strictEqual(threeOk.passengerCount, 3);
+  assert.strictEqual(threeOk.charterVariant, 'shared');
+
+  const threeBad = validateDirectSunsetPackageCheckout({
+    charterType: 'sunset',
+    pricingPackageId: 'sunset_three',
+    passengerCountFromClient: 2,
+    bookingSource: 'website',
+  });
+  assert.strictEqual(threeBad.ok, false);
 
   const family1 = validateDirectSunsetPackageCheckout({
     charterType: 'sunset',
@@ -148,6 +172,8 @@ function runFixedPriceTests() {
   assert.strictEqual(Math.round(solo.amountDueToday * 100), 7500);
   const two = sunsetPackageExpectedTotals(getSunsetPackage('sunset_two'), 2);
   assert.strictEqual(Math.round(two.amountDueToday * 100), 14000);
+  const three = sunsetPackageExpectedTotals(getSunsetPackage('sunset_three'), 3);
+  assert.strictEqual(Math.round(three.amountDueToday * 100), 21000);
 }
 
 function runTamperTests() {
@@ -171,6 +197,7 @@ function runTamperTests() {
   const fields = sunsetPackageBookingFields(getSunsetPackage('sunset_solo'), 1);
   assert.strictEqual(fields.final_amount_cents, 7500);
   assert.strictEqual(stripeLineItemNameForSunsetPackage(getSunsetPackage('sunset_solo')), 'Sunset Solo Seat — 1 Guest');
+  assert.strictEqual(stripeLineItemNameForSunsetPackage(getSunsetPackage('sunset_three')), 'Sunset for Three — 3 Guests');
 }
 
 function runJoinableDepartureTests() {

@@ -13,6 +13,7 @@ const { getBioluminescencePackage } = require('../config/bioluminescencePackages
 const GUESTS = {
   solo: getBioluminescencePackage('bio_solo').guestCount,
   two: getBioluminescencePackage('bio_two').guestCount,
+  three: getBioluminescencePackage('bio_three').guestCount,
   four: getBioluminescencePackage('bio_four').guestCount,
 };
 
@@ -51,6 +52,10 @@ function run() {
 
   assertCap([row('four', GUESTS.four)], GUESTS.solo, true, 'four + solo');
   assertCap([row('four', GUESTS.four)], GUESTS.two, false, 'four + two rejected');
+  assertCap([row('four', GUESTS.four)], GUESTS.three, false, 'four + three rejected');
+  assertCap([row('two', GUESTS.two)], GUESTS.three, true, 'two + three');
+  assertCap([row('three', GUESTS.three)], GUESTS.two, true, 'three + two');
+  assertCap([row('three', GUESTS.three), row('two', GUESTS.two)], GUESTS.solo, false, 'three + two full');
   assertCap(
     [row('t1', GUESTS.two)],
     GUESTS.two,

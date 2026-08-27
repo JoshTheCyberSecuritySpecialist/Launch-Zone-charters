@@ -292,7 +292,7 @@ export default function BioluminescentTours({ onNavigate }: BioluminescentToursP
               className="mt-2 text-xs font-normal leading-relaxed text-white/85 sm:text-[0.8125rem]"
               style={{ textShadow: '0 1px 8px rgba(0,0,0,0.65), 0 0 1px rgba(0,0,0,0.9)' }}
             >
-              Choose a package for one, two, or four guests. Captain and fuel included. {CHARTER_GUEST_LIMIT_LABEL}.
+              Choose a package for one, two, three, or four guests. Captain and fuel included. {CHARTER_GUEST_LIMIT_LABEL}.
             </p>
             <div className="mt-6 flex flex-col items-center gap-4 md:mt-7 md:gap-5">
               <div className="max-w-xl space-y-2">
@@ -337,7 +337,7 @@ export default function BioluminescentTours({ onNavigate }: BioluminescentToursP
             Choose Your Group Size
           </h2>
           <p className="mx-auto mt-3 max-w-2xl text-center text-sm text-slate-400 md:text-base">
-            Guest packages for 1, 2, or 4 people — not boat selection. Launch Zone assigns your vessel.{' '}
+            Guest packages for 1, 2, 3, or 4 people — not boat selection. Launch Zone assigns your vessel.{' '}
             {BIO_PACKAGE_PRICING_DISCLAIMER}
           </p>
           <ul className="mx-auto mt-4 max-w-xl list-inside list-disc text-left text-sm text-slate-400 md:text-center md:list-none md:space-y-1">

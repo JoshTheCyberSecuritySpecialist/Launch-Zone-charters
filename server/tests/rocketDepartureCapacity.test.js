@@ -49,12 +49,18 @@ function runDepartureSummaryTests() {
 function runCapacityReservedTests() {
   const solo = rocketRow({ id: 'a', pricing_package_id: 'rocket_solo', guest_count: 1 });
   const duo = rocketRow({ id: 'b', pricing_package_id: 'rocket_duo', guest_count: 2 });
+  const three = rocketRow({ id: 'c', pricing_package_id: 'rocket_three', guest_count: 3 });
   assert.strictEqual(capacitySeatsForRow(solo), 1);
   assert.strictEqual(capacitySeatsForRow(duo), 2);
+  assert.strictEqual(capacitySeatsForRow(three), 3);
 
   const total = sumRocketDepartureGuestTotal([solo, duo]);
   assert.strictEqual(total, 3);
   assert.strictEqual(computeDepartureStatusFromGuestTotal(total), DEPARTURE_STATUS.AWAITING_MINIMUM);
+
+  const threePlusDuo = sumRocketDepartureGuestTotal([three, duo]);
+  assert.strictEqual(threePlusDuo, 5);
+  assert.strictEqual(computeDepartureStatusFromGuestTotal(threePlusDuo), DEPARTURE_STATUS.DEPARTURE_FULL);
 }
 
 function runSharedCapacityCombinationTests() {
@@ -71,12 +77,19 @@ function runSharedCapacityCombinationTests() {
 
   const solo = getRocketLaunchPackage('rocket_solo').guestCount;
   const duo = getRocketLaunchPackage('rocket_duo').guestCount;
+  const three = getRocketLaunchPackage('rocket_three').guestCount;
 
   let result = evaluateSharedCharterCapacity({
     overlappingBookings: [row('a', 'rocket_solo', solo), row('b', 'rocket_solo', solo)],
     proposedGuestCount: duo,
   });
   assert.strictEqual(result.available, true, 'solo+solo accepts duo');
+
+  result = evaluateSharedCharterCapacity({
+    overlappingBookings: [row('a', 'rocket_duo', duo)],
+    proposedGuestCount: three,
+  });
+  assert.strictEqual(result.available, true, 'duo accepts three');
 
   result = evaluateSharedCharterCapacity({
     overlappingBookings: [

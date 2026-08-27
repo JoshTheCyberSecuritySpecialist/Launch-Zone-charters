@@ -19,6 +19,7 @@ function stripeCentsFromPackageId(id) {
 function run() {
   assert.strictEqual(stripeCentsFromPackageId('bio_solo'), 4499);
   assert.strictEqual(stripeCentsFromPackageId('bio_two'), 8999);
+  assert.strictEqual(stripeCentsFromPackageId('bio_three'), 13499);
   assert.strictEqual(stripeCentsFromPackageId('bio_four'), 17999);
 
   const twoPkg = getBioluminescencePackage('bio_two');

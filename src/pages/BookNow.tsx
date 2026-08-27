@@ -3151,7 +3151,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                                   {SUNSET_SOLO_JOIN_DISCLOSURE}
                                 </p>
                               ) : null}
-                              {selectedSunsetPackage.id === 'sunset_two' ? (
+                              {selectedSunsetPackage.canOpenSharedDeparture ? (
                                 <p className="mt-3 text-sm leading-relaxed text-amber-100/90">
                                   {SUNSET_TWO_OPENER_DISCLOSURE}
                                 </p>

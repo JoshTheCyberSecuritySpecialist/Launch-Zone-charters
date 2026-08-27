@@ -157,6 +157,9 @@ function stripeLineItemNameForRocketPackage(pkg) {
   if (pkg.id === 'rocket_duo') {
     return 'Rocket Launch Duo — 2 Guests';
   }
+  if (pkg.id === 'rocket_three') {
+    return 'Rocket Launch for Three — 3 Guests';
+  }
   return 'Private Rocket Launch Charter — Up to 5 Guests';
 }
 

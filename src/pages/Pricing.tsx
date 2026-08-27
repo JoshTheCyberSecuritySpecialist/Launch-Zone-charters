@@ -44,6 +44,13 @@ function siteOrigin(): string {
   return DEFAULT_SITE_ORIGIN;
 }
 
+const BIO_GUEST_COUNT_WORDS = ['', 'solo', 'two', 'three', 'four', 'five'] as const;
+
+function bioPackageBookCta(guestCount: number): string {
+  if (guestCount === 1) return 'solo';
+  return `for ${BIO_GUEST_COUNT_WORDS[guestCount] || guestCount}`;
+}
+
 export default function Pricing({ onNavigate }: PricingProps) {
   const canonicalUrl = useMemo(() => `${siteOrigin()}/pricing`, []);
   const [standardRates, setStandardRates] = useState({ hourly: 70, halfDay: 280, fullDay: 450 });
@@ -177,11 +184,11 @@ export default function Pricing({ onNavigate }: PricingProps) {
               <h3 className="text-xl font-bold text-white">Bioluminescence package pricing</h3>
               <p className="mt-2 text-sm text-slate-400">Captain and fuel included · night tour on the Indian River Lagoon</p>
               <ul className="mt-4 space-y-3 text-sm text-slate-200">
-                {BIO_PACKAGE_DISPLAY.map((pkg) => (
+                {BIO_PACKAGE_DISPLAY.map((pkg, index) => (
                   <li
                     key={pkg.id}
                     className={`flex flex-wrap items-center justify-between gap-2 ${
-                      pkg.id === 'bio_four' ? 'pb-1' : 'border-b border-white/10 pb-3'
+                      index === BIO_PACKAGE_DISPLAY.length - 1 ? 'pb-1' : 'border-b border-white/10 pb-3'
                     }`}
                   >
                     <span>
@@ -218,7 +225,7 @@ export default function Pricing({ onNavigate }: PricingProps) {
                         : 'lz-btn-secondary justify-center text-center text-sm'
                     }
                   >
-                    Book {pkg.guestCount === 1 ? 'solo' : pkg.guestCount === 2 ? 'for two' : 'for four'} —{' '}
+                    Book {bioPackageBookCta(pkg.guestCount)} —{' '}
                     {formatBioPackagePriceUsd(pkg.directPriceUsd)}
                   </Link>
                 ))}

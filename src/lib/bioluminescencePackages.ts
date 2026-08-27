@@ -6,7 +6,7 @@
 import { DateTime } from 'luxon';
 import { BUSINESS_TZ } from './bookingDateTimeRange';
 
-export type BioPackageId = 'bio_solo' | 'bio_two' | 'bio_four';
+export type BioPackageId = 'bio_solo' | 'bio_two' | 'bio_three' | 'bio_four';
 
 export const BIO_DIRECT_PROMOTION = {
   enabled: true,
@@ -57,6 +57,16 @@ const BIO_PACKAGE_BASE: readonly BioPackageBase[] = [
     promotionalPriceCents: 8999,
     badge: null,
     ctaLabel: 'Select Tour for Two',
+    included: ['Captain included', 'Fuel included'],
+  },
+  {
+    id: 'bio_three',
+    cardTitle: 'Glow Tour for Three',
+    guestCount: 3,
+    regularPriceCents: 18000,
+    promotionalPriceCents: 13499,
+    badge: null,
+    ctaLabel: 'Select Tour for Three',
     included: ['Captain included', 'Fuel included'],
   },
   {

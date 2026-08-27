@@ -47,6 +47,7 @@ function runActivePromotionTests() {
     assert.strictEqual(isBioDirectPromotionActive(), true);
     assert.strictEqual(stripeCentsFromPackageId('bio_solo'), 4499);
     assert.strictEqual(stripeCentsFromPackageId('bio_two'), 8999);
+    assert.strictEqual(stripeCentsFromPackageId('bio_three'), 13499);
     assert.strictEqual(stripeCentsFromPackageId('bio_four'), 17999);
 
     const two = getBioluminescencePackage('bio_two');
@@ -69,6 +70,7 @@ function runInactivePromotionTests() {
     assert.strictEqual(isBioDirectPromotionActive(), false);
     assert.strictEqual(stripeCentsFromPackageId('bio_solo'), 5850);
     assert.strictEqual(stripeCentsFromPackageId('bio_two'), 12000);
+    assert.strictEqual(stripeCentsFromPackageId('bio_three'), 18000);
     assert.strictEqual(stripeCentsFromPackageId('bio_four'), 24000);
 
     const solo = getBioluminescencePackage('bio_solo');

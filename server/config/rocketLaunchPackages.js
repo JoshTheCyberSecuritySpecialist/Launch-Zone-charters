@@ -22,6 +22,15 @@ const ROCKET_LAUNCH_PACKAGES = {
     capacityReserved: 2,
     active: true,
   },
+  rocket_three: {
+    id: 'rocket_three',
+    name: 'Rocket Launch for Three',
+    guestCount: 3,
+    priceCents: 28000,
+    seating: 'shared',
+    capacityReserved: 3,
+    active: true,
+  },
   rocket_private: {
     id: 'rocket_private',
     name: 'Private Rocket Launch Charter',

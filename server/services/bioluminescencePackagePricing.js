@@ -48,7 +48,7 @@ function validateDirectBioPackageCheckout({
     return {
       ok: false,
       error:
-        'Select a bioluminescence package (solo, two guests, or four guests) to continue.',
+        'Select a bioluminescence package (solo, two, three, or four guests) to continue.',
     };
   }
 

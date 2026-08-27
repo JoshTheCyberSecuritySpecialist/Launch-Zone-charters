@@ -54,7 +54,7 @@ export const EXPERIENCE_BIO: CaptainLedExperience = {
   icon: '✨',
   bookCta: 'View Bioluminescence Packages',
   exploreCta: 'Explore Bioluminescence Tours',
-  tagline: 'From $44.99 · packages for one, two, or four guests.',
+  tagline: 'From $44.99 · packages for one, two, three, or four guests.',
 };
 
 export const EXPERIENCE_ROCKET: CaptainLedExperience = {

@@ -3,7 +3,7 @@
  * Checkout amounts and guest counts are enforced on the server — never send prices in URLs.
  */
 
-export type SunsetPackageId = 'sunset_solo' | 'sunset_two' | 'sunset_family' | 'sunset_private';
+export type SunsetPackageId = 'sunset_solo' | 'sunset_two' | 'sunset_three' | 'sunset_family' | 'sunset_private';
 
 export type SunsetPackageDisplay = {
   id: SunsetPackageId;
@@ -46,6 +46,19 @@ export const SUNSET_PACKAGE_DISPLAY: SunsetPackageDisplay[] = [
     canOpenSharedDeparture: true,
     badge: null,
     ctaLabel: 'Select Sunset for Two',
+    included: ['Captain included', 'Fuel included', 'Opens a shared sunset departure'],
+  },
+  {
+    id: 'sunset_three',
+    cardTitle: 'Sunset for Three',
+    guestCount: 3,
+    directPriceUsd: 210,
+    listPriceUsd: 240,
+    perGuestUsd: 70,
+    seating: 'shared',
+    canOpenSharedDeparture: true,
+    badge: null,
+    ctaLabel: 'Select Sunset for Three',
     included: ['Captain included', 'Fuel included', 'Opens a shared sunset departure'],
   },
   {
@@ -101,13 +114,13 @@ export function sunsetBookingUrl(packageId: SunsetPackageId): string {
 }
 
 export const SUNSET_SOLO_NO_DEPARTURE_MESSAGE =
-  'No shared sunset departure is open for this time yet. You can choose another shared departure, book Sunset for Two, or book a private sunset experience.';
+  'No shared sunset departure is open for this time yet. You can choose another shared departure, book Sunset for Two or Three, or book a private sunset experience.';
 
 export const SUNSET_SOLO_JOIN_DISCLOSURE =
-  'A solo seat can only join a shared sunset that is already booked and paid. If none is open, book Sunset for Two to start a departure, or choose a private sunset.';
+  'A solo seat can only join a shared sunset that is already booked and paid. If none is open, book Sunset for Two or Three to start a departure, or choose a private sunset.';
 
 export const SUNSET_TWO_OPENER_DISCLOSURE =
-  'Sunset for Two opens a shared departure. Remaining seats may be booked by other guests until the boat is full.';
+  'This package opens a shared sunset departure. Remaining seats may be booked by other guests until the boat is full.';
 
 export const SUNSET_PRIVATE_CHARTER_DESCRIPTION =
   'Reserve the boat for your group. This is a private sunset — other guests will not join your trip.';

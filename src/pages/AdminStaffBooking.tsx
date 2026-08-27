@@ -1092,7 +1092,7 @@ export default function AdminStaffBooking() {
                     ))}
                   </select>
                   <span className="mt-1 block text-xs font-normal text-slate-500">
-                    Solo $100 · Duo $190 · Private $450 — shared packages lock guest count.
+                    Solo $100 · Duo $190 · Three $280 · Private $450 — shared packages lock guest count.
                   </span>
                   {selectedRocketPackage?.seating === 'shared' ? (
                     <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-950">
@@ -1123,11 +1123,11 @@ export default function AdminStaffBooking() {
                     ))}
                   </select>
                   <span className="mt-1 block text-xs font-normal text-slate-500">
-                    Solo $75 join-only · Two $140 opener · Family $250 · Private $325
+                    Solo $75 join-only · Two $140 opener · Three $210 opener · Family $250 · Private $325
                   </span>
                   {selectedSunsetPackage?.id === 'sunset_solo' ? (
                     <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-950">
-                      Solo can only join a paid shared sunset already opened by Sunset for Two. Unpaid holds are not
+                      Solo can only join a paid shared sunset already opened by Sunset for Two or Three. Unpaid holds are not
                       joinable.
                     </p>
                   ) : null}
@@ -1190,10 +1190,10 @@ export default function AdminStaffBooking() {
                     ))}
                   </select>
                   <span className="mt-1 block text-xs font-normal text-slate-500">
-                    Solo {formatBioPackagePriceUsd(BIO_STAFF_PACKAGE_OPTIONS.find((p) => p.id === 'bio_solo')?.directPriceUsd ?? 0)} · Two {formatBioPackagePriceUsd(BIO_STAFF_PACKAGE_OPTIONS.find((p) => p.id === 'bio_two')?.directPriceUsd ?? 0)} · Four {formatBioPackagePriceUsd(BIO_STAFF_PACKAGE_OPTIONS.find((p) => p.id === 'bio_four')?.directPriceUsd ?? 0)} — guest count is set by the package.
+                    Solo {formatBioPackagePriceUsd(BIO_STAFF_PACKAGE_OPTIONS.find((p) => p.id === 'bio_solo')?.directPriceUsd ?? 0)} · Two {formatBioPackagePriceUsd(BIO_STAFF_PACKAGE_OPTIONS.find((p) => p.id === 'bio_two')?.directPriceUsd ?? 0)} · Three {formatBioPackagePriceUsd(BIO_STAFF_PACKAGE_OPTIONS.find((p) => p.id === 'bio_three')?.directPriceUsd ?? 0)} · Four {formatBioPackagePriceUsd(BIO_STAFF_PACKAGE_OPTIONS.find((p) => p.id === 'bio_four')?.directPriceUsd ?? 0)} — guest count is set by the package.
                   </span>
                   <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-950">
-                    Direct packages cover 1, 2, or 4 guests only. For five guests, use a general captain charter with
+                    Direct packages cover 1, 2, 3, or 4 guests. For five guests, use a general captain charter with
                     manual pricing or contact ops — do not combine package prices.
                   </p>
                 </label>

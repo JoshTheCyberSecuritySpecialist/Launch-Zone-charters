@@ -37,6 +37,15 @@ const BIOLUMINESCENCE_PACKAGES = {
     badge: null,
     active: true,
   },
+  bio_three: {
+    id: 'bio_three',
+    name: 'Bioluminescence Tour for Three',
+    guestCount: 3,
+    regularPriceCents: 18000,
+    promotionalPriceCents: 13499,
+    badge: null,
+    active: true,
+  },
   bio_four: {
     id: 'bio_four',
     name: 'Bioluminescence Tour for Four',

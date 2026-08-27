@@ -1,6 +1,7 @@
 import { Check } from 'lucide-react';
 import {
   ROCKET_DUO_EXTRA_DISCLOSURE,
+  ROCKET_LAUNCH_MIN_GUESTS,
   ROCKET_PACKAGE_DISPLAY,
   ROCKET_PRIVATE_CHARTER_DESCRIPTION,
   ROCKET_SHARED_CHARTER_DISCLOSURE,
@@ -27,7 +28,9 @@ function SharedDisclosure({ pkg }: { pkg: RocketPackageDisplay }) {
         Shared charter — minimum guests required
       </p>
       <p className="mt-2">{ROCKET_SHARED_CHARTER_DISCLOSURE}</p>
-      {pkg.id === 'rocket_duo' ? <p className="mt-2 font-medium text-amber-100/90">{ROCKET_DUO_EXTRA_DISCLOSURE}</p> : null}
+      {pkg.seating === 'shared' && pkg.guestCount < ROCKET_LAUNCH_MIN_GUESTS ? (
+        <p className="mt-2 font-medium text-amber-100/90">{ROCKET_DUO_EXTRA_DISCLOSURE}</p>
+      ) : null}
     </div>
   );
 }
@@ -98,7 +101,7 @@ function PackageCard({
 
 export default function RocketLaunchPackageCards({ selectedPackageId, onSelect }: Props) {
   return (
-    <div className="grid gap-4 sm:gap-5 md:grid-cols-3">
+    <div className="grid gap-4 sm:grid-cols-2 sm:gap-5 xl:grid-cols-4">
       {ROCKET_PACKAGE_DISPLAY.map((pkg) => (
         <PackageCard
           key={pkg.id}

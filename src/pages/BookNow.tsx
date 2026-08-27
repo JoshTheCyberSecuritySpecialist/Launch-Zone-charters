@@ -463,7 +463,11 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                 : booking.charterType === 'sunset'
                   ? 'sunset_cruise'
                   : 'rocket_launch',
-          charterVariant: booking.charterVariant === 'shared' ? 'shared' : 'private',
+          charterVariant: booking.charterType === 'bio' || booking.charterType === 'night_bio'
+            ? 'shared'
+            : booking.charterVariant === 'shared'
+              ? 'shared'
+              : 'private',
           passengerCount: Number(booking.passengerCount || prev.passengerCount),
           fullName: String(customer.full_name || prev.fullName),
           email: String(customer.email || prev.email),
@@ -576,6 +580,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
         next.time = '20:00';
         next.charterType = 'night_bio';
         next.hours = 1;
+        next.charterVariant = 'shared';
       }
       if (charterType === 'rocket' || charterType === 'rocket_launch') {
         setBookingMode('charter');
@@ -602,6 +607,9 @@ export default function BookNow({ onNavigate }: BookNowProps) {
         if (pkgFromUrl) {
           setBioPackageId(pkgFromUrl.id);
           next.passengerCount = pkgFromUrl.guestCount;
+          next.charterVariant = 'shared';
+        } else {
+          next.charterVariant = 'shared';
         }
       }
       const packageOnly = getBioPackageDisplay(searchParams.get('package'));
@@ -615,6 +623,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
         next.hours = 1;
         setBioPackageId(packageOnly.id);
         next.passengerCount = packageOnly.guestCount;
+        next.charterVariant = 'shared';
       }
       const rocketPackageOnly = getRocketPackageDisplay(searchParams.get('package'));
       if (!charterType && rocketPackageOnly && mode !== 'rental' && !packageOnly) {
@@ -890,6 +899,13 @@ export default function BookNow({ onNavigate }: BookNowProps) {
       );
       return q.toString();
     }
+    if (isBioPackageFlow && selectedBioPackage) {
+      const q = new URLSearchParams();
+      q.set('package', selectedBioPackage.id);
+      q.set('charterVariant', 'shared');
+      q.set('passengerCount', String(selectedBioPackage.guestCount));
+      return q.toString();
+    }
     return '';
   })();
   /** Charters use a ticket-style checkout and skip rental add-ons. */
@@ -914,7 +930,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
       setRocketPackageId(null);
       setSunsetPackageId(null);
       setRocketSharedMinimumAcknowledged(false);
-      setBookingData((prev) => ({ ...prev, passengerCount: pkg.guestCount }));
+      setBookingData((prev) => ({ ...prev, passengerCount: pkg.guestCount, charterVariant: 'shared' }));
       setSearchParams(
         (prev) => {
           const next = new URLSearchParams(prev);
@@ -1075,7 +1091,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
           ...prev,
           captainIncluded: true,
           charterType: 'night_bio',
-          charterVariant: 'private',
+          charterVariant: 'shared',
           passengerCount: pkg?.guestCount ?? prev.passengerCount ?? 1,
           rentalType: 'half_day',
           hours: 1,
@@ -2103,7 +2119,9 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                       ? selectedSunsetPackage.seating === 'private'
                         ? 'private'
                         : 'shared'
-                      : bookingData.charterVariant
+                      : isBioPackageFlow
+                        ? 'shared'
+                        : bookingData.charterVariant
                   : null,
               passengerCount:
                 bookingMode === 'charter'

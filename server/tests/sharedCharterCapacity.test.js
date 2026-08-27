@@ -13,6 +13,7 @@ function bookingRow(partial) {
     booking_type: partial.booking_type || 'charter',
     charter_type: partial.charter_type || 'captain_charter',
     charter_seating: partial.charter_seating ?? 'shared',
+    pricing_package_id: partial.pricing_package_id || null,
     boat_id: partial.boat_id || 'boat-1',
     guest_count: partial.guest_count,
     start_time: partial.start_time,
@@ -40,14 +41,42 @@ function run() {
     isSharedCharterBooking(
       bookingRow({ charter_type: 'bio', charter_seating: 'private', boat_id: 'boat-1' })
     ),
-    false
+    true
   );
+
+  assert.strictEqual(
+    isSharedCharterBooking(
+      bookingRow({
+        charter_type: 'captain_charter',
+        charter_seating: 'private',
+        pricing_package_id: 'bio_two',
+        boat_id: 'boat-1',
+      })
+    ),
+    true
+  );
+
+  let result = evaluateSharedCharterCapacity({
+    overlappingBookings: [
+      bookingRow({
+        id: 'private-tagged-bio',
+        charter_type: 'bio',
+        charter_seating: 'private',
+        guest_count: 2,
+        start_time: friStart,
+        end_time: friEnd,
+      }),
+    ],
+    proposedGuestCount: 2,
+  });
+  assert.strictEqual(result.available, true);
+  assert.strictEqual(result.reason, null);
 
   const fiveSingles = Array.from({ length: 5 }, (_, i) =>
     bookingRow({ id: String(i + 1), guest_count: 1, start_time: friStart, end_time: friEnd })
   );
   const fourSingles = fiveSingles.slice(0, 4);
-  let result = evaluateSharedCharterCapacity({
+  result = evaluateSharedCharterCapacity({
     overlappingBookings: fourSingles,
     proposedGuestCount: 1,
   });

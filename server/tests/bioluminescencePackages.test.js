@@ -103,6 +103,7 @@ function runTamperingTests() {
 function runStripeTotalsTests() {
   const soloTotals = bioPackageExpectedTotals(getBioluminescencePackage('bio_solo'));
   assert.strictEqual(Math.round(soloTotals.amountDueToday * 100), 4499);
+  assert.strictEqual(soloTotals.charterVariant, 'shared');
   assert.strictEqual(stripeLineItemNameForBioPackage(getBioluminescencePackage('bio_solo')), 'Solo Bioluminescence Night Tour — 1 Guest');
 
   const twoTotals = bioPackageExpectedTotals(getBioluminescencePackage('bio_two'));

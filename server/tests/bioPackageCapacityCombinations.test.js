@@ -23,7 +23,7 @@ function bookingRow(partial) {
     status: partial.status || 'confirmed',
     booking_type: 'charter',
     charter_type: 'bio',
-    charter_seating: 'shared',
+    charter_seating: partial.charter_seating ?? 'shared',
     boat_id: 'boat-1',
     guest_count: partial.guest_count,
     start_time: partial.start_time,
@@ -51,6 +51,20 @@ function run() {
   };
 
   assertCap([row('four', GUESTS.four)], GUESTS.solo, true, 'four + solo');
+  assertCap(
+    [
+      bookingRow({
+        id: 'private-tagged-four',
+        guest_count: GUESTS.four,
+        start_time: start,
+        end_time: end,
+        charter_seating: 'private',
+      }),
+    ],
+    GUESTS.solo,
+    true,
+    'private-tagged four-pack still leaves a solo seat'
+  );
   assertCap([row('four', GUESTS.four)], GUESTS.two, false, 'four + two rejected');
   assertCap([row('four', GUESTS.four)], GUESTS.three, false, 'four + three rejected');
   assertCap([row('two', GUESTS.two)], GUESTS.three, true, 'two + three');

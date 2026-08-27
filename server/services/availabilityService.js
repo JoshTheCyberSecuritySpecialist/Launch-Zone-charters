@@ -15,6 +15,7 @@ const {
 const {
   evaluateSharedCharterCapacity,
   formatCapacityMessage,
+  isBioluminescenceCharter,
   normalizeCharterSeating,
 } = require('../lib/sharedCharterCapacity');
 const boatCapacityService = require('./boatCapacityService');
@@ -561,17 +562,26 @@ function isSharedCharterBookingRequest({
   bioPackage = null,
   rocketPackage = null,
   sunsetPackage = null,
+  pricingPackageId = null,
 } = {}) {
+  if (
+    isBioluminescenceCharter({
+      charterType,
+      bioPackage,
+      pricingPackageId,
+    })
+  ) {
+    return true;
+  }
   const seating = normalizeCharterSeating(charterSeating);
   if (seating === 'private') return false;
   if (seating === 'shared') return true;
   const variant = String(charterVariant || '').trim().toLowerCase();
   if (variant === 'private') return false;
   if (variant === 'shared') return true;
-  if (bioPackage) return true;
   if (rocketPackage) return String(rocketPackage.seating || '').trim().toLowerCase() === 'shared';
   if (sunsetPackage) return String(sunsetPackage.seating || '').trim().toLowerCase() === 'shared';
-  return normalizeCharterType(charterType) === 'bio';
+  return false;
 }
 
 function resolveCharterSeatingForInsert(input) {

@@ -84,6 +84,7 @@ function bioPackageExpectedTotals(pkg) {
     durationHours: 1,
     totalPrice,
     amountDueToday: totalPrice,
+    charterVariant: 'shared',
     bioPackage: pkg,
   };
 }

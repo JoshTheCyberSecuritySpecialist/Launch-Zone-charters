@@ -6337,10 +6337,12 @@ app.get('/api/availability/times', async (req, res) => {
 function parseCharterAvailabilityOptions(query = {}) {
   const { getRocketLaunchPackage } = require('./config/rocketLaunchPackages');
   const { getSunsetPackage } = require('./config/sunsetPackages');
+  const { getBioluminescencePackage, BIOLUMINESCENCE_PACKAGE_IDS } = require('./config/bioluminescencePackages');
   const rocketLaunchAvailability = require('./services/rocketLaunchAvailabilityService');
   const packageId = cleanText(query.package || query.pricing_package_id || query.pricingPackageId, 80);
   let rocketPackage = null;
   let sunsetPackage = null;
+  let bioPackage = null;
   if (packageId && rocketLaunchPackagePricing.isRocketLaunchPackageId(packageId)) {
     try {
       rocketPackage = getRocketLaunchPackage(packageId);
@@ -6353,17 +6355,26 @@ function parseCharterAvailabilityOptions(query = {}) {
     } catch {
       sunsetPackage = null;
     }
+  } else if (packageId && BIOLUMINESCENCE_PACKAGE_IDS.includes(packageId)) {
+    try {
+      bioPackage = getBioluminescencePackage(packageId);
+    } catch {
+      bioPackage = null;
+    }
   }
   const charterVariant = cleanText(query.charterVariant || query.charter_variant, 20) || undefined;
   const passengerCountRaw = Number(query.passengerCount ?? query.passenger_count ?? query.guests);
-  const passengerCount = Number.isFinite(passengerCountRaw)
+  let passengerCount = Number.isFinite(passengerCountRaw)
     ? Math.max(1, Math.round(passengerCountRaw))
     : undefined;
+  if (passengerCount == null && bioPackage?.guestCount) {
+    passengerCount = Number(bioPackage.guestCount);
+  }
   const launchIdRaw = cleanText(query.launchId || query.launch_id, 120);
   const launchId = launchIdRaw
     ? rocketLaunchAvailability.parseLaunchIdFromExternalRef(launchIdRaw) || launchIdRaw
     : undefined;
-  return { rocketPackage, sunsetPackage, charterVariant, passengerCount, launchId };
+  return { rocketPackage, sunsetPackage, bioPackage, charterVariant, passengerCount, launchId };
 }
 
 function extractRocketLaunchIdFromBooking(booking = {}) {
@@ -6409,7 +6420,11 @@ app.get('/api/availability/charter', async (req, res) => {
       captainNights: '7 nights/week 5:00 PM – 4:00 AM',
       from,
       to,
-      packageId: availabilityOptions.rocketPackage?.id || availabilityOptions.sunsetPackage?.id || null,
+      packageId:
+        availabilityOptions.rocketPackage?.id ||
+        availabilityOptions.sunsetPackage?.id ||
+        availabilityOptions.bioPackage?.id ||
+        null,
       dates,
     });
   } catch (err) {
@@ -6440,7 +6455,11 @@ app.get('/api/availability/charter/times', async (req, res) => {
       timezone: availabilityService.BUSINESS_TZ,
       durationHours: 1,
       minLeadHours: availabilityService.MIN_LEAD_HOURS,
-      packageId: availabilityOptions.rocketPackage?.id || availabilityOptions.sunsetPackage?.id || null,
+      packageId:
+        availabilityOptions.rocketPackage?.id ||
+        availabilityOptions.sunsetPackage?.id ||
+        availabilityOptions.bioPackage?.id ||
+        null,
       schedulingMode:
         cleanText(charterType, 40).toLowerCase() === 'rocket' ||
         cleanText(charterType, 40).toLowerCase() === 'rocket_launch'

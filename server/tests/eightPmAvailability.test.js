@@ -81,8 +81,8 @@ function run() {
       charterType: 'bio',
       charterVariant: 'private',
     }),
-    false,
-    'private bio variant is exclusive'
+    true,
+    'bio stays shared even if the client sends a private variant'
   );
   assert.strictEqual(
     availabilityService.resolveCharterSeatingForInsert({ charterType: 'bio' }),
@@ -93,7 +93,7 @@ function run() {
       charterType: 'bio',
       charterVariant: 'private',
     }),
-    'private'
+    'shared'
   );
 
   let cap = evaluateSharedCharterCapacity({
@@ -201,10 +201,10 @@ function run() {
 
   assert.strictEqual(
     isSharedCharterBooking(
-      bookingRow({ charter_type: 'bio', charter_seating: null, boat_id: 'boat-1' })
+      bookingRow({ charter_type: 'bio', charter_seating: 'private', boat_id: 'boat-1' })
     ),
     true,
-    'bio without explicit seating is shared'
+    'bio tagged private is still shared seating'
   );
 
   const overnightStart = localToUtcIso('2026-07-02T23:00');

@@ -45,13 +45,33 @@ function staffBookingTypeUsesSharedSeating(bookingType) {
   return String(bookingType || '').trim().toLowerCase() === 'captain_charter';
 }
 
+/**
+ * Bioluminescence is always shared seating. Client `private` / mis-tagged rows
+ * must not exclusive-lock the boat — remaining seats stay bookable.
+ */
+function isBioluminescenceCharter({
+  charterType = null,
+  charter_type = null,
+  pricingPackageId = null,
+  pricing_package_id = null,
+  bioPackage = null,
+} = {}) {
+  if (bioPackage) return true;
+  const type = String(charterType || charter_type || '').trim().toLowerCase();
+  if (type === 'bio' || type === 'night_bio') return true;
+  const pkg = String(
+    pricingPackageId || pricing_package_id || (bioPackage && bioPackage.id) || ''
+  ).trim();
+  return pkg.startsWith('bio_');
+}
+
 function isSharedCharterBooking(row) {
   if (!row || String(row.booking_type || '') !== 'charter') return false;
+  if (isBioluminescenceCharter(row)) return true;
   const seating = normalizeCharterSeating(row.charter_seating);
   if (seating === 'shared') return true;
   if (seating === 'private') return false;
   const charterType = String(row.charter_type || '').trim().toLowerCase();
-  if (charterType === 'bio') return true;
   if (charterType === 'rocket' || charterType === 'rocket_launch') {
     const packageId = String(row.pricing_package_id || '').trim();
     if (packageId === 'rocket_private') return false;
@@ -190,6 +210,7 @@ module.exports = {
   evaluateSharedCharterCapacity,
   formatCapacityMessage,
   intervalsOverlap,
+  isBioluminescenceCharter,
   isExclusiveBoatBooking,
   isSharedCharterBooking,
   normalizeCharterSeating,

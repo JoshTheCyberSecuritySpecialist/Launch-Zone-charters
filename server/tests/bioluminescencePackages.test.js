@@ -119,6 +119,19 @@ function runStripeTotalsTests() {
 
   const fourTotals = bioPackageExpectedTotals(getBioluminescencePackage('bio_four'));
   assert.strictEqual(Math.round(fourTotals.amountDueToday * 100), 17999);
+
+  const fourAddon = bioPackageExpectedTotals(getBioluminescencePackage('bio_four'), {
+    fifthPassengerAddon: true,
+  });
+  assert.strictEqual(Math.round(fourAddon.amountDueToday * 100), 22499);
+  const { stripeLineItemsForBioPackage } = require('../services/bioluminescencePackagePricing');
+  const items = stripeLineItemsForBioPackage(getBioluminescencePackage('bio_four'), {
+    fifthPassengerAddon: true,
+  });
+  assert.strictEqual(
+    items.reduce((sum, item) => sum + item.unit_amount, 0),
+    22499
+  );
 }
 
 function runCapacityTests() {

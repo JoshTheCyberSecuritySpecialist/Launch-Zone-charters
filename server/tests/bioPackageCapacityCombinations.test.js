@@ -51,6 +51,7 @@ function run() {
   };
 
   assertCap([row('four', GUESTS.four)], GUESTS.solo, true, 'four + solo');
+  assertCap([row('five-addon', 5)], GUESTS.solo, false, 'five-guest four-pack add-on fills the boat');
   assertCap(
     [
       bookingRow({

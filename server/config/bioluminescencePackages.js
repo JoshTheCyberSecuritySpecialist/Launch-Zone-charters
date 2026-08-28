@@ -19,6 +19,14 @@ const BIO_DIRECT_PROMOTION = {
   endsAt: null,
 };
 
+/** Four-guest package only. Never accept a client-supplied add-on amount. */
+const BIO_FIFTH_PASSENGER_ADDON_CENTS = 4500;
+const BIO_FIFTH_PASSENGER_ADDON_PACKAGE_ID = 'bio_four';
+const BIO_FIFTH_PASSENGER_NO_CAPACITY_MESSAGE =
+  'This departure does not have room for a fifth passenger.';
+const BIO_FOUR_SIDEBAR_INCLUDED_LABEL = '4 passengers included.';
+const BIO_FOUR_SIDEBAR_FIVE_LABEL = '5 passengers.';
+
 const BIOLUMINESCENCE_PACKAGES = {
   bio_solo: {
     id: 'bio_solo',
@@ -58,6 +66,7 @@ const BIOLUMINESCENCE_PACKAGES = {
     promotionalPriceCents: 17999,
     badge: 'Best Value',
     durationMinutes: DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES,
+    allowsFifthPassengerAddon: true,
     active: true,
   },
 };
@@ -115,6 +124,14 @@ function resolveBioPackageChargeCents(pkg, now) {
   return Number(pkg.regularPriceCents);
 }
 
+function bioPackageAllowsFifthPassengerAddon(pkg) {
+  if (!pkg || typeof pkg !== 'object') return false;
+  return (
+    String(pkg.id || '').trim() === BIO_FIFTH_PASSENGER_ADDON_PACKAGE_ID &&
+    pkg.allowsFifthPassengerAddon === true
+  );
+}
+
 function getBioluminescencePackage(packageId, options = {}) {
   const id = String(packageId || '').trim();
   if (!id) {
@@ -148,6 +165,12 @@ module.exports = {
   BIOLUMINESCENCE_PACKAGES,
   BIOLUMINESCENCE_PACKAGE_IDS,
   BIO_DIRECT_PROMOTION,
+  BIO_FIFTH_PASSENGER_ADDON_CENTS,
+  BIO_FIFTH_PASSENGER_ADDON_PACKAGE_ID,
+  BIO_FIFTH_PASSENGER_NO_CAPACITY_MESSAGE,
+  BIO_FOUR_SIDEBAR_INCLUDED_LABEL,
+  BIO_FOUR_SIDEBAR_FIVE_LABEL,
+  bioPackageAllowsFifthPassengerAddon,
   getBioluminescencePackage,
   isDirectBioPackagePricingEnabled,
   isBioDirectPromotionActive,

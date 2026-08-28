@@ -163,6 +163,53 @@ export const BIO_PACKAGE_PRICING_DISCLAIMER =
 
 export const BIO_LEGACY_PRICING_LABEL = 'Legacy bioluminescence pricing';
 
+/** Four-guest package only. Server charges 4500 cents — never send this as a client price. */
+export const BIO_FIFTH_PASSENGER_ADDON_CENTS = 4500;
+export const BIO_FIFTH_PASSENGER_ADDON_USD = 45;
+export const BIO_FIFTH_PASSENGER_ADDON_PACKAGE_ID: BioPackageId = 'bio_four';
+export const BIO_FIFTH_PASSENGER_NO_CAPACITY_MESSAGE =
+  'This departure does not have room for a fifth passenger.';
+export const BIO_FOUR_SIDEBAR_INCLUDED_LABEL = '4 passengers included.';
+export const BIO_FOUR_SIDEBAR_FIVE_LABEL = '5 passengers.';
+
+export function bioPackageAllowsFifthPassengerAddon(id: string | null | undefined): boolean {
+  return String(id || '').trim() === BIO_FIFTH_PASSENGER_ADDON_PACKAGE_ID;
+}
+
+export function bioFourSidebarPassengerLine(addonSelected: boolean): string {
+  return addonSelected ? BIO_FOUR_SIDEBAR_FIVE_LABEL : BIO_FOUR_SIDEBAR_INCLUDED_LABEL;
+}
+
+export function bioFourFifthPassengerFitsRemaining(remaining: number | null | undefined): boolean {
+  if (remaining == null || remaining === undefined) return true;
+  const n = Number(remaining);
+  if (!Number.isFinite(n)) return true;
+  return n >= 1;
+}
+
+export function resolveBioFourCheckoutDisplay({
+  basePriceUsd,
+  addonSelected,
+}: {
+  basePriceUsd: number;
+  addonSelected: boolean;
+}): {
+  guestCount: number;
+  addonUsd: number;
+  totalUsd: number;
+  perGuestUsdLabel: string;
+} {
+  const addonUsd = addonSelected ? BIO_FIFTH_PASSENGER_ADDON_USD : 0;
+  const guestCount = addonSelected ? 5 : 4;
+  const totalUsd = Number((Number(basePriceUsd) + addonUsd).toFixed(2));
+  return {
+    guestCount,
+    addonUsd,
+    totalUsd,
+    perGuestUsdLabel: (totalUsd / guestCount).toFixed(2),
+  };
+}
+
 /** Admin staff booking — labels must match server package prices. */
 export const BIO_STAFF_PACKAGE_OPTIONS = BIO_PACKAGE_DISPLAY.map((p) => ({
   id: p.id,

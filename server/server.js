@@ -158,6 +158,7 @@ function computeExpectedBookingTotals({
   boat,
   pricingPackageId,
   bookingSource,
+  fifthPassengerAddon,
 }) {
   const hours = Math.max(0, Number(durationHours) || 0);
   const captainFee = captainIncluded ? CAPTAIN_HOURLY * hours : 0;
@@ -171,6 +172,7 @@ function computeExpectedBookingTotals({
       pricingPackageId,
       passengerCount,
       bookingSource,
+      fifthPassengerAddon,
     });
     if (bioResolved.kind === 'package' && bioResolved.totals) {
       return bioResolved.totals;
@@ -1082,6 +1084,7 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
   let charterVariant =
     typeof booking.charterVariant === 'string' ? booking.charterVariant.trim().toLowerCase() : '';
   const pricingPackageId = bioPackagePricing.extractPricingPackageId(booking);
+  const fifthPassengerAddonRequested = bioPackagePricing.extractFifthPassengerAddonFromBooking(booking);
   const bookingSource = String(booking.bookingSource || booking.booking_source || 'website')
     .trim()
     .toLowerCase();
@@ -1099,6 +1102,7 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
         pricingPackageId,
         passengerCountFromClient: passengerCount,
         bookingSource,
+        fifthPassengerAddonFromClient: fifthPassengerAddonRequested,
       });
       if (!bioCheck.ok) {
         const err = new Error(bioCheck.error);
@@ -1196,6 +1200,7 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
     boat: boatRow,
     pricingPackageId,
     bookingSource,
+    fifthPassengerAddon: fifthPassengerAddonRequested,
   });
 
   if (
@@ -1261,6 +1266,11 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
   if (charterType) adminNotesParts.push(`Charter type: ${charterType}`);
   if (charterVariant) adminNotesParts.push(`Charter variant: ${charterVariant}`);
   adminNotesParts.push(`Passenger count: ${passengerCount}`);
+  if (expected.fifthPassengerAddon) {
+    adminNotesParts.push(
+      `Fifth passenger add-on: $${(bioPackagePricing.BIO_FIFTH_PASSENGER_ADDON_CENTS / 100).toFixed(2)}`
+    );
+  }
   if (booking.special_requests) {
     adminNotesParts.push(`Special requests: ${String(booking.special_requests).trim()}`);
   }
@@ -1372,7 +1382,9 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
     original_total: promoFields?.original_total ?? expected.totalPrice,
     final_total: promoFields?.final_total ?? expected.totalPrice,
     ...(expected.bioPackage
-      ? bioPackagePricing.bioPackageBookingFields(expected.bioPackage)
+      ? bioPackagePricing.bioPackageBookingFields(expected.bioPackage, {
+          fifthPassengerAddon: expected.fifthPassengerAddon,
+        })
       : expected.rocketPackage
         ? rocketLaunchPackagePricing.rocketPackageBookingFields(
             expected.rocketPackage,
@@ -7375,6 +7387,7 @@ app.post('/api/create-checkout-session', async (req, res) => {
     }
 
     const pricingPackageId = bioPackagePricing.extractPricingPackageId(booking);
+    const fifthPassengerAddonRequested = bioPackagePricing.extractFifthPassengerAddonFromBooking(booking);
     const bookingSource = String(booking.bookingSource || booking.booking_source || 'website')
       .trim()
       .toLowerCase();
@@ -7417,6 +7430,7 @@ app.post('/api/create-checkout-session', async (req, res) => {
           pricingPackageId,
           passengerCountFromClient: passengerCount,
           bookingSource,
+          fifthPassengerAddonFromClient: fifthPassengerAddonRequested,
         });
         if (!bioCheck.ok) {
           return res.status(400).json({ error: bioCheck.error });
@@ -7514,6 +7528,7 @@ app.post('/api/create-checkout-session', async (req, res) => {
       boat: boatRow,
       pricingPackageId,
       bookingSource,
+      fifthPassengerAddon: fifthPassengerAddonRequested,
     });
 
     const promoApplied = await applyPromoToExpectedTotals(expected, {
@@ -7653,7 +7668,14 @@ app.post('/api/create-checkout-session', async (req, res) => {
       }
     } catch (slotErr) {
       const code = slotErr.statusCode || 409;
-      return res.status(code).json({ error: slotErr.message || SLOT_TAKEN_USER_MESSAGE });
+      const fifthPassengerCapacityDenied =
+        Boolean(expected.fifthPassengerAddon) &&
+        (slotErr.code === 'charter_capacity' || /capacity|full|remaining/i.test(String(slotErr.message || '')));
+      return res.status(code).json({
+        error: fifthPassengerCapacityDenied
+          ? bioPackagePricing.BIO_FIFTH_PASSENGER_NO_CAPACITY_MESSAGE
+          : slotErr.message || SLOT_TAKEN_USER_MESSAGE,
+      });
     }
 
     const domain = String(process.env.APP_PUBLIC_URL || process.env.FRONTEND_URL || '')
@@ -7674,29 +7696,52 @@ app.post('/api/create-checkout-session', async (req, res) => {
           : 'Private Charter Booking'
         : 'Boat Rental Deposit';
     if (expected.bioPackage) {
-      lineItemName = bioPackagePricing.stripeLineItemNameForBioPackage(expected.bioPackage);
+      lineItemName = bioPackagePricing.stripeLineItemNameForBioPackage(expected.bioPackage, {
+        fifthPassengerAddon: expected.fifthPassengerAddon,
+      });
     } else if (expected.rocketPackage) {
       lineItemName = rocketLaunchPackagePricing.stripeLineItemNameForRocketPackage(expected.rocketPackage);
     } else if (expected.sunsetPackage) {
       lineItemName = sunsetPackagePricing.stripeLineItemNameForSunsetPackage(expected.sunsetPackage);
     }
 
+    const stripeLineItems = expected.bioPackage
+      ? bioPackagePricing.stripeLineItemsForBioPackage(expected.bioPackage, {
+          fifthPassengerAddon: expected.fifthPassengerAddon,
+        }).map((item) => ({
+          price_data: {
+            currency: 'usd',
+            product_data: { name: item.name },
+            unit_amount: item.unit_amount,
+          },
+          quantity: 1,
+        }))
+      : [
+          {
+            price_data: {
+              currency: 'usd',
+              product_data: {
+                name: lineItemName,
+              },
+              unit_amount: cents,
+            },
+            quantity: 1,
+          },
+        ];
+
+    const stripeLineItemsTotalCents = stripeLineItems.reduce(
+      (sum, item) => sum + Number(item.price_data.unit_amount || 0),
+      0
+    );
+    if (expected.bioPackage && stripeLineItemsTotalCents !== cents) {
+      return res.status(500).json({ error: 'Could not build checkout pricing. Please try again.' });
+    }
+
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
       mode: 'payment',
       expires_at: Math.floor((Date.now() + BOOKING_HOLD_TTL_MS) / 1000),
-      line_items: [
-        {
-          price_data: {
-            currency: 'usd',
-            product_data: {
-              name: lineItemName,
-            },
-            unit_amount: cents,
-          },
-          quantity: 1,
-        },
-      ],
+      line_items: stripeLineItems,
       success_url: `${domain}/booking-success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${domain}/booking`,
       metadata: {
@@ -7706,6 +7751,20 @@ app.post('/api/create-checkout-session', async (req, res) => {
         start_time: startTime.toISOString(),
         end_time: endTime.toISOString(),
         customer_email: String(customer.email || '').trim().toLowerCase(),
+        ...(isCharterBooking
+          ? {
+              guest_count: String(passengerCount),
+              experience: charterType || '',
+              charter_seating: String(expected.charterVariant || charterVariant || ''),
+              pricing_package_id:
+                expected.bioPackage?.id ||
+                expected.rocketPackage?.id ||
+                expected.sunsetPackage?.id ||
+                pricingPackageId ||
+                '',
+              fifth_passenger_addon: expected.fifthPassengerAddon ? 'true' : 'false',
+            }
+          : {}),
       },
     });
 
@@ -7729,6 +7788,8 @@ app.post('/api/create-checkout-session', async (req, res) => {
         pricingPackageId ||
         null,
       passengerCount: isCharterBooking ? passengerCount : booking.passengerCount,
+      fifthPassengerAddon: Boolean(expected.fifthPassengerAddon),
+      guest_count: isCharterBooking ? passengerCount : 1,
     };
 
     const captainFeeStored =
@@ -7823,7 +7884,9 @@ app.post('/api/create-checkout-session', async (req, res) => {
       original_total: promoFields?.original_total ?? expected.totalPrice,
       final_total: promoFields?.final_total ?? expected.totalPrice,
       ...(expected.bioPackage
-        ? bioPackagePricing.bioPackageBookingFields(expected.bioPackage)
+        ? bioPackagePricing.bioPackageBookingFields(expected.bioPackage, {
+            fifthPassengerAddon: expected.fifthPassengerAddon,
+          })
         : expected.rocketPackage
           ? rocketLaunchPackagePricing.rocketPackageBookingFields(
               expected.rocketPackage,

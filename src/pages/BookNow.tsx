@@ -57,8 +57,15 @@ import RocketLaunchPackageCards from '../components/booking/RocketLaunchPackageC
 import SunsetPackageCards from '../components/booking/SunsetPackageCards';
 import {
   BIO_PACKAGE_PRICING_DISCLAIMER,
+  BIO_FIFTH_PASSENGER_ADDON_USD,
+  BIO_FIFTH_PASSENGER_NO_CAPACITY_MESSAGE,
+  bioFourFifthPassengerFitsRemaining,
+  bioFourSidebarPassengerLine,
+  bioPackageAllowsFifthPassengerAddon,
+  formatBioPackagePriceUsd,
   getBioPackageDisplay,
   isDirectBioPackagePricingEnabled,
+  resolveBioFourCheckoutDisplay,
   type BioPackageId,
 } from '../lib/bioluminescencePackages';
 import {
@@ -311,6 +318,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     launchId: '',
   });
   const [bioPackageId, setBioPackageId] = useState<BioPackageId | null>(null);
+  const [bioFifthPassengerAddon, setBioFifthPassengerAddon] = useState(false);
   const [rocketPackageId, setRocketPackageId] = useState<RocketPackageId | null>(null);
   const [sunsetPackageId, setSunsetPackageId] = useState<SunsetPackageId | null>(null);
   const [rocketSharedMinimumAcknowledged, setRocketSharedMinimumAcknowledged] = useState(false);
@@ -479,6 +487,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
           specialRequests: String(booking.special_requests || prev.specialRequests),
           slotStartIso: String(booking.start_time || prev.slotStartIso),
         }));
+        setBioFifthPassengerAddon(Boolean(booking.fifthPassengerAddon || booking.fifth_passenger_addon));
         setWaiverData((prev) => ({
           ...prev,
           agreed: Boolean(waiver.accepted || prev.agreed),
@@ -840,6 +849,20 @@ export default function BookNow({ onNavigate }: BookNowProps) {
   const selectedBioPackage = isBioPackageFlow
     ? getBioPackageDisplay(bioPackageId) ?? bioPackageFromUrl
     : null;
+  const bioFourAddonEligible = Boolean(
+    selectedBioPackage && bioPackageAllowsFifthPassengerAddon(selectedBioPackage.id)
+  );
+  const selectedCharterSlot =
+    timeSlots.find((slot) => slot.start === bookingData.slotStartIso) || null;
+  const bioFourFifthPassengerFits =
+    timesManualFallback || bioFourFifthPassengerFitsRemaining(selectedCharterSlot?.capacity?.remaining);
+  const bioFourCheckoutDisplay =
+    selectedBioPackage && bioPackageAllowsFifthPassengerAddon(selectedBioPackage.id)
+      ? resolveBioFourCheckoutDisplay({
+          basePriceUsd: selectedBioPackage.directPriceUsd,
+          addonSelected: bioFifthPassengerAddon,
+        })
+      : null;
   const isRocketCharter = bookingMode === 'charter' && bookingData.charterType === 'rocket_launch';
   const rocketPackageFromUrl = getRocketPackageDisplay(searchParams.get('package'));
   const serverRocketPackagesOn = serverDirectRocketPackagesEnabled === true;
@@ -929,11 +952,30 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     return SUNSET_SHARED_PER_PERSON;
   })();
 
+  useEffect(() => {
+    if (!bioFourAddonEligible) {
+      if (bioFifthPassengerAddon) setBioFifthPassengerAddon(false);
+      return;
+    }
+    if (bioFifthPassengerAddon && !bioFourFifthPassengerFits) {
+      setBioFifthPassengerAddon(false);
+      setBookingData((prev) => ({ ...prev, passengerCount: 4 }));
+    }
+  }, [
+    bioFourAddonEligible,
+    bioFifthPassengerAddon,
+    bioFourFifthPassengerFits,
+    bookingData.date,
+    bookingData.slotStartIso,
+    bookingData.time,
+  ]);
+
   const handleSelectBioPackage = useCallback(
     (id: BioPackageId) => {
       const pkg = getBioPackageDisplay(id);
       if (!pkg) return;
       setBioPackageId(id);
+      setBioFifthPassengerAddon(false);
       setRocketPackageId(null);
       setSunsetPackageId(null);
       setRocketSharedMinimumAcknowledged(false);
@@ -958,6 +1000,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
       if (!pkg) return;
       setRocketPackageId(id);
       setBioPackageId(null);
+      setBioFifthPassengerAddon(false);
       setSunsetPackageId(null);
       setRocketSharedMinimumAcknowledged(false);
       setBookingData((prev) => ({
@@ -985,6 +1028,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
       if (!pkg) return;
       setSunsetPackageId(id);
       setBioPackageId(null);
+      setBioFifthPassengerAddon(false);
       setRocketPackageId(null);
       setRocketSharedMinimumAcknowledged(false);
       setBookingData((prev) => ({
@@ -1093,6 +1137,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
         const pkg = getBioPackageDisplay(bioPackageId);
         setRocketPackageId(null);
         setSunsetPackageId(null);
+        setBioFifthPassengerAddon(false);
         setRocketSharedMinimumAcknowledged(false);
         setBookingData((prev) => ({
           ...prev,
@@ -1652,7 +1697,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
           total: 0,
         };
       }
-      const total = selectedBioPackage.directPriceUsd;
+      const total = bioFourCheckoutDisplay ? bioFourCheckoutDisplay.totalUsd : selectedBioPackage.directPriceUsd;
       return {
         basePrice: total,
         captainFee: 0,
@@ -1768,8 +1813,12 @@ export default function BookNow({ onNavigate }: BookNowProps) {
   const charterPd =
     isBioPackageFlow && selectedBioPackage
       ? {
-          primary: `${selectedBioPackage.cardTitle} — $${selectedBioPackage.directPriceUsd.toFixed(2)}`,
-          sub: `${selectedBioPackage.guestCount} guest${selectedBioPackage.guestCount === 1 ? '' : 's'} · ${formatCharterDurationLabel(selectedBioPackage.durationMinutes)} · $${selectedBioPackage.perGuestUsd} per guest`,
+          primary: `${selectedBioPackage.cardTitle} — $${(bioFourCheckoutDisplay?.totalUsd ?? selectedBioPackage.directPriceUsd).toFixed(2)}`,
+          sub: `${bioFourCheckoutDisplay ? bioFourCheckoutDisplay.guestCount : selectedBioPackage.guestCount} guest${
+            (bioFourCheckoutDisplay ? bioFourCheckoutDisplay.guestCount : selectedBioPackage.guestCount) === 1 ? '' : 's'
+          } · ${formatCharterDurationLabel(selectedBioPackage.durationMinutes)} · $${
+            bioFourCheckoutDisplay ? bioFourCheckoutDisplay.perGuestUsdLabel : selectedBioPackage.perGuestUsd.toFixed(2)
+          } per guest`,
         }
       : isRocketPackageFlow && selectedRocketPackage
         ? {
@@ -2131,6 +2180,13 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                         : bookingData.charterVariant
                   : null,
               passengerCount:
+                bookingMode === 'charter'
+                  ? Math.min(CHARTER_MAX_PASSENGERS, Math.max(CHARTER_MIN_PASSENGERS, Number(bookingData.passengerCount) || 1))
+                  : 1,
+              fifthPassengerAddon: Boolean(
+                isBioPackageFlow && bioFourAddonEligible && bioFifthPassengerAddon
+              ),
+              guest_count:
                 bookingMode === 'charter'
                   ? Math.min(CHARTER_MAX_PASSENGERS, Math.max(CHARTER_MIN_PASSENGERS, Number(bookingData.passengerCount) || 1))
                   : 1,
@@ -3058,11 +3114,53 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                               </p>
                               <p className="mt-2 text-lg font-bold text-white">{selectedBioPackage.cardTitle}</p>
                               <p className="mt-1 text-sm text-slate-300">
-                                {selectedBioPackage.guestCount} guest
-                                {selectedBioPackage.guestCount === 1 ? '' : 's'} · $
-                                {selectedBioPackage.directPriceUsd.toFixed(2)} total · $
-                                {selectedBioPackage.perGuestUsd} per guest
+                                {bioFourCheckoutDisplay
+                                  ? `${bioFourCheckoutDisplay.guestCount} guest${
+                                      bioFourCheckoutDisplay.guestCount === 1 ? '' : 's'
+                                    } · $${bioFourCheckoutDisplay.totalUsd.toFixed(2)} total · $${
+                                      bioFourCheckoutDisplay.perGuestUsdLabel
+                                    } per guest`
+                                  : `${selectedBioPackage.guestCount} guest${
+                                      selectedBioPackage.guestCount === 1 ? '' : 's'
+                                    } · $${selectedBioPackage.directPriceUsd.toFixed(2)} total · $${selectedBioPackage.perGuestUsd.toFixed(2)} per guest`}
                               </p>
+                              {bioFourAddonEligible ? (
+                                <div className="mt-4 rounded-xl border border-white/15 bg-slate-950/70 p-4">
+                                  <label
+                                    className={`flex items-start gap-3 ${
+                                      bioFourFifthPassengerFits ? 'cursor-pointer' : 'cursor-not-allowed opacity-75'
+                                    }`}
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      className="mt-1 h-5 w-5 shrink-0 rounded border-white/40 bg-slate-900 text-[var(--lz-cta)] focus:ring-[var(--lz-cta)]"
+                                      checked={bioFifthPassengerAddon}
+                                      disabled={!bioFourFifthPassengerFits}
+                                      onChange={(e) => {
+                                        const on = e.target.checked && bioFourFifthPassengerFits;
+                                        setBioFifthPassengerAddon(on);
+                                        setBookingData((prev) => ({
+                                          ...prev,
+                                          passengerCount: on ? 5 : 4,
+                                        }));
+                                      }}
+                                    />
+                                    <span>
+                                      <span className="block text-base font-semibold text-white">
+                                        Add a 5th passenger — {formatBioPackagePriceUsd(BIO_FIFTH_PASSENGER_ADDON_USD)}
+                                      </span>
+                                      <span className="mt-1 block text-sm text-slate-400">
+                                        Maximum capacity: 5 guests
+                                      </span>
+                                    </span>
+                                  </label>
+                                  {!bioFourFifthPassengerFits ? (
+                                    <p className="mt-3 text-sm text-amber-200">
+                                      {BIO_FIFTH_PASSENGER_NO_CAPACITY_MESSAGE}
+                                    </p>
+                                  ) : null}
+                                </div>
+                              ) : null}
                               <button
                                 type="button"
                                 className="mt-4 text-sm font-semibold text-cyan-300 underline underline-offset-2"
@@ -3072,16 +3170,6 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                               </button>
                             </div>
                           )}
-                          <p className="text-sm text-slate-400">
-                            Need to book for five guests?{' '}
-                            <a
-                              href="tel:8035421761"
-                              className="font-semibold text-cyan-300 underline underline-offset-2"
-                            >
-                              Contact our booking team
-                            </a>
-                            .
-                          </p>
                         </div>
                       ) : isRocketPackageFlow ? (
                         <div className="space-y-4">
@@ -4000,13 +4088,37 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                     <div className="my-3 border-t border-white/10"></div>
                     {bookingMode === 'charter' ? (
                       isBioPackageFlow && selectedBioPackage ? (
-                        <div className="flex justify-between text-slate-300">
-                          <span>
-                            {selectedBioPackage.cardTitle} ({selectedBioPackage.guestCount} guest
-                            {selectedBioPackage.guestCount === 1 ? '' : 's'})
-                          </span>
-                          <span>${pricing.total.toFixed(2)}</span>
-                        </div>
+                        <>
+                          <div className="flex justify-between text-slate-300">
+                            <span>
+                              {selectedBioPackage.cardTitle} (
+                              {bioFourCheckoutDisplay
+                                ? `${bioFourCheckoutDisplay.guestCount} guest${
+                                    bioFourCheckoutDisplay.guestCount === 1 ? '' : 's'
+                                  }`
+                                : `${selectedBioPackage.guestCount} guest${
+                                    selectedBioPackage.guestCount === 1 ? '' : 's'
+                                  }`}
+                              )
+                            </span>
+                            <span>${selectedBioPackage.directPriceUsd.toFixed(2)}</span>
+                          </div>
+                          {bioFourCheckoutDisplay?.addonUsd ? (
+                            <div className="flex justify-between text-slate-300">
+                              <span>5th passenger add-on</span>
+                              <span>${bioFourCheckoutDisplay.addonUsd.toFixed(2)}</span>
+                            </div>
+                          ) : null}
+                          <div className="flex justify-between text-slate-400 text-sm">
+                            <span>Per person</span>
+                            <span>
+                              $
+                              {bioFourCheckoutDisplay
+                                ? bioFourCheckoutDisplay.perGuestUsdLabel
+                                : selectedBioPackage.perGuestUsd.toFixed(2)}
+                            </span>
+                          </div>
+                        </>
                       ) : isRocketPackageFlow && selectedRocketPackage ? (
                         <div className="flex justify-between text-slate-300">
                           <span>
@@ -4280,7 +4392,13 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                   <span className="text-emerald-400" aria-hidden>
                     ✔
                   </span>
-                  Up to {CHARTER_MAX_PASSENGERS} passengers
+                  {isBioPackageFlow && selectedBioPackage
+                    ? bioFourAddonEligible
+                      ? bioFourSidebarPassengerLine(bioFifthPassengerAddon)
+                      : `${selectedBioPackage.guestCount} guest${
+                          selectedBioPackage.guestCount === 1 ? '' : 's'
+                        } included`
+                    : `Up to ${CHARTER_MAX_PASSENGERS} passengers`}
                 </li>
                 <li className="flex gap-2">
                   <span className="text-emerald-400" aria-hidden>

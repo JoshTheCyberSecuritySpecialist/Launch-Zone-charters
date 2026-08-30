@@ -7,6 +7,9 @@ export interface WeatherSample {
   windSpeed: number;
   rainProbability: number;
   cloudCover: number;
+  temperatureF?: number | null;
+  gustMph?: number | null;
+  weatherCode?: number | null;
 }
 
 export interface LaunchDayAgg {
@@ -131,66 +134,6 @@ export function tierFromScore(score: number): Tier {
   if (score >= 8) return 'best';
   if (score >= 5) return 'good';
   return 'poor';
-}
-
-function skyToken(c: number): string {
-  if (c < 35) return '✨ Clear';
-  if (c < 70) return '✨ Fair';
-  return '⚠️ Cloudy';
-}
-
-function windToken(w: number): string {
-  if (w > 20) return '⚠️ Windy';
-  if (w > 15) return '💨 Breezy';
-  if (w > 10) return '💨 Light wind';
-  return '💨 Low wind';
-}
-
-function waterToken(w: number): string {
-  if (w > 20) return '🌊 Choppy';
-  if (w > 12) return '🌊 Light chop';
-  return '🌊 Calm';
-}
-
-function rainNote(p: number): string | null {
-  if (p > 35) return '⚠️ Wet';
-  return null;
-}
-
-/** Priority: launch → sky/wind → water / caution */
-export function buildTileLines(
-  w: WeatherSample,
-  launch: LaunchDayAgg,
-  opts: { isTopPick: boolean }
-): { line1: string; line2: string } {
-  const sky = skyToken(w.cloudCover);
-  const wind = windToken(w.windSpeed);
-  const water = waterToken(w.windSpeed);
-  const wet = rainNote(w.rainProbability);
-
-  if (launch.hasLaunch) {
-    const rocketDay = launch.nightLaunch ? '🚀🌙 Night' : '🚀 Day';
-    const first = `${rocketDay} • ${sky}`;
-    let second = wet ? `${wind} • ${wet}` : `${wind} • ${water}`;
-    if (launch.certainty === 'tbd') {
-      second = `⚠️ TBC • ${wet ? wind : water}`;
-    }
-    if (opts.isTopPick) {
-      return { line1: '⭐ Best', line2: first };
-    }
-    return { line1: first, line2: second };
-  }
-
-  const a = `${sky} • ${water}`;
-  let b = wet ? `${wind} • ${wet}` : wind;
-  if (w.windSpeed > 20 || w.rainProbability > 35) {
-    b = `⚠️ Rough • ${wind}`;
-  }
-
-  if (opts.isTopPick) {
-    return { line1: '⭐ Best', line2: a };
-  }
-  return { line1: a, line2: b };
 }
 
 export function buildInsightReason(w: WeatherSample, launch: LaunchDayAgg): string {

@@ -42,7 +42,6 @@ import {
 } from '../lib/charterCapacity';
 import { beginAsyncInteraction, measurePaintAfterSync, wrapSyncClick } from '../lib/clickPerf';
 import {
-  buildTileLines,
   fetchLaunchDaysSpaceCoast,
   mergeCalendarInsights,
   nextSevenDayKeys,
@@ -52,6 +51,8 @@ import {
   type CalendarDayAvailability,
   type DayInsight,
 } from '../lib/calendarInsights';
+import CalendarWeatherDayButton from '../components/booking/CalendarWeatherDayButton';
+import CalendarSelectedDateWeather from '../components/booking/CalendarSelectedDateWeather';
 import type { RentalLocation } from '../lib/grouponPromo';
 import WaiverBlock, { waiverFormComplete } from '../components/booking/WaiverBlock';
 import BioluminescencePackageCards from '../components/booking/BioluminescencePackageCards';
@@ -364,6 +365,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
   const [availCalendarLoading, setAvailCalendarLoading] = useState(false);
   const [conditionsByDate, setConditionsByDate] = useState<Map<string, DayInsight>>(new Map());
   const [conditionsLoading, setConditionsLoading] = useState(false);
+  const [conditionsUpdatedAt, setConditionsUpdatedAt] = useState<Date | null>(null);
   const [timeSlots, setTimeSlots] = useState<ApiTimeSlot[]>([]);
   const [availTimesLoading, setAvailTimesLoading] = useState(false);
   const [timesManualFallback, setTimesManualFallback] = useState(false);
@@ -375,6 +377,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
   const checkoutFormRef = useRef<HTMLFormElement | null>(null);
   const bookingFormRef = useRef<HTMLDivElement | null>(null);
   const availabilityCalendarRef = useRef<HTMLDivElement | null>(null);
+  const selectedDateWeatherRef = useRef<HTMLDivElement | null>(null);
   const resumeLoadedRef = useRef(false);
   const [rentalDurationPreset, setRentalDurationPreset] = useState<RentalDurationPreset | null>(null);
   const [rentalLocation, setRentalLocation] = useState<RentalLocation>(null);
@@ -382,7 +385,11 @@ export default function BookNow({ onNavigate }: BookNowProps) {
   const [promoValidation, setPromoValidation] = useState<PromoValidationResult | null>(null);
   const [promoMessage, setPromoMessage] = useState<{ variant: 'success' | 'error'; text: string } | null>(null);
   const [promoApplying, setPromoApplying] = useState(false);
-  const calendarIntelCacheRef = useRef<{ expiresAt: number; data: Map<string, DayInsight> } | null>(null);
+  const calendarIntelCacheRef = useRef<{
+    expiresAt: number;
+    data: Map<string, DayInsight>;
+    fetchedAt: number;
+  } | null>(null);
 
   const buoyInsurancePagePath = useMemo(() => {
     const params = new URLSearchParams();
@@ -1313,6 +1320,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     const cached = calendarIntelCacheRef.current;
     if (cached && cached.expiresAt > Date.now()) {
       setConditionsByDate(new Map(cached.data));
+      setConditionsUpdatedAt(new Date(cached.fetchedAt));
       return;
     }
 
@@ -1327,9 +1335,12 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     const q = new URLSearchParams({
       latitude: String(FORECAST_LAT),
       longitude: String(FORECAST_LON),
-      daily: 'wind_speed_10m_max,precipitation_probability_max,cloud_cover_mean',
+      daily:
+        'wind_speed_10m_max,precipitation_probability_max,cloud_cover_mean,weather_code,temperature_2m_max,wind_gusts_10m_max',
       forecast_days: '7',
       timezone: 'America/New_York',
+      wind_speed_unit: 'mph',
+      temperature_unit: 'fahrenheit',
     });
 
     const weatherFetch = fetch(`https://api.open-meteo.com/v1/forecast?${q.toString()}`, {
@@ -1340,6 +1351,9 @@ export default function BookNow({ onNavigate }: BookNowProps) {
         wind_speed_10m_max?: number[];
         precipitation_probability_max?: number[];
         cloud_cover_mean?: number[];
+        weather_code?: number[];
+        temperature_2m_max?: number[];
+        wind_gusts_10m_max?: number[];
       };
     }>;
 
@@ -1349,27 +1363,49 @@ export default function BookNow({ onNavigate }: BookNowProps) {
         const wind = data.daily?.wind_speed_10m_max || [];
         const rain = data.daily?.precipitation_probability_max || [];
         const clouds = data.daily?.cloud_cover_mean || [];
+        const codes = data.daily?.weather_code || [];
+        const temps = data.daily?.temperature_2m_max || [];
+        const gusts = data.daily?.wind_gusts_10m_max || [];
         const weatherMap = new Map<
           string,
-          { windSpeed: number; rainProbability: number; cloudCover: number }
+          {
+            windSpeed: number;
+            rainProbability: number;
+            cloudCover: number;
+            temperatureF: number | null;
+            gustMph: number | null;
+            weatherCode: number | null;
+          }
         >();
         dates.forEach((iso, i) => {
           if (!iso) return;
+          const temperature = Number(temps[i]);
+          const gust = Number(gusts[i]);
+          const code = Number(codes[i]);
           weatherMap.set(iso, {
             windSpeed: Number(wind[i] ?? 0),
             rainProbability: Number(rain[i] ?? 0),
             cloudCover: Number(clouds[i] ?? 0),
+            temperatureF: Number.isFinite(temperature) ? temperature : null,
+            gustMph: Number.isFinite(gust) ? gust : null,
+            weatherCode: Number.isFinite(code) ? code : null,
           });
         });
         const merged = mergeCalendarInsights(weatherMap, launchByDate, windowKeys);
+        const fetchedAt = Date.now();
         calendarIntelCacheRef.current = {
-          expiresAt: Date.now() + CALENDAR_INTEL_CACHE_MS,
+          expiresAt: fetchedAt + CALENDAR_INTEL_CACHE_MS,
           data: new Map(merged),
+          fetchedAt,
         };
         setConditionsByDate(merged);
+        setConditionsUpdatedAt(new Date(fetchedAt));
       })
       .catch(() => {
-        if (!ac.signal.aborted) setConditionsByDate(new Map());
+        if (!ac.signal.aborted) {
+          setConditionsByDate(new Map());
+          setConditionsUpdatedAt(null);
+        }
       })
       .finally(() => {
         if (!ac.signal.aborted) setConditionsLoading(false);
@@ -2365,18 +2401,59 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     : null;
 
   const calendarAvailabilityLegend = (
-    <p className="mt-1 text-xs text-slate-500">
-      <span className="mr-2 inline-flex items-center gap-1">
-        <span className="text-[var(--lz-cta)]">🚀</span> Launch
-      </span>
-      <span className="mr-2 inline-flex items-center gap-1">
-        <span className="text-amber-300">⚠️</span> Caution
+    <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-400">
+      <span className="inline-flex items-center gap-1">
+        <span className="rounded border border-solid border-emerald-300/70 px-1 py-0.5 text-[10px] text-emerald-100">
+          Favorable
+        </span>
       </span>
       <span className="inline-flex items-center gap-1">
-        <span className="text-slate-500">✖</span> Booked
+        <span className="rounded border border-dashed border-amber-200/80 px-1 py-0.5 text-[10px] text-amber-100">
+          Monitor weather
+        </span>
       </span>
-    </p>
+      <span className="inline-flex items-center gap-1">
+        <span className="rounded border border-double border-rose-200/80 px-1 py-0.5 text-[10px] text-rose-100">
+          Weather concern
+        </span>
+      </span>
+      <span className="inline-flex items-center gap-1">
+        <span className="text-slate-500">Booked</span>
+      </span>
+    </div>
   );
+
+  const revealSelectedDateWeather = () => {
+    window.requestAnimationFrame(() => {
+      const panel = selectedDateWeatherRef.current;
+      if (!panel) return;
+      const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      panel.scrollIntoView({
+        behavior: reduceMotion ? 'auto' : 'smooth',
+        block: 'nearest',
+      });
+    });
+  };
+
+  const renderSelectedDateWeather = () => {
+    const iso = bookingData.date || null;
+    const insight = iso ? conditionsByDate.get(iso) : undefined;
+    const booked = Boolean(iso && isDayMarkedUnavailable(availabilityByDate, iso));
+    const dayAvail = iso ? availabilityByDate.get(iso) : undefined;
+    const boatsRemaining =
+      dayAvail && typeof dayAvail === 'object' ? dayAvail.boatsRemaining ?? null : null;
+    return (
+      <CalendarSelectedDateWeather
+        iso={iso}
+        insight={insight}
+        booked={booked}
+        isTopPick={Boolean(iso && bestDayToBook && bestDayToBook.iso === iso && insight)}
+        boatsRemaining={boatsRemaining}
+        updatedAt={conditionsUpdatedAt}
+        panelRef={selectedDateWeatherRef}
+      />
+    );
+  };
 
   const renderCalendarDayButton = ({
     iso,
@@ -2392,55 +2469,28 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     const past = iso < todayYmdLocal;
     const calKnown = availabilityByDate.size > 0;
     const dayAvail = availabilityByDate.get(iso);
-    const open = calKnown
-      ? typeof dayAvail === 'boolean'
-        ? dayAvail === true
-        : dayAvail?.available === true
-      : null;
     const full = calKnown && isDayMarkedUnavailable(availabilityByDate, iso);
-    const showOneLeft =
+    const boatsRemaining =
       !past &&
       !full &&
       calKnown &&
       typeof dayAvail === 'object' &&
       dayAvail !== null &&
-      dayAvail.available === true &&
-      dayAvail.boatsRemaining === 1 &&
-      (dayAvail.totalBoats ?? 0) > 1;
-    const wd = new Date(`${iso}T12:00:00`).getDay();
-    const limited = open === true && (wd === 0 || wd === 5 || wd === 6);
-    const selected = bookingData.date === iso;
-    const insight = conditionsByDate.get(iso);
-    const isTopPick = Boolean(bestDayToBook && bestDayToBook.iso === iso && insight);
-    const lines = insight
-      ? buildTileLines(insight.weather, insight.launch, { isTopPick })
-      : { line1: '', line2: '' };
-
-    let ring = 'border-white/10 bg-slate-900/60 text-slate-200 hover:border-cyan-400/30';
-    if (past) ring = 'cursor-not-allowed border-transparent bg-slate-950/30 text-slate-600';
-    else if (full) ring = 'cursor-not-allowed border-transparent bg-slate-950/30 text-slate-600';
-    else if (insight?.tier === 'best')
-      ring =
-        'border-[var(--lz-cta)]/45 bg-[rgba(255,140,43,0.12)] text-white hover:border-[var(--lz-cta)]/60';
-    else if (insight?.tier === 'poor')
-      ring = 'border-amber-400/40 bg-amber-950/25 text-amber-100 hover:border-amber-400/60';
-    else if (insight?.tier === 'good')
-      ring = 'border-emerald-500/35 bg-emerald-950/20 text-emerald-50 hover:border-emerald-400/50';
-    else if (limited)
-      ring = 'border-amber-400/40 bg-amber-950/25 text-amber-100 hover:border-amber-400/60';
-    else if (open === true)
-      ring = 'border-emerald-500/35 bg-emerald-950/20 text-emerald-50 hover:border-emerald-400/50';
-    if (selected && !past && !full) {
-      ring += ' ring-2 ring-[var(--lz-cta)] ring-offset-2 ring-offset-[#050a14]';
-    }
+      dayAvail.available === true
+        ? dayAvail.boatsRemaining ?? null
+        : null;
 
     return (
-      <button
+      <CalendarWeatherDayButton
         key={keyValue}
-        type="button"
-        disabled={past || Boolean(full)}
-        onClick={() => {
-          if (past || full) return;
+        iso={iso}
+        label={label}
+        selected={bookingData.date === iso}
+        past={past}
+        booked={Boolean(full)}
+        insight={conditionsByDate.get(iso)}
+        boatsRemaining={boatsRemaining}
+        onSelect={() => {
           const t0 = performance.now();
           setBookingData((prev) => ({
             ...prev,
@@ -2450,34 +2500,9 @@ export default function BookNow({ onNavigate }: BookNowProps) {
           if (trackEvent) {
             measurePaintAfterSync(trackEvent, t0, performance.now());
           }
+          revealSelectedDateWeather();
         }}
-        className={`flex aspect-square min-h-[2.25rem] flex-col items-center justify-center gap-0.5 rounded-lg border px-0.5 text-xs font-semibold transition ${ring}`}
-      >
-        <span>{label}</span>
-        {!past && !full && insight && (
-          <>
-            <span className="max-w-full truncate text-center text-[8px] font-normal leading-tight text-slate-300">
-              {lines.line1}
-            </span>
-            <span className="max-w-full truncate text-center text-[8px] font-normal leading-tight text-slate-400">
-              {lines.line2}
-            </span>
-            <span className="text-[7px] font-normal leading-none text-slate-500">
-              {typeof insight.score === 'number' && Number.isFinite(insight.score)
-                ? insight.score.toFixed(1)
-                : '—'}
-              /10
-            </span>
-          </>
-        )}
-        {!past && !full && !insight && limited && (
-          <span className="text-[8px] leading-none text-amber-300">⚠️</span>
-        )}
-        {!past && !full && showOneLeft && (
-          <span className="text-[7px] font-medium leading-none text-amber-200/90">1 left</span>
-        )}
-        {!past && full && <span className="text-[8px] leading-none text-slate-500">Booked</span>}
-      </button>
+      />
     );
   };
 
@@ -2904,7 +2929,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                       ref={availabilityCalendarRef}
                       className="mt-4 space-y-6 scroll-mt-24 md:space-y-8"
                     >
-                      <div className={bookingCard}>
+                      <div className={`${bookingCard} px-2 py-3 sm:p-4 md:p-5`}>
                         <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-cyan-200/90">
                           {bestLaunchDayToBook ? 'Best Launch Day:' : 'Best Conditions This Week:'}{' '}
                           <span className="text-[var(--lz-cta)]">{bestDayToBookText ?? 'Checking schedule…'}</span>
@@ -2955,10 +2980,10 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                             <div key={d}>{d}</div>
                           ))}
                         </div>
-                        <div className="mt-2 grid grid-cols-7 gap-1">
+                        <div className="mt-2 grid grid-cols-7 gap-0.5 sm:gap-1.5">
                           {calendarCellsFor(calendarMonth).map((cell, idx) => {
                             if (cell.label === null) {
-                              return <div key={`e-${idx}`} className="aspect-square min-h-[2.25rem]" />;
+                              return <div key={`e-${idx}`} className="min-h-11" />;
                             }
                             return renderCalendarDayButton({
                               iso: cell.iso as string,
@@ -2968,6 +2993,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                             });
                           })}
                         </div>
+                        {renderSelectedDateWeather()}
                         {availCalendarLoading && (
                           <p className="mt-2 text-xs text-slate-500">Updating availability…</p>
                         )}
@@ -3452,7 +3478,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                         </div>
                       </div>
 
-                      <div className={bookingCard}>
+                      <div className={`${bookingCard} px-2 py-3 sm:p-4 md:p-5`}>
                         <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-cyan-200/90">
                           {bestLaunchDayToBook ? 'Best Launch Day:' : 'Best Conditions This Week:'}{' '}
                           <span className="text-[var(--lz-cta)]">{bestDayToBookText ?? 'Checking schedule…'}</span>
@@ -3503,10 +3529,10 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                             <div key={d}>{d}</div>
                           ))}
                         </div>
-                        <div className="mt-2 grid grid-cols-7 gap-1">
+                        <div className="mt-2 grid grid-cols-7 gap-0.5 sm:gap-1.5">
                           {calendarCellsFor(calendarMonth).map((cell, idx) => {
                             if (cell.label === null) {
-                              return <div key={`rent-e-${idx}`} className="aspect-square min-h-[2.25rem]" />;
+                              return <div key={`rent-e-${idx}`} className="min-h-11" />;
                             }
                             const iso = cell.iso as string;
                             return renderCalendarDayButton({
@@ -3516,6 +3542,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                             });
                           })}
                         </div>
+                        {renderSelectedDateWeather()}
                         {availCalendarLoading && (
                           <p className="mt-2 text-xs text-slate-500">Updating availability…</p>
                         )}

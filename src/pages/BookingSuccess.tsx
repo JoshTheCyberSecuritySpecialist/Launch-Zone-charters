@@ -22,6 +22,7 @@ interface BookingSuccessProps {
 
 interface ConfirmationSummary {
   bookingId: string;
+  reservationNumber?: string | null;
   bookingType: string | null;
   charterType: string | null;
   charterSeating?: string | null;
@@ -36,6 +37,8 @@ interface ConfirmationSummary {
   dateLabel: string;
   timeRange: string;
   guests: number;
+  durationLabel?: string | null;
+  amountPaid?: number | null;
   experience: string;
   boatName: string | null;
   meeting: {
@@ -395,55 +398,51 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
       </div>
 
       {summary ? (
-        <div className="mt-8 rounded-[var(--lz-radius)] border border-white/10 bg-slate-950/50 p-4 text-left">
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Trip details</p>
-          <p className="mt-2 text-lg font-bold text-white">{summary.dateLabel}</p>
-          <p className="mt-1 text-base font-semibold text-cyan-200">{summary.timeRange}</p>
-          <p className="mt-3 text-sm text-slate-300">
-            {summary.experience} · {summary.guests} guest{summary.guests === 1 ? '' : 's'}
+        <div className="mt-8 rounded-[var(--lz-radius)] border border-white/10 bg-slate-950/50 p-5 text-left">
+          <p className="text-lg font-bold text-white">{summary.experience}</p>
+          <p className="mt-4 text-xl font-bold uppercase tracking-wide text-white">{summary.dateLabel}</p>
+          <p className="mt-2 text-2xl font-bold text-cyan-200">{summary.timeRange}</p>
+          <p className="mt-4 text-base text-slate-200">
+            {summary.guests} guest{summary.guests === 1 ? '' : 's'}
+            {summary.durationLabel ? ` · ${summary.durationLabel}` : ''}
           </p>
-          {summary.waiverSigned ? (
-            <p className="mt-2 text-sm text-emerald-200">Waiver: complete</p>
-          ) : (
-            <p className="mt-2 text-sm text-amber-200">Waiver: still needed before arrival</p>
-          )}
+          {summary.amountPaid != null ? (
+            <p className="mt-2 text-base font-semibold text-white">Paid: ${summary.amountPaid.toFixed(2)}</p>
+          ) : null}
+          {summary.reservationNumber ? (
+            <p className="mt-3 text-sm font-semibold text-slate-300">
+              Reservation #{summary.reservationNumber}
+            </p>
+          ) : null}
         </div>
       ) : null}
 
-      <div className="mt-6 rounded-[var(--lz-radius)] border border-white/10 bg-slate-950/50 p-4 text-left">
-        <div className="flex items-start gap-3">
-          <Hash className="mt-0.5 h-5 w-5 shrink-0 text-cyan-400/80" aria-hidden />
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Booking ID</p>
-            <p className="mt-1 break-all font-mono text-sm font-semibold text-white">{activeBookingId}</p>
-          </div>
-        </div>
-      </div>
-
       {meeting ? (
-        <div className="mt-8 rounded-[var(--lz-radius)] border border-cyan-400/25 bg-cyan-950/20 p-5 text-left">
+        <div className="mt-6 rounded-[var(--lz-radius)] border-2 border-cyan-300/50 bg-cyan-950/30 p-5 text-left">
           <div className="flex items-start gap-3">
-            <MapPin className="mt-0.5 h-5 w-5 shrink-0 text-cyan-300" aria-hidden />
+            <MapPin className="mt-0.5 h-6 w-6 shrink-0 text-cyan-200" aria-hidden />
             <div className="min-w-0 flex-1">
-              <p className="text-xs font-semibold uppercase tracking-wide text-cyan-200/80">Meeting location</p>
-              <p className="mt-2 text-lg font-bold text-white">{meeting.name}</p>
+              <p className="text-sm font-bold uppercase tracking-wide text-cyan-100">
+                Important — where to meet
+              </p>
+              <p className="mt-3 text-xl font-bold uppercase text-white">{meeting.name}</p>
               {meeting.address1 ? (
                 <>
-                  <p className="mt-1 text-sm text-slate-200">{meeting.address1}</p>
-                  <p className="text-sm text-slate-300">
+                  <p className="mt-2 text-base text-slate-100">{meeting.address1}</p>
+                  <p className="text-base text-slate-200">
                     {meeting.city}, {meeting.state} {meeting.postalCode}
                   </p>
                 </>
               ) : (
-                <p className="mt-1 text-sm text-slate-300">
+                <p className="mt-2 text-base text-slate-200">
                   {meeting.directionsNote || 'Contact us for exact ramp details before departure.'}
                 </p>
               )}
               {meeting.instructions ? (
-                <p className="mt-3 text-sm leading-relaxed text-slate-300">{meeting.instructions}</p>
+                <p className="mt-3 text-base leading-relaxed text-slate-200">{meeting.instructions}</p>
               ) : null}
               {meeting.mapsUrl ? (
-                <div className="mt-4">
+                <div className="mt-5">
                   <a
                     href={meeting.mapsUrl}
                     target="_blank"
@@ -451,13 +450,42 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
                     onClick={wrapSyncClick('booking_success_get_directions', () => {
                       /* href */
                     })}
-                    className="lz-btn-primary inline-flex items-center justify-center gap-2 text-sm !normal-case !tracking-wide"
+                    className="lz-btn-primary flex min-h-12 w-full items-center justify-center gap-2 text-base !normal-case !tracking-wide"
                   >
+                    <MapPin className="h-5 w-5 shrink-0" aria-hidden />
                     Get Directions
                     <ExternalLink className="h-4 w-4 shrink-0" aria-hidden />
                   </a>
                 </div>
               ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {isCharter && summary && !summary.waiverSigned ? (
+        <div className="mt-6 rounded-[var(--lz-radius)] border border-amber-300/40 bg-amber-950/25 p-5 text-left">
+          <p className="text-sm font-bold uppercase tracking-wide text-amber-100">One last thing</p>
+          <p className="mt-2 text-base text-slate-200">
+            Complete your waiver before arrival. It usually takes about 2 minutes.
+          </p>
+          <button
+            type="button"
+            onClick={goWaiversInsurance}
+            className="lz-btn-primary mt-5 flex min-h-12 w-full items-center justify-center text-base !normal-case !tracking-wide"
+          >
+            Complete Waiver
+          </button>
+        </div>
+      ) : null}
+
+      {summary?.reservationNumber ? (
+        <div className="mt-6 rounded-[var(--lz-radius)] border border-white/10 bg-slate-950/50 p-4 text-left">
+          <div className="flex items-start gap-3">
+            <Hash className="mt-0.5 h-5 w-5 shrink-0 text-cyan-400/80" aria-hidden />
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Reservation number</p>
+              <p className="mt-1 text-base font-semibold text-white">{summary.reservationNumber}</p>
             </div>
           </div>
         </div>
@@ -525,20 +553,6 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
               <ExternalLink className="h-4 w-4 shrink-0" aria-hidden />
             </a>
           </div>
-        </div>
-      ) : !summary?.waiverSigned ? (
-        <div className="mt-8 border-t border-white/10 pt-8 text-left">
-          <h2 className="text-sm font-bold uppercase tracking-widest text-cyan-200/90">Waiver still needed</h2>
-          <p className="mt-2 text-sm text-slate-400">
-            Your payment is confirmed. Please complete your waiver before arrival.
-          </p>
-          <button
-            type="button"
-            onClick={goWaiversInsurance}
-            className="lz-btn-primary mt-5 inline-flex justify-center text-center text-sm !normal-case !tracking-wide"
-          >
-            Complete waiver
-          </button>
         </div>
       ) : null}
 

@@ -39,6 +39,7 @@ function bioBooking(overrides = {}) {
 }
 
 function run() {
+  process.env.APP_PUBLIC_URL = process.env.APP_PUBLIC_URL || 'https://launchzonecharters.com';
   const meeting = resolveMeetingLocation(bioBooking());
   assert.strictEqual(meeting.id, 'parrish_park');
   assert.strictEqual(meeting.name, 'Parrish Park Boat Ramp');
@@ -66,7 +67,16 @@ function run() {
   assert.ok(content.textBody.includes('Meet us by the docks/boat ramp'), content.textBody);
   assert.ok(content.textBody.includes('8:00 PM'), content.textBody);
   assert.ok(content.textBody.includes('Guests: 2'), content.textBody);
+  assert.ok(content.textBody.includes("YOU'RE BOOKED!"), content.textBody);
+  assert.ok(content.textBody.includes('Duration: 1 Hour'), content.textBody);
+  assert.ok(content.textBody.includes('Paid: $150.00'), content.textBody);
+  assert.ok(content.textBody.includes('Reservation #LZC-1111'), content.textBody);
+  assert.ok(content.textBody.includes('IMPORTANT — WHERE TO MEET'), content.textBody);
+  assert.ok(content.textBody.includes('Complete Waiver:'), content.textBody);
+  assert.ok(!content.textBody.includes("driver's license"), content.textBody);
+  assert.ok(!content.textBody.includes('rental insurance'), content.textBody);
   assert.ok(content.htmlBody.includes('Get Directions'), content.htmlBody);
+  assert.ok(content.htmlBody.includes('Complete Waiver'), content.htmlBody);
   assert.ok(content.htmlBody.includes(encodeURIComponent('Parrish Park Boat Ramp')), content.htmlBody);
 
   const grouponContent = buildConfirmationContent({

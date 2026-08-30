@@ -12,7 +12,9 @@ import {
   Check,
 } from 'lucide-react';
 import BookingFlowStepIndicator from '../components/BookingFlowStepIndicator';
+import BioBookingHelp from '../components/booking/BioBookingHelp';
 import CharterPrivateSharedTourBlock from '../components/CharterPrivateSharedTourBlock';
+import { BIO_DEPARTURE_AREA_LABEL } from '../lib/meetingLocations';
 import { supabase } from '../lib/supabase';
 import type { PostgrestError } from '@supabase/supabase-js';
 import { logSupabaseError, userFacingSupabaseMessage } from '../lib/supabaseErrors';
@@ -354,6 +356,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
   const [processing, setProcessing] = useState(false);
   /** Inline message when checkout session fails (replaces alert-only feedback). */
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
+  const [slotAlternatives, setSlotAlternatives] = useState<ApiTimeSlot[]>([]);
   const [prefillNotice, setPrefillNotice] = useState<string | null>(null);
   const [availabilityByDate, setAvailabilityByDate] = useState<
     Map<string, CalendarDayAvailability>
@@ -2243,7 +2246,13 @@ export default function BookNow({ onNavigate }: BookNowProps) {
       }
 
       const rawBody = await sessionRes.text();
-      let sessionPayload: { url?: string; error?: string; message?: string; code?: string } = {};
+      let sessionPayload: {
+        url?: string;
+        error?: string;
+        message?: string;
+        code?: string;
+        alternatives?: Array<Partial<ApiTimeSlot> & { startIso?: string; endIso?: string }>;
+      } = {};
       try {
         sessionPayload = rawBody ? (JSON.parse(rawBody) as typeof sessionPayload) : {};
       } catch {
@@ -2263,6 +2272,25 @@ export default function BookNow({ onNavigate }: BookNowProps) {
 
       if (import.meta.env.DEV) {
         console.warn('[create-checkout-session]', sessionRes.status, sessionPayload, rawBody.slice(0, 500));
+      }
+
+      const alternatives = normalizeApiTimeSlots(sessionPayload.alternatives);
+      if (alternatives.length > 0 && (sessionRes.status === 409 || sessionPayload.code === 'slot_unavailable')) {
+        setSlotAlternatives(alternatives);
+        setTimeSlots((prev) => {
+          const seen = new Set(prev.map((slot) => slot.start));
+          const merged = [...prev];
+          for (const slot of alternatives) {
+            if (!seen.has(slot.start)) {
+              seen.add(slot.start);
+              merged.push(slot);
+            }
+          }
+          return merged;
+        });
+        setCheckoutError('That departure was just booked.');
+        checkoutOutcome = 'slot_taken_alternatives';
+        return;
       }
 
       if (apiMessage) {
@@ -2671,6 +2699,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                     <p className="mt-2 text-sm text-slate-400">
                       Night glow on the lagoon · {formatCharterDurationLabel()}
                     </p>
+                    <p className="mt-2 text-xs font-semibold text-cyan-200/90">{BIO_DEPARTURE_AREA_LABEL}</p>
                   </button>
                   <button
                     type="button"
@@ -2943,6 +2972,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                             Late-night bio tours are available during peak glowing conditions. Times after midnight are booked as the next morning for the selected night.
                           </p>
                         )}
+                        {isBioCharter ? <BioBookingHelp /> : null}
                         {isRocketCharter && (
                           <p className="mb-3 rounded-lg border border-amber-400/25 bg-amber-950/25 px-3 py-2 text-xs font-semibold text-amber-100">
                             Charter departure is scheduled from the actual launch time — morning, afternoon, evening, and overnight launches each get an appropriate on-water window.
@@ -4305,10 +4335,40 @@ export default function BookNow({ onNavigate }: BookNowProps) {
 
                 {checkoutError && (
                   <div
-                    className="mb-4 rounded-[var(--lz-radius)] border border-red-400/40 bg-red-950/50 px-4 py-3 text-sm text-red-100"
+                    className={`mb-4 rounded-[var(--lz-radius)] px-4 py-3 text-sm ${
+                      slotAlternatives.length > 0
+                        ? 'border border-amber-400/40 bg-amber-950/40 text-amber-50'
+                        : 'border border-red-400/40 bg-red-950/50 text-red-100'
+                    }`}
                     role="alert"
                   >
-                    {checkoutError}
+                    <p className="font-semibold">{checkoutError}</p>
+                    {slotAlternatives.length > 0 ? (
+                      <div className="mt-3">
+                        <p className="text-sm text-amber-100">Here are the closest available times:</p>
+                        <div className="mt-3 flex flex-col gap-2">
+                          {slotAlternatives.map((slot) => (
+                            <button
+                              key={slot.start}
+                              type="button"
+                              onClick={() => {
+                                setBookingData((prev) => ({
+                                  ...prev,
+                                  slotStartIso: slot.start,
+                                  time: slot.startHHMM || prev.time,
+                                  launchId: slot.launchId || prev.launchId || '',
+                                }));
+                                setSlotAlternatives([]);
+                                setCheckoutError(null);
+                              }}
+                              className="min-h-12 rounded-xl border border-cyan-400/40 bg-cyan-950/40 px-4 py-3 text-base font-bold text-white"
+                            >
+                              {slot.label || slot.startHHMM || slot.start}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
                 )}
 

@@ -17,7 +17,7 @@ export type ManualPreTripDraft = {
   customerName: string;
   email: string;
   phone: string;
-  tripType: PreTripTripType;
+  tripType: PreTripTripType | '';
   grouponCode: string;
   requestedTripDate: string;
   termsAccepted: boolean;

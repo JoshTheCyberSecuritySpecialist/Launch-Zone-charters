@@ -4,6 +4,11 @@
 
 const { DateTime } = require('luxon');
 const {
+  formatCharterDurationLabel,
+  normalizeCharterDurationMinutes,
+} = require('./charterDuration');
+const { formatReservationNumber } = require('./reservationNumber');
+const {
   googleMapsDirectionsUrl,
   locationText,
   resolveMeetingLocation,
@@ -54,6 +59,20 @@ function formatTimeRange(startIso, endIso) {
   return `${start} – ${end}`;
 }
 
+function durationMinutesFromBooking(booking) {
+  const start = Date.parse(String(booking?.start_time || ''));
+  const end = Date.parse(String(booking?.end_time || ''));
+  if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
+    return normalizeCharterDurationMinutes((end - start) / 60000);
+  }
+  return normalizeCharterDurationMinutes(60);
+}
+
+function amountPaidValue(booking) {
+  const n = Number(booking?.deposit_paid ?? booking?.amount_collected ?? booking?.final_total ?? booking?.total_price);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 function experienceLabel(booking) {
   if (booking.pricing_package_name) return String(booking.pricing_package_name);
   const charterType = String(booking.charter_type || '').trim().toLowerCase();
@@ -96,9 +115,13 @@ function buildPublicConfirmationSummary({ booking, customer, boat }) {
     waiverSigned: Boolean(booking.waiver_signed),
     confirmationEmailSent: Boolean(booking.booking_confirmation_sent_at),
     customerEmail: customer?.email || null,
+    reservationNumber: formatReservationNumber(booking.id),
     dateLabel: formatDateLabel(booking.start_time),
     timeRange: formatTimeRange(booking.start_time, booking.end_time),
     guests: Math.max(1, Number(booking.guest_count || booking.package_guest_count || 1)),
+    durationMinutes: durationMinutesFromBooking(booking),
+    durationLabel: formatCharterDurationLabel(durationMinutesFromBooking(booking)),
+    amountPaid: amountPaidValue(booking),
     experience: experienceLabel(booking),
     boatName: boat?.name || null,
     meeting:

@@ -3,6 +3,7 @@
  * Uses same overlap semantics as bookings assertSlotAvailable + blocked_dates.
  */
 const { DateTime } = require('luxon');
+const { rankClosestCharterSlots } = require('../lib/closestCharterSlots');
 const supabase = require('../supabaseClient');
 const {
   CAPTAIN_NIGHT_END_HOUR,
@@ -1345,6 +1346,42 @@ async function listCharterSlotsForDay(dateStr, charterType, options = {}) {
   return normalizeSlotRows(out);
 }
 
+async function listClosestAvailableCharterSlots({
+  requestedStartIso,
+  dateStr,
+  charterType,
+  options = {},
+  limit = 3,
+} = {}) {
+  const day = parseDateOnlyInZone(dateStr, BUSINESS_TZ);
+  const requested = DateTime.fromISO(String(requestedStartIso || ''), { zone: 'utc' }).setZone(BUSINESS_TZ);
+  const anchorDate = day
+    ? day.toFormat('yyyy-MM-dd')
+    : requested.isValid
+      ? requested.toFormat('yyyy-MM-dd')
+      : '';
+  if (!anchorDate) return [];
+
+  const dates = [anchorDate];
+  if (normalizeCharterType(charterType) === 'bio') {
+    const next = (day || requested.startOf('day')).plus({ days: 1 }).toFormat('yyyy-MM-dd');
+    if (next !== anchorDate) dates.push(next);
+  }
+
+  const seen = new Set();
+  const slots = [];
+  for (const date of dates) {
+    const daySlots = await listCharterSlotsForDay(date, charterType, options);
+    for (const slot of daySlots || []) {
+      const key = String(slot.start || '');
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      slots.push(slot);
+    }
+  }
+  return rankClosestCharterSlots(slots, requestedStartIso, limit);
+}
+
 async function listCharterDatesAvailability(fromDateStr, toDateStr, charterType, options = {}) {
   const from = parseDateOnlyInZone(fromDateStr, BUSINESS_TZ);
   const to = parseDateOnlyInZone(toDateStr, BUSINESS_TZ);
@@ -1582,6 +1619,7 @@ module.exports = {
   listSlotsForDay,
   listCharterDatesAvailability,
   listCharterSlotsForDay,
+  listClosestAvailableCharterSlots,
   validateCharterSlotWindow,
   parseDateOnlyInZone,
   enumerateCharterStartsForDay,

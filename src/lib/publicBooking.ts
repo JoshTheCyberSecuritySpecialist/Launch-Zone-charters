@@ -2,6 +2,7 @@ import { env } from '../config/env.js';
 
 export type PublicBookingMatch = {
   id: string;
+  reservation_number?: string | null;
   customer_name: string;
   email?: string;
   email_masked?: string;

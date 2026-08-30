@@ -91,8 +91,8 @@ export default function ManualPreTripSubmission({
   const [customerName, setCustomerName] = useState(restored?.customerName || '');
   const [email, setEmail] = useState(restored?.email || initialEmail);
   const [phone, setPhone] = useState(restored?.phone || initialPhone);
-  const [tripType, setTripType] = useState<PreTripTripType>(
-    () => restored?.tripType || 'pontoon_rental'
+  const [tripType, setTripType] = useState<PreTripTripType | ''>(
+    () => restored?.tripType || ''
   );
   const [grouponCode, setGrouponCode] = useState(restored?.grouponCode || initialGrouponCode);
   const [requestedTripDate, setRequestedTripDate] = useState(restored?.requestedTripDate || '');
@@ -123,9 +123,12 @@ export default function ManualPreTripSubmission({
   const [capacityResult, setCapacityResult] = useState<PublicCapacityCheckResult | null>(null);
   const submitLockRef = useRef(false);
 
-  const isRental = tripType !== 'captain_charter';
-  const bookingMode = bookingModeForTripType(tripType);
-  const insuranceConfig = useMemo(() => getInsuranceConfigForTripType(tripType), [tripType]);
+  const isRental = tripType === 'pontoon_rental' || tripType === 'center_console_rental';
+  const bookingMode = tripType ? bookingModeForTripType(tripType) : 'charter';
+  const insuranceConfig = useMemo(
+    () => (tripType ? getInsuranceConfigForTripType(tripType) : null),
+    [tripType]
+  );
   const uploadKey = `pre-trip/${draftId}`;
 
   const waiverComplete = waiverFormComplete(waiverData, termsAccepted, damageFeeAcknowledged, bookingMode);
@@ -286,6 +289,12 @@ export default function ManualPreTripSubmission({
       focusErrors();
       return;
     }
+    if (!tripType) {
+      setSubmitError('Choose whether this is a captain-led charter or a self-drive rental.');
+      setStep('trip');
+      focusErrors();
+      return;
+    }
     if (isRental && !licenseUrl) {
       setSubmitError('Upload a clear photo of your license or ID.');
       setStep('documents');
@@ -368,7 +377,7 @@ export default function ManualPreTripSubmission({
     <div className="space-y-6">
       <section className={WI_SECTION}>
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-xl font-bold text-white">Continue without a booking</h2>
+          <h2 className="text-xl font-bold text-white">Partner or Groupon booking</h2>
           <button
             type="button"
             onClick={wrapSyncClick('manual_pre_trip_back', onBack)}
@@ -473,8 +482,8 @@ export default function ManualPreTripSubmission({
         <section className={WI_SECTION}>
           <h3 className="text-xl font-bold text-white">Trip Details</h3>
           <p className={`${WI_HINT} mt-2`}>
-            We could not find your trip automatically. That is okay. Enter the information below and
-            our team will match it for you.
+            Choose the type of trip you booked. Captain-led charters do not need a driver&apos;s
+            license or rental insurance.
           </p>
           <div className="mt-6 space-y-5">
             <div>
@@ -484,9 +493,11 @@ export default function ManualPreTripSubmission({
               <select
                 id="mpt-trip"
                 value={tripType}
-                onChange={(e) => setTripType(e.target.value as PreTripTripType)}
+                onChange={(e) => setTripType(e.target.value as PreTripTripType | '')}
                 className={WI_FIELD}
+                required
               >
+                <option value="">Select what you booked</option>
                 {TRIP_OPTIONS.map((opt) => (
                   <option key={opt.value} value={opt.value}>
                     {opt.label}
@@ -522,7 +533,18 @@ export default function ManualPreTripSubmission({
             </div>
           </div>
           <div className="mt-8 flex flex-col gap-3">
-            <button type="button" onClick={() => setStep('passengers')} className={WI_PRIMARY_BTN}>
+            <button
+              type="button"
+              onClick={() => {
+                if (!tripType) {
+                  setSubmitError('Choose whether this is a captain-led charter or a self-drive rental.');
+                  return;
+                }
+                setSubmitError(null);
+                setStep('passengers');
+              }}
+              className={WI_PRIMARY_BTN}
+            >
               Continue to Passenger Information
             </button>
             <button type="button" onClick={() => setStep('info')} className={WI_SECONDARY_BTN}>

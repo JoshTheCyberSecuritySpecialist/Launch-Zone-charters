@@ -5,6 +5,11 @@ const { DateTime } = require('luxon');
 const bookingCommunications = require('./bookingCommunications');
 const rocketLaunchEmailService = require('./rocketLaunchEmailService');
 const {
+  formatCharterDurationLabel,
+  normalizeCharterDurationMinutes,
+} = require('../lib/charterDuration');
+const { formatReservationNumber } = require('../lib/reservationNumber');
+const {
   googleMapsDirectionsUrl,
   locationText,
   resolveMeetingLocation,
@@ -74,18 +79,31 @@ function experienceLabel(booking) {
   return 'Launch Zone Charters experience';
 }
 
+function durationLabelFromBooking(booking) {
+  const start = Date.parse(String(booking?.start_time || ''));
+  const end = Date.parse(String(booking?.end_time || ''));
+  const minutes =
+    Number.isFinite(start) && Number.isFinite(end) && end > start
+      ? normalizeCharterDurationMinutes((end - start) / 60000)
+      : normalizeCharterDurationMinutes(60);
+  return formatCharterDurationLabel(minutes);
+}
+
 function paymentSummary(booking) {
   const source = String(booking.booking_source || '').trim().toLowerCase();
   const method = String(booking.payment_method || '').trim().toLowerCase();
   if (source === 'groupon' || method === 'groupon') {
     return 'Paid through Groupon — no additional charge today from Launch Zone Charters.';
   }
-  const status = String(booking.payment_status || 'pending').replace(/_/g, ' ');
-  const deposit = money(booking.deposit_paid ?? booking.deposit_amount);
+  const paid = money(booking.deposit_paid ?? booking.amount_collected ?? booking.final_total ?? booking.total_price);
   const balance = money(booking.balance_due);
-  const parts = [`Payment status: ${status}`];
-  if (deposit) parts.push(`Deposit paid: ${deposit}`);
+  const parts = [];
+  if (paid) parts.push(`Paid: ${paid}`);
   if (balance && Number(booking.balance_due) > 0) parts.push(`Remaining balance: ${balance}`);
+  if (parts.length === 0) {
+    const status = String(booking.payment_status || 'pending').replace(/_/g, ' ');
+    parts.push(`Payment status: ${status}`);
+  }
   return parts.join(' · ');
 }
 
@@ -118,32 +136,34 @@ function buildConfirmationContent({ booking, customer, boat, source = 'server' }
   const dateLabel = formatDateLabel(booking.start_time);
   const timeRange = formatTimeRange(booking.start_time, booking.end_time);
   const guests = Math.max(1, Number(booking.guest_count || booking.package_guest_count || 1));
+  const durationLabel = durationLabelFromBooking(booking);
+  const reservationNumber = formatReservationNumber(booking.id);
   const experience = experienceLabel(booking);
   const boatName = boat?.name || null;
   const paymentLine = paymentSummary(booking);
   const arrivalLines = beforeYouArriveLines(booking, docsUrl);
+  const isCharter = String(booking.booking_type || '') === 'charter';
 
   const subject = dateLabel && dateLabel !== '—'
     ? `Your Launch Zone Charters Booking is Confirmed — ${dateLabel}`
     : 'Your Launch Zone Charters Booking is Confirmed';
 
   const textLines = [
-    'Booking Confirmed',
+    "YOU'RE BOOKED!",
     '',
     `Hi ${name},`,
     '',
-    'Your Launch Zone Charters reservation is confirmed.',
+    'Your trip is booked!',
     '',
-    'Trip Details',
+    experience,
     `Date: ${dateLabel}`,
     `Time: ${timeRange}`,
     `Guests: ${guests}`,
-    `Experience: ${experience}`,
-    boatName ? `Boat: ${boatName}` : null,
-    `Booking #: ${booking.id}`,
+    `Duration: ${durationLabel}`,
     paymentLine,
+    reservationNumber ? `Reservation #${reservationNumber}` : null,
     '',
-    'Meeting Point',
+    'IMPORTANT — WHERE TO MEET',
     meeting?.name || 'Launch Zone Charters',
     meeting?.address1 || null,
     meeting?.address1
@@ -152,17 +172,22 @@ function buildConfirmationContent({ booking, customer, boat, source = 'server' }
     meeting?.meetingInstructions || null,
     mapsUrl ? `Get Directions: ${mapsUrl}` : null,
     '',
+    isCharter && !booking.waiver_signed ? 'ONE LAST THING' : 'Before You Arrive',
+    isCharter && !booking.waiver_signed
+      ? 'Complete your waiver before arrival. It usually takes about 2 minutes.'
+      : null,
+    ...arrivalLines,
+    docsUrl ? `Complete Waiver: ${docsUrl}` : null,
+    '',
     'Arrival',
     `Please arrive about ${ARRIVAL_MINUTES_EARLY} minutes before your scheduled departure.`,
     meeting?.directionsNote || null,
     '',
-    'Before You Arrive',
-    ...arrivalLines,
-    docsUrl ? `Document checklist: ${docsUrl}` : null,
-    '',
     'What to Bring',
     'Valid photo ID, comfortable clothing, and anything noted in your trip checklist.',
-    'For night tours, dim red lighting helps your eyes adjust to the bioluminescence.',
+    isCharter
+      ? 'For night tours, dim red lighting helps your eyes adjust to the bioluminescence.'
+      : null,
     '',
     `Questions? Call ${SUPPORT_PHONE}.`,
     '',
@@ -192,23 +217,22 @@ function buildConfirmationContent({ booking, customer, boat, source = 'server' }
       <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:560px;background:#ffffff;border-radius:16px;overflow:hidden;border:1px solid #e2e8f0;">
         <tr><td style="background:#0f172a;color:#ffffff;padding:24px 28px;">
           <p style="margin:0 0 8px;font-size:13px;letter-spacing:0.08em;text-transform:uppercase;color:#94a3b8;">Launch Zone Charters</p>
-          <h1 style="margin:0;font-size:28px;line-height:1.2;">Booking Confirmed</h1>
+          <h1 style="margin:0;font-size:28px;line-height:1.2;">You&apos;re booked!</h1>
         </td></tr>
         <tr><td style="padding:28px;">
-          <p style="margin:0 0 18px;font-size:16px;line-height:1.6;">Hi ${escapeHtml(name)}, your reservation is confirmed.</p>
+          <p style="margin:0 0 18px;font-size:16px;line-height:1.6;">Hi ${escapeHtml(name)}, your trip is booked!</p>
           <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:20px;margin-bottom:20px;">
-            <p style="margin:0 0 12px;font-size:13px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:#64748b;">Trip Details</p>
+            <p style="margin:0 0 8px;font-size:18px;line-height:1.3;font-weight:700;color:#0f172a;">${escapeHtml(experience)}</p>
             <p style="margin:0 0 8px;font-size:24px;line-height:1.3;font-weight:700;color:#0f172a;">${escapeHtml(dateLabel)}</p>
             <p style="margin:0 0 16px;font-size:20px;line-height:1.3;color:#0f766e;font-weight:700;">${escapeHtml(timeRange)}</p>
-            <p style="margin:0 0 6px;font-size:15px;"><strong>Guests:</strong> ${escapeHtml(String(guests))}</p>
-            <p style="margin:0 0 6px;font-size:15px;"><strong>Experience:</strong> ${escapeHtml(experience)}</p>
-            ${boatName ? `<p style="margin:0 0 6px;font-size:15px;"><strong>Boat:</strong> ${escapeHtml(boatName)}</p>` : ''}
-            <p style="margin:0 0 6px;font-size:15px;"><strong>Booking #:</strong> ${escapeHtml(booking.id)}</p>
-            <p style="margin:0;font-size:14px;line-height:1.5;color:#475569;">${escapeHtml(paymentLine)}</p>
+            <p style="margin:0 0 6px;font-size:15px;"><strong>${escapeHtml(String(guests))} guest${guests === 1 ? '' : 's'}</strong> · ${escapeHtml(durationLabel)}</p>
+            <p style="margin:0 0 6px;font-size:15px;">${escapeHtml(paymentLine)}</p>
+            ${reservationNumber ? `<p style="margin:0;font-size:15px;"><strong>Reservation #${escapeHtml(reservationNumber)}</strong></p>` : ''}
+            ${boatName ? `<p style="margin:8px 0 0;font-size:14px;color:#475569;">Boat: ${escapeHtml(boatName)}</p>` : ''}
           </div>
-          <div style="background:#ecfeff;border:1px solid #99f6e4;border-radius:12px;padding:20px;margin-bottom:20px;">
-            <p style="margin:0 0 12px;font-size:13px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:#0f766e;">Meeting Point</p>
-            <p style="margin:0 0 8px;font-size:18px;line-height:1.4;font-weight:700;color:#0f172a;">${escapeHtml(meeting?.name || 'Launch Zone Charters')}</p>
+          <div style="background:#ecfeff;border:2px solid #0f766e;border-radius:12px;padding:20px;margin-bottom:20px;">
+            <p style="margin:0 0 12px;font-size:14px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:#0f766e;">IMPORTANT — WHERE TO MEET</p>
+            <p style="margin:0 0 8px;font-size:20px;line-height:1.4;font-weight:700;color:#0f172a;">${escapeHtml(meeting?.name || 'Launch Zone Charters')}</p>
             ${meetingAddressHtml}
             ${
               meeting?.meetingInstructions
@@ -217,14 +241,22 @@ function buildConfirmationContent({ booking, customer, boat, source = 'server' }
             }
             ${directionsButton}
           </div>
-          <div style="margin-bottom:20px;">
-            <p style="margin:0 0 8px;font-size:13px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:#64748b;">Arrival</p>
-            <p style="margin:0;font-size:15px;line-height:1.6;">Please arrive about <strong>${ARRIVAL_MINUTES_EARLY} minutes</strong> before your scheduled departure.</p>
-          </div>
-          <div style="margin-bottom:20px;">
+          ${
+            isCharter && !booking.waiver_signed && docsUrl
+              ? `<div style="background:#fff7ed;border:1px solid #fdba74;border-radius:12px;padding:20px;margin-bottom:20px;">
+            <p style="margin:0 0 8px;font-size:14px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:#9a3412;">One last thing</p>
+            <p style="margin:0 0 16px;font-size:15px;line-height:1.6;color:#334155;">Complete your waiver before arrival. It usually takes about 2 minutes.</p>
+            <p style="margin:0;"><a href="${escapeHtml(docsUrl)}" style="display:inline-block;background:#0f766e;color:#ffffff;text-decoration:none;font-weight:700;font-size:18px;line-height:1.2;padding:16px 28px;border-radius:12px;">Complete Waiver</a></p>
+          </div>`
+              : `<div style="margin-bottom:20px;">
             <p style="margin:0 0 8px;font-size:13px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:#64748b;">Before You Arrive</p>
             ${arrivalLines.map((line) => `<p style="margin:0 0 8px;font-size:15px;line-height:1.6;">${escapeHtml(line)}</p>`).join('')}
             ${docsUrl ? `<p style="margin:8px 0 0;"><a href="${escapeHtml(docsUrl)}" style="color:#0f766e;font-weight:700;">Open your document checklist</a></p>` : ''}
+          </div>`
+          }
+          <div style="margin-bottom:20px;">
+            <p style="margin:0 0 8px;font-size:13px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:#64748b;">Arrival</p>
+            <p style="margin:0;font-size:15px;line-height:1.6;">Please arrive about <strong>${ARRIVAL_MINUTES_EARLY} minutes</strong> before your scheduled departure.</p>
           </div>
           <p style="margin:0;font-size:15px;line-height:1.6;">Questions? Call <a href="${SUPPORT_PHONE_TEL}" style="color:#0f766e;font-weight:700;">${SUPPORT_PHONE}</a>.</p>
         </td></tr>

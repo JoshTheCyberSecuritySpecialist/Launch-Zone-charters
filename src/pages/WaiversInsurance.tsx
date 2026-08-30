@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Calendar, ClipboardCheck, ExternalLink, Loader2, Search, Upload, Shield } from 'lucide-react';
+import { Calendar, ClipboardCheck, ExternalLink, Loader2, Search, Upload } from 'lucide-react';
 import WaiverBlock, { waiverFormComplete, type WaiverFormData } from '../components/booking/WaiverBlock';
 import PreTripStatusPanel from '../components/booking/PreTripStatusPanel';
 import ManualPreTripSubmission from '../components/booking/ManualPreTripSubmission';
@@ -231,7 +231,11 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
       setMagicLinkLoading(false);
 
       if (!result.ok) {
-        setFindError(result.message);
+        setFindError(
+          "We couldn't find your reservation yet. If you just paid, wait a moment and try again."
+        );
+        setFindCode((prev) => prev || bookingIdFromUrl);
+        setEntryMode('booking');
         return;
       }
 
@@ -285,7 +289,7 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
     if (!result.ok) {
       setBooking(null);
       setFindError(
-        'We could not find your trip automatically. That is okay. Enter the information below and our team will match it for you.'
+        "We couldn't find your reservation yet. Check the email and phone from your booking, or enter your reservation number."
       );
       setManualMode(false);
       return;
@@ -599,8 +603,8 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
               </div>
               <h2 className="mt-5 text-2xl font-bold text-white">I Have a Booking</h2>
               <p className={`mt-2 ${WI_BODY}`}>
-                Find your trip with your booking email and phone number, then complete your waiver,
-                license, and insurance steps.
+                Find your reservation with the email and phone number from your booking. If you just
+                paid, wait a moment and try again.
               </p>
               <button
                 type="button"
@@ -616,14 +620,11 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
               </button>
             </article>
 
-            <article className={`${WI_SECTION} border-[var(--lz-cta)]/25`}>
-              <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-[var(--lz-cta)]/30 bg-[var(--lz-cta)]/10 text-[var(--lz-cta)]">
-                <ClipboardCheck className="h-6 w-6" aria-hidden />
-              </div>
-              <h2 className="mt-5 text-2xl font-bold text-white">I Don&apos;t Have a Booking Yet</h2>
+            <article className={`${WI_SECTION} border-white/10`}>
+              <h2 className="text-xl font-bold text-white">Booked through Groupon or another partner?</h2>
               <p className={`mt-2 ${WI_BODY}`}>
-                Booked through Groupon, phone, text, or you are not sure? Continue here and our team
-                will match your documents.
+                Use this only if you booked through Groupon or another partner and do not have a
+                Launch Zone reservation yet.
               </p>
               <button
                 type="button"
@@ -632,17 +633,12 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
                   setManualMode(true);
                   setFindError(null);
                 })}
-                className={`${WI_PRIMARY_BTN} mt-6`}
+                className={`${WI_SECONDARY_BTN} mt-6`}
               >
-                <Shield className="h-5 w-5" aria-hidden />
-                Continue Without Booking
+                <ClipboardCheck className="h-5 w-5" aria-hidden />
+                Continue with Partner Booking
               </button>
             </article>
-
-            <p className={`${WI_SECTION} text-center ${WI_BODY}`}>
-              Not sure? Choose &quot;I Don&apos;t Have a Booking Yet&quot; — you will not need to start
-              over later.
-            </p>
           </section>
         ) : null}
 
@@ -650,8 +646,8 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
           <section className={`${WI_SECTION} mx-auto`}>
             <h2 className="text-xl font-bold text-white">Trip Details</h2>
             <p className={`${WI_HINT} mt-2`}>
-              Enter the email and phone number from your booking. Booking ID or Groupon code is
-              optional.
+              Enter the email and phone number from your booking. Reservation number or Groupon
+              voucher is optional.
             </p>
             <form onSubmit={(e) => void handleFindBooking(e)} className="mt-6 space-y-5">
               <div>
@@ -690,7 +686,7 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
               </div>
               <div>
                 <label htmlFor="wi-code" className={WI_LABEL}>
-                  Booking number or Groupon voucher{' '}
+                  Reservation number or Groupon voucher{' '}
                   <span className="font-normal text-slate-300">(optional)</span>
                 </label>
                 <input
@@ -703,20 +699,50 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
                 />
               </div>
               {findError ? (
-                <div className="rounded-xl border border-amber-400/30 bg-amber-950/40 px-4 py-4">
+                <div className="rounded-xl border border-amber-400/30 bg-amber-950/40 px-4 py-4 space-y-3">
                   <p className="text-lg text-amber-50" role="alert">
                     {findError}
                   </p>
+                  <p className="text-base text-amber-100/90">Let&apos;s try another way.</p>
+                  {bookingIdFromUrl ? (
+                    <button
+                      type="button"
+                      onClick={wrapSyncClick('waivers_retry_booking_lookup', () => {
+                        setFindError(null);
+                        setMagicLinkLoading(true);
+                        void fetchWaiversBookingById(bookingIdFromUrl).then((retry) => {
+                          setMagicLinkLoading(false);
+                          if (!retry.ok) {
+                            setFindError(
+                              "We couldn't find your reservation yet. Check your email and phone, or contact us."
+                            );
+                            return;
+                          }
+                          setBooking(retry.booking);
+                          setFindEmail(retry.booking.email_masked || retry.booking.email || '');
+                          setMagicLinkMode(true);
+                          setPhoneConfirmNeeded(true);
+                          setManualMode(false);
+                        });
+                      })}
+                      className={`${WI_PRIMARY_BTN}`}
+                    >
+                      Try again
+                    </button>
+                  ) : null}
+                  <a href="tel:803-542-1761" className={bookingIdFromUrl ? WI_SECONDARY_BTN : WI_PRIMARY_BTN}>
+                    Contact us
+                  </a>
                   <button
                     type="button"
-                    onClick={wrapSyncClick('waivers_insurance_manual_start', () => {
+                    onClick={wrapSyncClick('waivers_choose_manual_submission', () => {
                       setEntryMode('manual');
                       setManualMode(true);
                       setFindError(null);
                     })}
-                    className={`${WI_PRIMARY_BTN} mt-4`}
+                    className={`${WI_SECONDARY_BTN}`}
                   >
-                    Continue Without Booking
+                    Booked through Groupon or another partner?
                   </button>
                 </div>
               ) : null}
@@ -818,7 +844,7 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
                     {booking.boat_name || 'Boat'} · {formatTripDate(booking.start_time)}
                   </p>
                   <p className="mt-2 break-all font-mono text-base text-slate-300">
-                    Confirmation: {booking.id}
+                    Confirmation: {booking.reservation_number || 'Your reservation'}
                   </p>
                 </div>
                 {!magicLinkMode ? (

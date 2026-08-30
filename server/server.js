@@ -55,6 +55,7 @@ const { getWeeklyForecast } = require('./services/weeklyForecastService');
 const { getMarineConditions } = require('./services/marineConditionsService');
 const availabilityService = require('./services/availabilityService');
 const { buildPublicConfirmationSummary, resolvePaidBookingStatus } = require('./lib/bookingLifecycle');
+const { formatReservationNumber, parseReservationNumber, reservationNumberMatches } = require('./lib/reservationNumber');
 const captainCharterAvailability = require('./services/captainCharterAvailability');
 const charterCapacity = require('./charterCapacity');
 const {
@@ -7671,10 +7672,34 @@ app.post('/api/create-checkout-session', async (req, res) => {
       const fifthPassengerCapacityDenied =
         Boolean(expected.fifthPassengerAddon) &&
         (slotErr.code === 'charter_capacity' || /capacity|full|remaining/i.test(String(slotErr.message || '')));
+      let alternatives = [];
+      if (isCharterBooking) {
+        try {
+          const requestedLocal = DateTime.fromJSDate(startTime).setZone(availabilityService.BUSINESS_TZ);
+          alternatives = await availabilityService.listClosestAvailableCharterSlots({
+            requestedStartIso: startTime.toISOString(),
+            dateStr: requestedLocal.isValid ? requestedLocal.toFormat('yyyy-MM-dd') : '',
+            charterType,
+            options: {
+              charterVariant: expected.charterVariant || charterVariant,
+              bioPackage: expected.bioPackage || null,
+              rocketPackage: expected.rocketPackage || null,
+              sunsetPackage: expected.sunsetPackage || null,
+              passengerCount,
+              launchId: rocketLaunchId,
+            },
+            limit: 3,
+          });
+        } catch (altErr) {
+          console.warn('[create-checkout-session] alternatives:', altErr.message || altErr);
+        }
+      }
       return res.status(code).json({
         error: fifthPassengerCapacityDenied
           ? bioPackagePricing.BIO_FIFTH_PASSENGER_NO_CAPACITY_MESSAGE
           : slotErr.message || SLOT_TAKEN_USER_MESSAGE,
+        code: slotErr.code || 'slot_unavailable',
+        alternatives,
       });
     }
 
@@ -7755,6 +7780,7 @@ app.post('/api/create-checkout-session', async (req, res) => {
           ? {
               guest_count: String(passengerCount),
               experience: charterType || '',
+              duration_minutes: String(Math.max(1, Math.round(durationHours * 60))),
               charter_seating: String(expected.charterVariant || charterVariant || ''),
               pricing_package_id:
                 expected.bioPackage?.id ||
@@ -8587,6 +8613,7 @@ function checkFindBookingRate(ip) {
 function toPublicBookingRow(booking, customer, boat) {
   return {
     id: booking.id,
+    reservation_number: formatReservationNumber(booking.id),
     customer_name: String(customer?.full_name || '').trim(),
     email: normalizeEmailParam(customer?.email),
     phone_last4: phoneLast4(customer?.phone),
@@ -9019,7 +9046,7 @@ app.post('/api/public/find-booking', async (req, res) => {
     const { data: bookings, error: bErr } = await supabase
       .from('bookings')
       .select(
-        'id, customer_id, boat_id, start_time, end_time, rental_type, booking_type, guest_count, captain_included, status, payment_status, waiver_signed, license_status, insurance_status, license_url, insurance_url, promo_code, boats(id, name, type)'
+        'id, customer_id, boat_id, start_time, end_time, rental_type, booking_type, guest_count, captain_included, status, payment_status, booking_source, staff_created, stripe_checkout_session_id, checkout_session_id, stripe_payment_id, payment_intent_id, deposit_paid, amount_collected, waiver_signed, license_status, insurance_status, license_url, insurance_url, promo_code, boats(id, name, type)'
       )
       .in('customer_id', customerIds)
       .not('status', 'eq', 'cancelled');
@@ -9029,11 +9056,13 @@ app.post('/api/public/find-booking', async (req, res) => {
       return res.status(500).json({ message: noMatchMessage });
     }
 
-    let candidates = bookings || [];
+    let candidates = (bookings || []).filter((b) => checkoutHoldService.canAccessCustomerTripDocuments(b));
 
     if (code) {
       if (isBookingUuidParam(code)) {
         candidates = candidates.filter((b) => String(b.id).toLowerCase() === code.toLowerCase());
+      } else if (parseReservationNumber(code)) {
+        candidates = candidates.filter((b) => reservationNumberMatches(b.id, code));
       } else {
         candidates = candidates.filter(
           (b) => String(b.promo_code || '').trim().toUpperCase() === code

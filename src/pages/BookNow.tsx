@@ -4238,10 +4238,10 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                       </div>
                     )}
                     {bookingMode === 'charter' && (
-                      <div className="flex justify-between text-slate-300">
-                        <span>Captain &amp; fuel:</span>
-                        <span>Included</span>
-                      </div>
+                      <p className="text-sm leading-snug text-slate-300">
+                        Your licensed captain and fuel are already in this price. There is no extra captain or fuel
+                        fee.
+                      </p>
                     )}
                     {!isBioPackageFlow && !isRocketPackageFlow && !isSunsetPackageFlow ? (
                     <div className="rounded-lg border border-white/10 bg-slate-950/60 p-3">

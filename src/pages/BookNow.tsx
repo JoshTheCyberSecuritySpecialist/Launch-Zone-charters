@@ -4237,12 +4237,6 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                         <span>${pricing.deposit.toFixed(2)}</span>
                       </div>
                     )}
-                    {bookingMode === 'charter' && (
-                      <p className="text-sm leading-snug text-slate-300">
-                        Your licensed captain and fuel are already in this price. There is no extra captain or fuel
-                        fee.
-                      </p>
-                    )}
                     {!isBioPackageFlow && !isRocketPackageFlow && !isSunsetPackageFlow ? (
                     <div className="rounded-lg border border-white/10 bg-slate-950/60 p-3">
                       <label htmlFor="promo-code" className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-300">

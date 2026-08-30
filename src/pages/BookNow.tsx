@@ -580,6 +580,10 @@ export default function BookNow({ onNavigate }: BookNowProps) {
       if (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) {
         next.date = d;
       }
+      const timeParam = searchParams.get('time');
+      if (timeParam && /^\d{2}:\d{2}$/.test(timeParam)) {
+        next.time = timeParam;
+      }
       if (mode === 'charter') {
         setBookingMode('charter');
         setSelectedBoat(null);
@@ -2885,6 +2889,15 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                 {bookingMode === 'charter' ? (
                   <>
                     <h3 className={bookingSectionTitle}>Date &amp; start time</h3>
+                    <p className="mt-2 text-sm text-slate-400">
+                      <Link
+                        to={`/conditions?location=titusville&charterType=${charterTypeForApi(bookingData.charterType)}&date=${encodeURIComponent(bookingData.date || '')}&time=${encodeURIComponent(bookingData.time || '')}`}
+                        className="font-semibold text-cyan-200 underline-offset-2 hover:underline"
+                      >
+                        Check weather for this time
+                      </Link>
+                      <span className="text-slate-500"> — viewing weather does not reserve a departure.</span>
+                    </p>
                     {calendarAvailabilityLegend}
                     <div
                       id="availability-calendar"

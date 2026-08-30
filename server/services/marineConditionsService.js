@@ -14,24 +14,25 @@
  */
 
 const fetch = require('node-fetch');
+const { OPERATING_LOCATIONS, resolveOperatingLocation } = require('../lib/operatingLocations');
 
 /** Port Orange / Daytona Beach + Titusville / Space Coast */
 const LOCATION_CONFIGS = {
   daytona: {
     key: 'daytona',
-    lat: 29.1383,
-    lon: -80.9956,
-    label: 'Port Orange / Daytona Beach, FL',
-    tideStation: '8721138',
-    tideStationLabel: 'Daytona Beach Shores, FL',
+    lat: OPERATING_LOCATIONS.daytona.lat,
+    lon: OPERATING_LOCATIONS.daytona.lon,
+    label: OPERATING_LOCATIONS.daytona.label,
+    tideStation: OPERATING_LOCATIONS.daytona.tideStation,
+    tideStationLabel: OPERATING_LOCATIONS.daytona.tideStationLabel,
   },
   titusville: {
     key: 'titusville',
-    lat: 28.6122,
-    lon: -80.8076,
-    label: 'Titusville / Space Coast (Indian River Lagoon), FL',
-    tideStation: '8721604',
-    tideStationLabel: 'Trident Pier, Port Canaveral, FL',
+    lat: OPERATING_LOCATIONS.titusville.lat,
+    lon: OPERATING_LOCATIONS.titusville.lon,
+    label: OPERATING_LOCATIONS.titusville.label,
+    tideStation: OPERATING_LOCATIONS.titusville.tideStation,
+    tideStationLabel: OPERATING_LOCATIONS.titusville.tideStationLabel,
   },
 };
 
@@ -144,8 +145,9 @@ const NOAA_USER_AGENT = '(Launch Zone Charters, https://launchzonecharters.com)'
 const cacheByLocation = new Map();
 
 function resolveLocationConfig(locationKey) {
-  const key = typeof locationKey === 'string' ? locationKey.trim().toLowerCase() : 'daytona';
-  return LOCATION_CONFIGS[key] || LOCATION_CONFIGS.daytona;
+  const resolved = resolveOperatingLocation(locationKey, { defaultKey: 'daytona' });
+  if (!resolved.ok) return LOCATION_CONFIGS.daytona;
+  return LOCATION_CONFIGS[resolved.location.id] || LOCATION_CONFIGS.daytona;
 }
 
 function noaaHeaders() {

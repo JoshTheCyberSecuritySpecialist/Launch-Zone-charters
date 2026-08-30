@@ -18,6 +18,7 @@ import {
 import { env } from '../config/env';
 import { beginAsyncInteraction, wrapNavigateClick } from '../lib/clickPerf';
 import { getCancellationRefundWeatherBody } from '../content/cancellationRefundPolicy';
+import CharterTimeForecast from '../components/conditions/CharterTimeForecast';
 
 /** Matches server `LIVE_DATA_UNAVAILABLE`, user-facing when the pipeline yields no safe live read */
 const LIVE_DATA_UNAVAILABLE = 'Live data temporarily unavailable';
@@ -654,6 +655,7 @@ export default function Conditions({ onNavigate }: ConditionsProps) {
 
       <section className="py-16">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <CharterTimeForecast />
           {loading ? (
             <div
               className="space-y-8 py-6"

@@ -53,6 +53,7 @@ const { getRocketConditions } = require('./services/rocketService');
 const { getLaunchSchedulePreview } = require('./services/rocketScheduleService');
 const { getWeeklyForecast } = require('./services/weeklyForecastService');
 const { getMarineConditions } = require('./services/marineConditionsService');
+const { getCharterWeatherWindow } = require('./services/charterWeatherService');
 const availabilityService = require('./services/availabilityService');
 const { buildPublicConfirmationSummary, resolvePaidBookingStatus } = require('./lib/bookingLifecycle');
 const { formatReservationNumber, parseReservationNumber, reservationNumberMatches } = require('./lib/reservationNumber');
@@ -10763,6 +10764,7 @@ app.post('/api/alerts/subscribe', handleSubscribe);
 
 /**
  * Live marine conditions — NOAA Weather.gov + Open-Meteo marine (5 min cache).
+ * Optional date + startTime returns a trip-window forecast (does not reserve a slot).
  */
 app.get('/api/marine-conditions', async (req, res) => {
   console.log('📡 GET /api/marine-conditions');
@@ -10770,8 +10772,29 @@ app.get('/api/marine-conditions', async (req, res) => {
     const locationKey =
       typeof req.query?.location === 'string' && req.query.location.trim()
         ? req.query.location.trim().toLowerCase()
-        : 'daytona';
-    const result = await getMarineConditions({ locationKey });
+        : '';
+    const date = typeof req.query?.date === 'string' ? req.query.date.trim() : '';
+    const startTime =
+      typeof req.query?.startTime === 'string'
+        ? req.query.startTime.trim()
+        : typeof req.query?.time === 'string'
+          ? req.query.time.trim()
+          : '';
+    const durationRaw = req.query?.durationMinutes ?? req.query?.duration;
+    const wantsWindow = Boolean(date || startTime || durationRaw);
+
+    if (wantsWindow) {
+      const result = await getCharterWeatherWindow({
+        locationKey: locationKey || undefined,
+        date,
+        startTime,
+        durationMinutes: durationRaw,
+      });
+      const status = result.statusCode || (result.success ? 200 : 400);
+      return res.status(status).json(result);
+    }
+
+    const result = await getMarineConditions({ locationKey: locationKey || 'daytona' });
     return res.json(result);
   } catch (err) {
     console.warn('[marine-conditions] route:', err?.message || err);

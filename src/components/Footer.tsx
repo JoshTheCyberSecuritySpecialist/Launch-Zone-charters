@@ -15,6 +15,7 @@ const footerMiniLinks = [
   { label: 'Daytona Rentals', path: 'fleet-daytona' as const },
   { label: 'Titusville Rentals', path: 'fleet-titusville' as const },
   { label: 'Rental Pricing', path: 'pricing' as const },
+  { label: 'Marine Conditions', path: 'conditions' as const },
   { label: 'Bioluminescence Guide', path: 'bioluminescence' as const },
   { label: 'Observation Bottle', path: 'observation-bottle' as const },
   { label: "Captain's Log", path: 'captains-log' as const },

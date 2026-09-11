@@ -621,10 +621,10 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
             </article>
 
             <article className={`${WI_SECTION} border-white/10`}>
-              <h2 className="text-xl font-bold text-white">Booked through Groupon or another partner?</h2>
+              <h2 className="text-xl font-bold text-white">I Don&apos;t Have a Booking Yet</h2>
               <p className={`mt-2 ${WI_BODY}`}>
-                Use this only if you booked through Groupon or another partner and do not have a
-                Launch Zone reservation yet.
+                Fill out your waiver and trip documents now. Our team will match them to your reservation
+                when it is ready — including Groupon or other partner bookings.
               </p>
               <button
                 type="button"
@@ -636,8 +636,11 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
                 className={`${WI_SECONDARY_BTN} mt-6`}
               >
                 <ClipboardCheck className="h-5 w-5" aria-hidden />
-                Continue with Partner Booking
+                Continue Without Booking
               </button>
+              <p className={`${WI_HINT} mt-4`}>
+                Not sure? Choose this option and we will match your documents manually.
+              </p>
             </article>
           </section>
         ) : null}
@@ -742,7 +745,7 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
                     })}
                     className={`${WI_SECONDARY_BTN}`}
                   >
-                    Booked through Groupon or another partner?
+                    Continue Without Booking
                   </button>
                 </div>
               ) : null}

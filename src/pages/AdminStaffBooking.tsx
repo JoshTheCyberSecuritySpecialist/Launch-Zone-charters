@@ -473,7 +473,8 @@ export default function AdminStaffBooking() {
       if (!pkg) return;
       setForm((prev) => ({
         ...prev,
-        passengerCount: String(pkg.guestCount),
+        passengerCount:
+          pkg.seating === 'private' ? prev.passengerCount || String(pkg.guestCount) : String(pkg.guestCount),
         originalPrice: money(pkg.standardValueUsd),
         discount: money(pkg.savingsUsd),
         finalPrice: money(pkg.directPriceUsd),
@@ -1190,11 +1191,11 @@ export default function AdminStaffBooking() {
                     ))}
                   </select>
                   <span className="mt-1 block text-xs font-normal text-slate-500">
-                    Solo {formatBioPackagePriceUsd(BIO_STAFF_PACKAGE_OPTIONS.find((p) => p.id === 'bio_solo')?.directPriceUsd ?? 0)} · Two {formatBioPackagePriceUsd(BIO_STAFF_PACKAGE_OPTIONS.find((p) => p.id === 'bio_two')?.directPriceUsd ?? 0)} · Three {formatBioPackagePriceUsd(BIO_STAFF_PACKAGE_OPTIONS.find((p) => p.id === 'bio_three')?.directPriceUsd ?? 0)} · Four {formatBioPackagePriceUsd(BIO_STAFF_PACKAGE_OPTIONS.find((p) => p.id === 'bio_four')?.directPriceUsd ?? 0)} — guest count is set by the package.
+                    Solo {formatBioPackagePriceUsd(BIO_STAFF_PACKAGE_OPTIONS.find((p) => p.id === 'bio_solo')?.directPriceUsd ?? 0)} · Two {formatBioPackagePriceUsd(BIO_STAFF_PACKAGE_OPTIONS.find((p) => p.id === 'bio_two')?.directPriceUsd ?? 0)} · Three {formatBioPackagePriceUsd(BIO_STAFF_PACKAGE_OPTIONS.find((p) => p.id === 'bio_three')?.directPriceUsd ?? 0)} · Four {formatBioPackagePriceUsd(BIO_STAFF_PACKAGE_OPTIONS.find((p) => p.id === 'bio_four')?.directPriceUsd ?? 0)} · Private {formatBioPackagePriceUsd(BIO_STAFF_PACKAGE_OPTIONS.find((p) => p.id === 'bio_private')?.directPriceUsd ?? 0)} — shared packages lock guest count; private allows 1–5.
                   </span>
                   <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-950">
-                    Direct packages cover 1, 2, 3, or 4 guests. For five guests, use a general captain charter with
-                    manual pricing or contact ops — do not combine package prices.
+                    Shared packages cover 1–4 guests (fifth-passenger add-on on the four-guest package). Private is a
+                    fixed {formatBioPackagePriceUsd(BIO_STAFF_PACKAGE_OPTIONS.find((p) => p.id === 'bio_private')?.directPriceUsd ?? 249.99)} for up to 5 guests and reserves the whole boat.
                   </p>
                 </label>
               ) : null}

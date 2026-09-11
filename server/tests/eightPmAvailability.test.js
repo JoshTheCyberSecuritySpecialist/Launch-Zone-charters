@@ -85,6 +85,15 @@ function run() {
     'bio stays shared even if the client sends a private variant'
   );
   assert.strictEqual(
+    availabilityService.isSharedCharterBookingRequest({
+      charterType: 'bio',
+      bioPackage: { id: 'bio_private', seating: 'private' },
+      charterVariant: 'private',
+    }),
+    false,
+    'bio_private is exclusive'
+  );
+  assert.strictEqual(
     availabilityService.resolveCharterSeatingForInsert({ charterType: 'bio' }),
     'shared'
   );
@@ -94,6 +103,13 @@ function run() {
       charterVariant: 'private',
     }),
     'shared'
+  );
+  assert.strictEqual(
+    availabilityService.resolveCharterSeatingForInsert({
+      charterType: 'bio',
+      bioPackage: { id: 'bio_private', seating: 'private' },
+    }),
+    'private'
   );
 
   let cap = evaluateSharedCharterCapacity({
@@ -228,8 +244,11 @@ function run() {
     { reason: 'charter_capacity', message: null },
     eightStart
   );
-  assert.ok(fullMsg.includes('8:00 PM'), fullMsg);
-  assert.ok(fullMsg.toLowerCase().includes('full'), fullMsg);
+  assert.ok(
+    fullMsg.includes('That departure just filled') || fullMsg.toLowerCase().includes('full'),
+    fullMsg
+  );
+  assert.ok(fullMsg.toLowerCase().includes('select'), fullMsg);
 
   console.log('eightPmAvailability.test: all assertions passed');
 }

@@ -345,7 +345,7 @@ export default function BioluminescentTours({ onNavigate }: BioluminescentToursP
             <li>Direct customer support · no separate voucher purchase</li>
           </ul>
           <div className="mt-8">
-            <BioluminescencePackageCards onSelect={navigateBioPackageBooking} />
+            <BioluminescencePackageCards variant="all" onSelect={navigateBioPackageBooking} />
           </div>
         </div>
       </section>

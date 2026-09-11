@@ -46,8 +46,8 @@ function staffBookingTypeUsesSharedSeating(bookingType) {
 }
 
 /**
- * Bioluminescence is always shared seating. Client `private` / mis-tagged rows
- * must not exclusive-lock the boat — remaining seats stay bookable.
+ * Bioluminescence shared packages always share seats. `bio_private` exclusive-locks
+ * the boat. Mis-tagged shared bio rows (client sent private) must not exclusive-lock.
  */
 function isBioluminescenceCharter({
   charterType = null,
@@ -65,9 +65,19 @@ function isBioluminescenceCharter({
   return pkg.startsWith('bio_');
 }
 
+function isBioPrivatePackageRow(row) {
+  if (!row) return false;
+  const packageId = String(row.pricing_package_id || row.pricingPackageId || '').trim();
+  if (packageId === 'bio_private') return true;
+  if (row.bioPackage && String(row.bioPackage.id || '').trim() === 'bio_private') return true;
+  return false;
+}
+
 function isSharedCharterBooking(row) {
   if (!row || String(row.booking_type || '') !== 'charter') return false;
-  if (isBioluminescenceCharter(row)) return true;
+  if (isBioluminescenceCharter(row)) {
+    return !isBioPrivatePackageRow(row);
+  }
   const seating = normalizeCharterSeating(row.charter_seating);
   if (seating === 'shared') return true;
   if (seating === 'private') return false;
@@ -117,6 +127,9 @@ function effectiveGuestCountForCapacity(row) {
     } catch {
       // fall through
     }
+  }
+  if (packageId === 'bio_private') {
+    return CHARTER_MAX_PASSENGERS;
   }
   const validated = validateCharterPassengerCount(row?.guest_count);
   if (validated.valid) return validated.count;
@@ -211,6 +224,7 @@ module.exports = {
   formatCapacityMessage,
   intervalsOverlap,
   isBioluminescenceCharter,
+  isBioPrivatePackageRow,
   isExclusiveBoatBooking,
   isSharedCharterBooking,
   normalizeCharterSeating,

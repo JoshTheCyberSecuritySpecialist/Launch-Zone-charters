@@ -7,7 +7,7 @@ import { DateTime } from 'luxon';
 import { BUSINESS_TZ } from './bookingDateTimeRange';
 import { DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES } from './charterDuration';
 
-export type BioPackageId = 'bio_solo' | 'bio_two' | 'bio_three' | 'bio_four';
+export type BioPackageId = 'bio_solo' | 'bio_two' | 'bio_three' | 'bio_four' | 'bio_private';
 
 export const BIO_DIRECT_PROMOTION = {
   enabled: true,
@@ -16,16 +16,25 @@ export const BIO_DIRECT_PROMOTION = {
   endsAt: null as string | null,
 };
 
+export const BIO_SHARED_FILL_FORWARD_MESSAGE =
+  'Shared tours are filled one departure at a time. Join the currently available departure below, or choose a private tour to select another available time.';
+
+export const BIO_PRIVATE_UPSELL_MESSAGE =
+  'Need a different time? Reserve the entire boat with a private tour.';
+
 type BioPackageBase = {
   id: BioPackageId;
   cardTitle: string;
   guestCount: number;
+  maxGuests?: number;
   regularPriceCents: number;
   promotionalPriceCents: number;
   badge: string | null;
   ctaLabel: string;
   included: readonly string[];
   durationMinutes: number;
+  seating: 'shared' | 'private';
+  description?: string;
 };
 
 export type BioPackageDisplay = BioPackageBase & {
@@ -45,45 +54,68 @@ const BIO_PACKAGE_BASE: readonly BioPackageBase[] = [
     id: 'bio_solo',
     cardTitle: 'Solo Glow Tour',
     guestCount: 1,
+    maxGuests: 1,
     regularPriceCents: 5850,
     promotionalPriceCents: 4499,
     badge: null,
     ctaLabel: 'Select Solo Tour',
     included: ['Captain included', 'Fuel included'],
     durationMinutes: DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES,
+    seating: 'shared',
   },
   {
     id: 'bio_two',
     cardTitle: 'Glow Tour for Two',
     guestCount: 2,
+    maxGuests: 2,
     regularPriceCents: 12000,
     promotionalPriceCents: 8999,
     badge: null,
     ctaLabel: 'Select Tour for Two',
     included: ['Captain included', 'Fuel included'],
     durationMinutes: DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES,
+    seating: 'shared',
   },
   {
     id: 'bio_three',
     cardTitle: 'Glow Tour for Three',
     guestCount: 3,
+    maxGuests: 3,
     regularPriceCents: 18000,
     promotionalPriceCents: 13499,
     badge: null,
     ctaLabel: 'Select Tour for Three',
     included: ['Captain included', 'Fuel included'],
     durationMinutes: DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES,
+    seating: 'shared',
   },
   {
     id: 'bio_four',
     cardTitle: 'Glow Tour for Four',
     guestCount: 4,
+    maxGuests: 4,
     regularPriceCents: 24000,
     promotionalPriceCents: 17999,
     badge: 'Best Value',
     ctaLabel: 'Select Tour for Four',
     included: ['Captain included', 'Fuel included'],
     durationMinutes: DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES,
+    seating: 'shared',
+  },
+  {
+    id: 'bio_private',
+    cardTitle: 'Private Glow Tour',
+    guestCount: 1,
+    maxGuests: 5,
+    regularPriceCents: 24999,
+    promotionalPriceCents: 24999,
+    badge: 'Private',
+    ctaLabel: 'Select Private Tour',
+    included: ['Entire boat reserved', 'Captain included', 'Fuel included', 'Choose any available time'],
+    durationMinutes: DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES,
+    seating: 'private',
+    description:
+      'Reserve the entire boat for your group of up to 5 guests and choose from any available departure time.',
   },
 ];
 
@@ -117,7 +149,12 @@ function centsToUsd(cents: number): number {
 
 function toDisplayPackage(base: BioPackageBase, now?: Date | DateTime): BioPackageDisplay {
   const promotionActive = isBioDirectPromotionActive(now);
-  const chargeCents = promotionActive ? base.promotionalPriceCents : base.regularPriceCents;
+  const chargeCents =
+    base.id === 'bio_private'
+      ? base.regularPriceCents
+      : promotionActive
+        ? base.promotionalPriceCents
+        : base.regularPriceCents;
   const savingsCents = Math.max(0, base.regularPriceCents - chargeCents);
   const discountPercentLabel =
     savingsCents > 0 && base.regularPriceCents > 0
@@ -125,21 +162,27 @@ function toDisplayPackage(base: BioPackageBase, now?: Date | DateTime): BioPacka
       : '';
   const regularPriceUsd = centsToUsd(base.regularPriceCents);
   const directPriceUsd = centsToUsd(chargeCents);
+  const guestDivisor = base.seating === 'private' ? Math.max(1, base.maxGuests || 5) : base.guestCount;
   return {
     ...base,
     regularPriceUsd,
     standardValueUsd: regularPriceUsd,
     directPriceUsd,
-    perGuestUsd: centsToUsd(chargeCents) / base.guestCount,
+    perGuestUsd: centsToUsd(chargeCents) / guestDivisor,
     savingsUsd: centsToUsd(savingsCents),
     discountPercentLabel,
-    promotionActive,
-    promotionLabel: promotionActive ? BIO_DIRECT_PROMOTION.label : null,
+    promotionActive: base.id === 'bio_private' ? false : promotionActive,
+    promotionLabel:
+      base.id === 'bio_private' ? null : promotionActive ? BIO_DIRECT_PROMOTION.label : null,
   };
 }
 
 /** Must stay aligned with server/config/bioluminescencePackages.js */
 export const BIO_PACKAGE_DISPLAY: BioPackageDisplay[] = BIO_PACKAGE_BASE.map((pkg) => toDisplayPackage(pkg));
+
+export const BIO_SHARED_PACKAGE_DISPLAY: BioPackageDisplay[] = BIO_PACKAGE_DISPLAY.filter(
+  (pkg) => pkg.seating === 'shared'
+);
 
 /**
  * Mirrors server flag: package UI/checkout only when VITE_DIRECT_BIO_PACKAGE_PRICING_ENABLED=true.
@@ -152,6 +195,10 @@ export function isDirectBioPackagePricingEnabled(): boolean {
 export function getBioPackageDisplay(id: string | null | undefined): BioPackageDisplay | null {
   const key = String(id || '').trim() as BioPackageId;
   return BIO_PACKAGE_DISPLAY.find((p) => p.id === key) ?? null;
+}
+
+export function isBioPrivatePackageId(id: string | null | undefined): boolean {
+  return String(id || '').trim() === 'bio_private';
 }
 
 export function bioBookingUrl(packageId: BioPackageId): string {
@@ -215,6 +262,8 @@ export const BIO_STAFF_PACKAGE_OPTIONS = BIO_PACKAGE_DISPLAY.map((p) => ({
   id: p.id,
   label: `${p.cardTitle} — $${Number.isInteger(p.directPriceUsd) ? p.directPriceUsd : p.directPriceUsd.toFixed(2)}`,
   guestCount: p.guestCount,
+  maxGuests: p.maxGuests ?? p.guestCount,
+  seating: p.seating,
   standardValueUsd: p.standardValueUsd,
   directPriceUsd: p.directPriceUsd,
   savingsUsd: p.savingsUsd,
@@ -226,10 +275,17 @@ export function formatBioPackagePriceUsd(amount: number): string {
 
 export const BIO_PACKAGE_PRICE_SUMMARY = BIO_PACKAGE_DISPLAY.map((p) => ({
   id: p.id,
-  guestLabel: p.guestCount === 1 ? '1 Person' : `${p.guestCount} People`,
+  guestLabel:
+    p.seating === 'private'
+      ? 'Private · up to 5'
+      : p.guestCount === 1
+        ? '1 Person'
+        : `${p.guestCount} People`,
   totalLabel: formatBioPackagePriceUsd(p.directPriceUsd),
   perGuestLabel:
-    p.guestCount === 1
-      ? `${formatBioPackagePriceUsd(p.perGuestUsd)}/person`
-      : `${formatBioPackagePriceUsd(p.directPriceUsd)} total · ${formatBioPackagePriceUsd(p.perGuestUsd)}/person`,
+    p.seating === 'private'
+      ? `${formatBioPackagePriceUsd(p.directPriceUsd)} total · entire boat`
+      : p.guestCount === 1
+        ? `${formatBioPackagePriceUsd(p.perGuestUsd)}/person`
+        : `${formatBioPackagePriceUsd(p.directPriceUsd)} total · ${formatBioPackagePriceUsd(p.perGuestUsd)}/person`,
 }));

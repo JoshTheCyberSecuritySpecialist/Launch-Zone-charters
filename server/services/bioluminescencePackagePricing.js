@@ -2,9 +2,11 @@ const {
   getBioluminescencePackage,
   isDirectBioPackagePricingEnabled,
   bioPackageAllowsFifthPassengerAddon,
+  isBioPrivatePackageId,
   BIO_FIFTH_PASSENGER_ADDON_CENTS,
   BIO_FIFTH_PASSENGER_NO_CAPACITY_MESSAGE,
 } = require('../config/bioluminescencePackages');
+const { validateCharterPassengerCount } = require('../charterCapacity');
 
 function roundMoney(v) {
   const n = Number(v);
@@ -68,7 +70,7 @@ function validateDirectBioPackageCheckout({
     return {
       ok: false,
       error:
-        'Select a bioluminescence package (solo, two, three, or four guests) to continue.',
+        'Select a bioluminescence package (solo, two, three, four, or private) to continue.',
     };
   }
 
@@ -90,6 +92,42 @@ function validateDirectBioPackageCheckout({
   const clientCountRaw = Number(passengerCountFromClient);
   const clientCount = Number.isFinite(clientCountRaw) ? Math.max(1, Math.round(clientCountRaw)) : NaN;
 
+  if (isBioPrivatePackageId(pkg.id)) {
+    if (addonRequested) {
+      return {
+        ok: false,
+        error: 'The fifth-passenger add-on does not apply to private bioluminescence tours.',
+      };
+    }
+    const maxGuests = Number(pkg.maxGuests) || 5;
+    if (!Number.isFinite(clientCount)) {
+      return {
+        ok: true,
+        package: pkg,
+        passengerCount: Math.max(1, Number(pkg.guestCount) || 1),
+        fifthPassengerAddon: false,
+        charterVariant: 'private',
+      };
+    }
+    const validation = validateCharterPassengerCount(clientCount);
+    if (!validation.valid) {
+      return { ok: false, error: validation.error };
+    }
+    if (validation.count > maxGuests) {
+      return {
+        ok: false,
+        error: `Private bioluminescence tours allow up to ${maxGuests} guests.`,
+      };
+    }
+    return {
+      ok: true,
+      package: pkg,
+      passengerCount: validation.count,
+      fifthPassengerAddon: false,
+      charterVariant: 'private',
+    };
+  }
+
   if (addonRequested) {
     if (Number.isFinite(clientCount) && clientCount !== pkg.guestCount && clientCount !== 5) {
       return {
@@ -108,6 +146,7 @@ function validateDirectBioPackageCheckout({
       package: pkg,
       passengerCount: 5,
       fifthPassengerAddon: true,
+      charterVariant: 'shared',
     };
   }
 
@@ -125,16 +164,29 @@ function validateDirectBioPackageCheckout({
     package: pkg,
     passengerCount: pkg.guestCount,
     fifthPassengerAddon: false,
+    charterVariant: 'shared',
   };
 }
 
-function bioPackageExpectedTotals(pkg, { fifthPassengerAddon } = {}) {
+function bioPackageExpectedTotals(pkg, { fifthPassengerAddon, passengerCount } = {}) {
   const addon = Boolean(fifthPassengerAddon) && bioPackageAllowsFifthPassengerAddon(pkg);
   const addonCents = addon ? BIO_FIFTH_PASSENGER_ADDON_CENTS : 0;
   const totalCents = Number(pkg.priceCents) + addonCents;
-  const guests = addon ? 5 : pkg.guestCount;
+  const isPrivate = isBioPrivatePackageId(pkg.id);
+  let guests;
+  if (addon) {
+    guests = 5;
+  } else if (isPrivate) {
+    const maxGuests = Number(pkg.maxGuests) || 5;
+    const requested = Number(passengerCount);
+    guests = Number.isFinite(requested)
+      ? Math.max(1, Math.min(maxGuests, Math.round(requested)))
+      : Math.max(1, Number(pkg.guestCount) || 1);
+  } else {
+    guests = pkg.guestCount;
+  }
   const totalPrice = roundMoney(totalCents / 100);
-  const ticketPrice = roundMoney(totalPrice / guests);
+  const ticketPrice = isPrivate ? totalPrice : roundMoney(totalPrice / guests);
   return {
     mode: 'charter',
     basePrice: totalPrice,
@@ -143,7 +195,7 @@ function bioPackageExpectedTotals(pkg, { fifthPassengerAddon } = {}) {
     durationHours: 1,
     totalPrice,
     amountDueToday: totalPrice,
-    charterVariant: 'shared',
+    charterVariant: isPrivate ? 'private' : 'shared',
     bioPackage: pkg,
     fifthPassengerAddon: addon,
     fifthPassengerAddonCents: addonCents,
@@ -178,14 +230,16 @@ function resolveCharterBioPricing({
     package: validated.package,
     passengerCount: validated.passengerCount,
     fifthPassengerAddon: Boolean(validated.fifthPassengerAddon),
+    charterVariant: validated.charterVariant || 'shared',
     totals: bioPackageExpectedTotals(validated.package, {
       fifthPassengerAddon: validated.fifthPassengerAddon,
+      passengerCount: validated.passengerCount,
     }),
   };
 }
 
-function bioPackageBookingFields(pkg, { fifthPassengerAddon } = {}) {
-  const totals = bioPackageExpectedTotals(pkg, { fifthPassengerAddon });
+function bioPackageBookingFields(pkg, { fifthPassengerAddon, passengerCount } = {}) {
+  const totals = bioPackageExpectedTotals(pkg, { fifthPassengerAddon, passengerCount });
   const chargedCents = Math.round(totals.totalPrice * 100);
   const regularCents = Number(pkg.regularPriceCents ?? pkg.standardValueCents ?? pkg.priceCents);
   const discountCents = Math.max(0, regularCents - Number(pkg.priceCents));
@@ -200,8 +254,12 @@ function bioPackageBookingFields(pkg, { fifthPassengerAddon } = {}) {
   };
 }
 
-function stripeLineItemNameForBioPackage(pkg, { fifthPassengerAddon } = {}) {
+function stripeLineItemNameForBioPackage(pkg, { fifthPassengerAddon, passengerCount } = {}) {
   const addon = Boolean(fifthPassengerAddon) && bioPackageAllowsFifthPassengerAddon(pkg);
+  if (isBioPrivatePackageId(pkg.id)) {
+    const totals = bioPackageExpectedTotals(pkg, { passengerCount });
+    return `Private Bioluminescence Tour — ${totals.guestCount} Guest${totals.guestCount === 1 ? '' : 's'}`;
+  }
   if (pkg.id === 'bio_solo') {
     return 'Solo Bioluminescence Night Tour — 1 Guest';
   }
@@ -211,11 +269,11 @@ function stripeLineItemNameForBioPackage(pkg, { fifthPassengerAddon } = {}) {
   return `Bioluminescence Night Tour — ${pkg.guestCount} Guests`;
 }
 
-function stripeLineItemsForBioPackage(pkg, { fifthPassengerAddon } = {}) {
+function stripeLineItemsForBioPackage(pkg, { fifthPassengerAddon, passengerCount } = {}) {
   const addon = Boolean(fifthPassengerAddon) && bioPackageAllowsFifthPassengerAddon(pkg);
   const items = [
     {
-      name: stripeLineItemNameForBioPackage(pkg),
+      name: stripeLineItemNameForBioPackage(pkg, { fifthPassengerAddon, passengerCount }),
       unit_amount: Number(pkg.priceCents),
     },
   ];
@@ -302,6 +360,7 @@ function resolveStaffBioCharterPackage({ body, passengerCount }) {
     charterType: 'bio',
     package: bioCheck.package,
     fifthPassengerAddon: Boolean(bioCheck.fifthPassengerAddon),
+    charterVariant: bioCheck.charterVariant || (isBioPrivatePackageId(bioCheck.package?.id) ? 'private' : 'shared'),
   };
 }
 

@@ -43,6 +43,18 @@ function run() {
     ),
     true
   );
+  assert.strictEqual(
+    isSharedCharterBooking(
+      bookingRow({
+        charter_type: 'bio',
+        charter_seating: 'private',
+        pricing_package_id: 'bio_private',
+        boat_id: 'boat-1',
+        guest_count: 2,
+      })
+    ),
+    false
+  );
 
   assert.strictEqual(
     isSharedCharterBooking(

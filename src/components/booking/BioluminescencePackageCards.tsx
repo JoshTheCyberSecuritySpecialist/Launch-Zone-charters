@@ -2,6 +2,7 @@ import { Check } from 'lucide-react';
 import PackageDurationLine from './PackageDurationLine';
 import {
   BIO_PACKAGE_DISPLAY,
+  BIO_SHARED_PACKAGE_DISPLAY,
   type BioPackageDisplay,
   type BioPackageId,
 } from '../../lib/bioluminescencePackages';
@@ -11,6 +12,8 @@ type Props = {
   onSelect: (packageId: BioPackageId) => void;
   /** When true, cards navigate via onSelect only (parent handles routing). */
   compact?: boolean;
+  /** Shared-only grid (default). Pass 'all' to include private. */
+  variant?: 'shared' | 'all';
 };
 
 function formatUsd(amount: number): string {
@@ -26,6 +29,7 @@ function PackageCard({
   selected: boolean;
   onSelect: (id: BioPackageId) => void;
 }) {
+  const isPrivate = pkg.seating === 'private';
   return (
     <article
       className={`flex h-full flex-col rounded-2xl border p-5 shadow-lg transition md:p-6 ${
@@ -43,9 +47,14 @@ function PackageCard({
         ) : null}
       </div>
       <p className="mt-1 text-sm text-slate-400">
-        {pkg.guestCount === 1 ? '1 Guest' : `${pkg.guestCount} Guests`}
+        {isPrivate
+          ? 'Up to 5 guests · entire boat'
+          : pkg.guestCount === 1
+            ? '1 Guest'
+            : `${pkg.guestCount} Guests`}
       </p>
       <PackageDurationLine durationMinutes={pkg.durationMinutes} />
+      {pkg.description ? <p className="mt-3 text-sm text-slate-300">{pkg.description}</p> : null}
       <div className="mt-4">
         {pkg.promotionActive ? (
           <>
@@ -63,10 +72,16 @@ function PackageCard({
         ) : (
           <p className="text-3xl font-bold text-white md:text-4xl">{formatUsd(pkg.directPriceUsd)}</p>
         )}
-        {pkg.guestCount > 1 ? (
+        {isPrivate ? (
+          <p className="mt-1 text-xs font-medium uppercase tracking-wide text-slate-400">Fixed total</p>
+        ) : pkg.guestCount > 1 ? (
           <p className="mt-1 text-xs font-medium uppercase tracking-wide text-slate-400">Total</p>
         ) : null}
-        <p className="mt-1 text-sm text-cyan-100/85">{formatUsd(pkg.perGuestUsd)} per person</p>
+        {!isPrivate ? (
+          <p className="mt-1 text-sm text-cyan-100/85">{formatUsd(pkg.perGuestUsd)} per person</p>
+        ) : (
+          <p className="mt-1 text-sm text-cyan-100/85">Same price for 1–5 guests</p>
+        )}
       </div>
       <ul className="mt-4 space-y-2 text-sm text-slate-300">
         {pkg.included.map((line) => (
@@ -89,10 +104,19 @@ function PackageCard({
   );
 }
 
-export default function BioluminescencePackageCards({ selectedPackageId, onSelect }: Props) {
+export default function BioluminescencePackageCards({
+  selectedPackageId,
+  onSelect,
+  variant = 'shared',
+}: Props) {
+  const packages = variant === 'all' ? BIO_PACKAGE_DISPLAY : BIO_SHARED_PACKAGE_DISPLAY;
   return (
-    <div className="grid gap-4 sm:grid-cols-2 sm:gap-5 xl:grid-cols-4">
-      {BIO_PACKAGE_DISPLAY.map((pkg) => (
+    <div
+      className={`grid gap-4 sm:grid-cols-2 sm:gap-5 ${
+        packages.length >= 5 ? 'xl:grid-cols-5' : 'xl:grid-cols-4'
+      }`}
+    >
+      {packages.map((pkg) => (
         <PackageCard
           key={pkg.id}
           pkg={pkg}

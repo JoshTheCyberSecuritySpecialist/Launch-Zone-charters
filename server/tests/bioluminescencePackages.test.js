@@ -46,6 +46,12 @@ function runPackageLookupTests() {
   assert.strictEqual(four.guestCount, 4);
   assert.strictEqual(four.priceCents, 17999);
 
+  const priv = getBioluminescencePackage('bio_private');
+  assert.strictEqual(priv.guestCount, 1);
+  assert.strictEqual(priv.maxGuests, 5);
+  assert.strictEqual(priv.priceCents, 24999);
+  assert.strictEqual(priv.seating, 'private');
+
   assert.throws(() => getBioluminescencePackage('bio_five'), /Unknown bioluminescence package/);
 }
 

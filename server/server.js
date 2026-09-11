@@ -1114,6 +1114,10 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
       if (bioCheck.passengerCount) {
         passengerCount = bioCheck.passengerCount;
       }
+      if (bioCheck.charterVariant) {
+        booking.charterVariant = bioCheck.charterVariant;
+        charterVariant = bioCheck.charterVariant;
+      }
     } else if (rocketLaunchPackagePricing.normalizeRocketCharterType(charterType) === 'rocket') {
       const rocketCheck = rocketLaunchPackagePricing.validateDirectRocketPackageCheckout({
         charterType,
@@ -1386,6 +1390,7 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
     ...(expected.bioPackage
       ? bioPackagePricing.bioPackageBookingFields(expected.bioPackage, {
           fifthPassengerAddon: expected.fifthPassengerAddon,
+          passengerCount,
         })
       : expected.rocketPackage
         ? rocketLaunchPackagePricing.rocketPackageBookingFields(
@@ -2605,7 +2610,10 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
       discount_amount: discount,
       final_total: finalPrice,
       ...(staffBioPackage
-        ? bioPackagePricing.bioPackageBookingFields(staffBioPackage)
+        ? bioPackagePricing.bioPackageBookingFields(staffBioPackage, {
+            fifthPassengerAddon: body.fifth_passenger_addon || body.fifthPassengerAddon,
+            passengerCount,
+          })
         : staffRocketPackage
           ? rocketLaunchPackagePricing.rocketPackageBookingFields(staffRocketPackage, passengerCount)
           : staffSunsetPackage
@@ -7440,6 +7448,10 @@ app.post('/api/create-checkout-session', async (req, res) => {
         if (bioCheck.passengerCount) {
           passengerCount = bioCheck.passengerCount;
         }
+        if (bioCheck.charterVariant) {
+          charterVariant = bioCheck.charterVariant;
+          booking.charterVariant = bioCheck.charterVariant;
+        }
       } else if (rocketLaunchPackagePricing.normalizeRocketCharterType(charterType) === 'rocket') {
         const rocketCheck = rocketLaunchPackagePricing.validateDirectRocketPackageCheckout({
           charterType,
@@ -7698,7 +7710,9 @@ app.post('/api/create-checkout-session', async (req, res) => {
       return res.status(code).json({
         error: fifthPassengerCapacityDenied
           ? bioPackagePricing.BIO_FIFTH_PASSENGER_NO_CAPACITY_MESSAGE
-          : slotErr.message || SLOT_TAKEN_USER_MESSAGE,
+          : slotErr.code === 'bio_fill_forward' || slotErr.code === 'charter_capacity'
+            ? slotErr.message || require('./services/bioSharedFillForward').BIO_DEPARTURE_JUST_FILLED_MESSAGE
+            : slotErr.message || SLOT_TAKEN_USER_MESSAGE,
         code: slotErr.code || 'slot_unavailable',
         alternatives,
       });
@@ -7724,6 +7738,7 @@ app.post('/api/create-checkout-session', async (req, res) => {
     if (expected.bioPackage) {
       lineItemName = bioPackagePricing.stripeLineItemNameForBioPackage(expected.bioPackage, {
         fifthPassengerAddon: expected.fifthPassengerAddon,
+        passengerCount,
       });
     } else if (expected.rocketPackage) {
       lineItemName = rocketLaunchPackagePricing.stripeLineItemNameForRocketPackage(expected.rocketPackage);
@@ -7734,6 +7749,7 @@ app.post('/api/create-checkout-session', async (req, res) => {
     const stripeLineItems = expected.bioPackage
       ? bioPackagePricing.stripeLineItemsForBioPackage(expected.bioPackage, {
           fifthPassengerAddon: expected.fifthPassengerAddon,
+          passengerCount,
         }).map((item) => ({
           price_data: {
             currency: 'usd',
@@ -7913,6 +7929,7 @@ app.post('/api/create-checkout-session', async (req, res) => {
       ...(expected.bioPackage
         ? bioPackagePricing.bioPackageBookingFields(expected.bioPackage, {
             fifthPassengerAddon: expected.fifthPassengerAddon,
+            passengerCount,
           })
         : expected.rocketPackage
           ? rocketLaunchPackagePricing.rocketPackageBookingFields(

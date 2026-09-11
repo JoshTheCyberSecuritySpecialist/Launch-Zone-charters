@@ -8,6 +8,7 @@
 
 const { DateTime } = require('luxon');
 const { DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES } = require('../lib/charterDuration');
+const { CHARTER_MAX_PASSENGERS } = require('../charterCapacity');
 
 const BUSINESS_TZ = String(process.env.BUSINESS_TIMEZONE || 'America/New_York').trim();
 
@@ -32,9 +33,12 @@ const BIOLUMINESCENCE_PACKAGES = {
     id: 'bio_solo',
     name: 'Solo Bioluminescence Tour',
     guestCount: 1,
+    maxGuests: 1,
     regularPriceCents: 5850,
     promotionalPriceCents: 4499,
     badge: null,
+    seating: 'shared',
+    capacityReserved: 1,
     durationMinutes: DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES,
     active: true,
   },
@@ -42,9 +46,12 @@ const BIOLUMINESCENCE_PACKAGES = {
     id: 'bio_two',
     name: 'Bioluminescence Tour for Two',
     guestCount: 2,
+    maxGuests: 2,
     regularPriceCents: 12000,
     promotionalPriceCents: 8999,
     badge: null,
+    seating: 'shared',
+    capacityReserved: 2,
     durationMinutes: DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES,
     active: true,
   },
@@ -52,9 +59,12 @@ const BIOLUMINESCENCE_PACKAGES = {
     id: 'bio_three',
     name: 'Bioluminescence Tour for Three',
     guestCount: 3,
+    maxGuests: 3,
     regularPriceCents: 18000,
     promotionalPriceCents: 13499,
     badge: null,
+    seating: 'shared',
+    capacityReserved: 3,
     durationMinutes: DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES,
     active: true,
   },
@@ -62,11 +72,29 @@ const BIOLUMINESCENCE_PACKAGES = {
     id: 'bio_four',
     name: 'Bioluminescence Tour for Four',
     guestCount: 4,
+    maxGuests: 4,
     regularPriceCents: 24000,
     promotionalPriceCents: 17999,
     badge: 'Best Value',
+    seating: 'shared',
+    capacityReserved: 4,
     durationMinutes: DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES,
     allowsFifthPassengerAddon: true,
+    active: true,
+  },
+  bio_private: {
+    id: 'bio_private',
+    name: 'Private Bioluminescence Tour',
+    guestCount: 1,
+    maxGuests: 5,
+    regularPriceCents: 24999,
+    promotionalPriceCents: 24999,
+    badge: 'Private',
+    seating: 'private',
+    capacityReserved: 5,
+    durationMinutes: DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES,
+    description:
+      'Reserve the entire boat for your group of up to 5 guests and choose from any available departure time.',
     active: true,
   },
 };
@@ -132,6 +160,25 @@ function bioPackageAllowsFifthPassengerAddon(pkg) {
   );
 }
 
+function isBioPrivatePackageId(packageId) {
+  return String(packageId || '').trim() === 'bio_private';
+}
+
+function isBioluminescencePackageId(packageId) {
+  const id = String(packageId || '').trim();
+  return Boolean(id) && Object.prototype.hasOwnProperty.call(BIOLUMINESCENCE_PACKAGES, id);
+}
+
+function getCapacityReservedForBioPackage(pkg) {
+  if (!pkg) return null;
+  if (isBioPrivatePackageId(pkg.id)) return CHARTER_MAX_PASSENGERS;
+  const reserved = Number(pkg.capacityReserved);
+  if (Number.isFinite(reserved) && reserved > 0) return Math.floor(reserved);
+  const guests = Number(pkg.guestCount);
+  if (Number.isFinite(guests) && guests > 0) return Math.floor(guests);
+  return null;
+}
+
 function getBioluminescencePackage(packageId, options = {}) {
   const id = String(packageId || '').trim();
   if (!id) {
@@ -172,6 +219,9 @@ module.exports = {
   BIO_FOUR_SIDEBAR_FIVE_LABEL,
   bioPackageAllowsFifthPassengerAddon,
   getBioluminescencePackage,
+  getCapacityReservedForBioPackage,
+  isBioPrivatePackageId,
+  isBioluminescencePackageId,
   isDirectBioPackagePricingEnabled,
   isBioDirectPromotionActive,
   resolveBioPackageChargeCents,

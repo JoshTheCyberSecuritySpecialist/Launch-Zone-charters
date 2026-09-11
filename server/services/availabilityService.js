@@ -22,6 +22,8 @@ const {
 const boatCapacityService = require('./boatCapacityService');
 const rocketDepartureService = require('./rocketDepartureService');
 const sunsetDepartureService = require('./sunsetDepartureService');
+const bioSharedFillForward = require('./bioSharedFillForward');
+const { isBioPrivatePackageId } = require('../config/bioluminescencePackages');
 
 const BUSINESS_TZ = String(process.env.BUSINESS_TIMEZONE || 'America/New_York').trim();
 const DEFAULT_OPEN_HOUR = Number(process.env.AVAILABILITY_OPEN_HOUR || 7);
@@ -135,7 +137,7 @@ async function fetchBlockingBookings(boatId, rangeStartIso, rangeEndIso) {
   const { data, error } = await supabase
     .from('bookings')
     .select(
-      'id, start_time, end_time, status, expires_at, customer_id, boat_id, booking_type, charter_type, charter_seating, guest_count, customers(full_name, email, phone), boats(name)'
+      'id, start_time, end_time, status, expires_at, hold_expires_at, customer_id, boat_id, booking_type, charter_type, charter_seating, pricing_package_id, guest_count, customers(full_name, email, phone), boats(name)'
     )
     .eq('boat_id', String(boatId))
     .lt('start_time', rangeEndIso)
@@ -566,13 +568,24 @@ function isSharedCharterBookingRequest({
   sunsetPackage = null,
   pricingPackageId = null,
 } = {}) {
+  const packageId = String(
+    pricingPackageId ||
+      bioPackage?.id ||
+      rocketPackage?.id ||
+      sunsetPackage?.id ||
+      ''
+  ).trim();
   if (
     isBioluminescenceCharter({
       charterType,
       bioPackage,
-      pricingPackageId,
+      pricingPackageId: packageId || pricingPackageId,
     })
   ) {
+    if (isBioPrivatePackageId(packageId) || isBioPrivatePackageId(bioPackage?.id)) {
+      return false;
+    }
+    // Shared bio packages ignore client-supplied private variant (legacy lockout protection).
     return true;
   }
   const seating = normalizeCharterSeating(charterSeating);
@@ -610,8 +623,15 @@ function formatDepartureFullMessage(startIso) {
 }
 
 function charterUnavailableUserMessage(result, startIso = null) {
+  if (result?.reason === 'bio_fill_forward') {
+    return result.message || bioSharedFillForward.BIO_DEPARTURE_JUST_FILLED_MESSAGE;
+  }
   if (result?.reason === 'charter_capacity') {
-    return result.message || formatDepartureFullMessage(startIso);
+    return (
+      result.message ||
+      bioSharedFillForward.BIO_DEPARTURE_JUST_FILLED_MESSAGE ||
+      formatDepartureFullMessage(startIso)
+    );
   }
   if (result?.reason === 'invalid_passenger_count') {
     return result.message;
@@ -968,13 +988,48 @@ async function checkUnifiedCharterSlotAvailability({
         return denied;
       }
     }
+    if (
+      result.available &&
+      normalizedType === 'bio' &&
+      !isBioPrivatePackageId(bioPackage?.id) &&
+      String(bookingSource || '').trim().toLowerCase() !== 'admin' &&
+      String(bookingSource || '').trim().toLowerCase() !== 'staff'
+    ) {
+      const fillCheck = await assertRequestedBioSharedFillForward({
+        startIso: slot.startIso,
+        passengerCount,
+        bioPackage,
+        excludeBookingId,
+      });
+      if (!fillCheck.ok) {
+        const denied = {
+          available: false,
+          reason: 'bio_fill_forward',
+          conflict: null,
+          message: fillCheck.message || bioSharedFillForward.BIO_DEPARTURE_JUST_FILLED_MESSAGE,
+          boatId,
+          charterSeating: charterSeatingResolved,
+          capacity: result.capacity || null,
+        };
+        logBookingConflictDecision(
+          conflictDecisionPayload(
+            denied,
+            slot,
+            { startTime, endTime, charterType, passengerCount, bookingSource },
+            boatId,
+            true
+          )
+        );
+        return denied;
+      }
+    }
     const unified = {
       ...result,
       boatId,
       charterSeating: charterSeatingResolved,
       message:
         result.reason === 'charter_capacity'
-          ? formatDepartureFullMessage(slot.startIso)
+          ? bioSharedFillForward.BIO_DEPARTURE_JUST_FILLED_MESSAGE
           : result.message,
     };
     logBookingConflictDecision(
@@ -1234,13 +1289,18 @@ async function listCharterSlotsForDay(dateStr, charterType, options = {}) {
   const duration = CHARTER_DURATION_HOURS;
   const durMs = duration * 60 * 60 * 1000;
   const rangeStartIso = day.startOf('day').toUTC().toISO();
-  const rangeEndIso = day.plus({ days: 1 }).toUTC().toISO();
+  const rangeEndDay =
+    normalizedType === 'bio' && CAPTAIN_NIGHT_WEEKDAYS.has(day.weekday)
+      ? day.plus({ days: 2 })
+      : day.plus({ days: 1 });
+  const rangeEndIso = rangeEndDay.toUTC().toISO();
   const sharedListing = isSharedCharterBookingRequest({
     charterType: normalizedType,
     charterVariant: options.charterVariant,
     bioPackage: options.bioPackage,
     rocketPackage: options.rocketPackage,
     sunsetPackage: options.sunsetPackage,
+    pricingPackageId: options.bioPackage?.id || options.pricingPackageId,
   });
   const boatId = sharedListing ? await resolveCharterBoatId(charterType) : null;
   const intervals =
@@ -1293,9 +1353,20 @@ async function listCharterSlotsForDay(dateStr, charterType, options = {}) {
   }
 
   const starts = enumerateCharterStartsForDay(day, charterType);
+  if (normalizedType === 'bio' && CAPTAIN_NIGHT_WEEKDAYS.has(day.weekday)) {
+    // Complete the operating night: after-midnight hours live on the next calendar day.
+    const nextMorning = day.plus({ days: 1 });
+    for (const hour of [0, 1, 2, 3, 4]) {
+      starts.push(nextMorning.set({ hour, minute: 0, second: 0, millisecond: 0 }));
+    }
+  }
   const out = [];
+  const seenStarts = new Set();
 
   for (const startDt of starts) {
+    const startKey = startDt.toUTC().toISO();
+    if (!startKey || seenStarts.has(startKey)) continue;
+    seenStarts.add(startKey);
     const startMs = startDt.toUTC().toMillis();
     if (startMs < minStartMs) continue;
     const endMs = startMs + durMs;
@@ -1343,7 +1414,51 @@ async function listCharterSlotsForDay(dateStr, charterType, options = {}) {
       });
     }
   }
-  return normalizeSlotRows(out);
+
+  let normalized = normalizeSlotRows(out);
+  if (
+    normalizedType === 'bio' &&
+    sharedListing &&
+    options.skipBioFillForward !== true &&
+    !isBioPrivatePackageId(options.bioPackage?.id)
+  ) {
+    normalized = bioSharedFillForward.applyBioSharedFillForward(normalized);
+  }
+  return normalized;
+}
+
+async function assertRequestedBioSharedFillForward({
+  startIso,
+  passengerCount = 1,
+  bioPackage = null,
+  excludeBookingId = null,
+} = {}) {
+  const start = DateTime.fromISO(String(startIso || ''), { zone: 'utc' }).setZone(BUSINESS_TZ);
+  if (!start.isValid) {
+    return { ok: false, message: bioSharedFillForward.BIO_DEPARTURE_JUST_FILLED_MESSAGE };
+  }
+  const anchor = getCaptainNightAnchorDay(start);
+  if (!anchor) {
+    return { ok: false, message: bioSharedFillForward.BIO_DEPARTURE_JUST_FILLED_MESSAGE };
+  }
+  const eveningDate = anchor.toFormat('yyyy-MM-dd');
+  const eligible = await listCharterSlotsForDay(eveningDate, 'bio', {
+    passengerCount,
+    bioPackage,
+    charterVariant: 'shared',
+    skipBioFillForward: true,
+    excludeBookingId,
+  });
+  const sameNight = (eligible || []).filter((slot) => {
+    return bioSharedFillForward.operatingAnchorKey(slot) === eveningDate;
+  });
+  if (bioSharedFillForward.isRequestedStartFillForwardTarget(sameNight, startIso)) {
+    return { ok: true };
+  }
+  return {
+    ok: false,
+    message: bioSharedFillForward.BIO_DEPARTURE_JUST_FILLED_MESSAGE,
+  };
 }
 
 async function listClosestAvailableCharterSlots({
@@ -1623,4 +1738,6 @@ module.exports = {
   validateCharterSlotWindow,
   parseDateOnlyInZone,
   enumerateCharterStartsForDay,
+  BIO_DEPARTURE_JUST_FILLED_MESSAGE: bioSharedFillForward.BIO_DEPARTURE_JUST_FILLED_MESSAGE,
+  BIO_SHARED_FILL_FORWARD_MESSAGE: bioSharedFillForward.BIO_SHARED_FILL_FORWARD_MESSAGE,
 };

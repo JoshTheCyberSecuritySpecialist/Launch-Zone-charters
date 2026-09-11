@@ -62,11 +62,14 @@ import {
   BIO_PACKAGE_PRICING_DISCLAIMER,
   BIO_FIFTH_PASSENGER_ADDON_USD,
   BIO_FIFTH_PASSENGER_NO_CAPACITY_MESSAGE,
+  BIO_PRIVATE_UPSELL_MESSAGE,
+  BIO_SHARED_FILL_FORWARD_MESSAGE,
   bioFourFifthPassengerFitsRemaining,
   bioFourSidebarPassengerLine,
   bioPackageAllowsFifthPassengerAddon,
   formatBioPackagePriceUsd,
   getBioPackageDisplay,
+  isBioPrivatePackageId,
   isDirectBioPackagePricingEnabled,
   resolveBioFourCheckoutDisplay,
   type BioPackageId,
@@ -633,8 +636,9 @@ export default function BookNow({ onNavigate }: BookNowProps) {
         const pkgFromUrl = packageParam ? getBioPackageDisplay(packageParam) : null;
         if (pkgFromUrl) {
           setBioPackageId(pkgFromUrl.id);
-          next.passengerCount = pkgFromUrl.guestCount;
-          next.charterVariant = 'shared';
+          next.passengerCount =
+            pkgFromUrl.seating === 'private' ? Math.max(1, next.passengerCount || 1) : pkgFromUrl.guestCount;
+          next.charterVariant = pkgFromUrl.seating === 'private' ? 'private' : 'shared';
         } else {
           next.charterVariant = 'shared';
         }
@@ -649,8 +653,9 @@ export default function BookNow({ onNavigate }: BookNowProps) {
         next.time = '20:00';
         next.hours = 1;
         setBioPackageId(packageOnly.id);
-        next.passengerCount = packageOnly.guestCount;
-        next.charterVariant = 'shared';
+        next.passengerCount =
+          packageOnly.seating === 'private' ? 1 : packageOnly.guestCount;
+        next.charterVariant = packageOnly.seating === 'private' ? 'private' : 'shared';
       }
       const rocketPackageOnly = getRocketPackageDisplay(searchParams.get('package'));
       if (!charterType && rocketPackageOnly && mode !== 'rental' && !packageOnly) {
@@ -946,8 +951,17 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     if (isBioPackageFlow && selectedBioPackage) {
       const q = new URLSearchParams();
       q.set('package', selectedBioPackage.id);
-      q.set('charterVariant', 'shared');
-      q.set('passengerCount', String(selectedBioPackage.guestCount));
+      q.set('charterVariant', selectedBioPackage.seating === 'private' ? 'private' : 'shared');
+      q.set(
+        'passengerCount',
+        String(
+          selectedBioPackage.seating === 'private'
+            ? bookingData.passengerCount
+            : bioFourCheckoutDisplay
+              ? bioFourCheckoutDisplay.guestCount
+              : selectedBioPackage.guestCount
+        )
+      );
       return q.toString();
     }
     return '';
@@ -993,7 +1007,11 @@ export default function BookNow({ onNavigate }: BookNowProps) {
       setRocketPackageId(null);
       setSunsetPackageId(null);
       setRocketSharedMinimumAcknowledged(false);
-      setBookingData((prev) => ({ ...prev, passengerCount: pkg.guestCount, charterVariant: 'shared' }));
+      setBookingData((prev) => ({
+        ...prev,
+        passengerCount: pkg.seating === 'private' ? Math.max(1, prev.passengerCount || 1) : pkg.guestCount,
+        charterVariant: pkg.seating === 'private' ? 'private' : 'shared',
+      }));
       setSearchParams(
         (prev) => {
           const next = new URLSearchParams(prev);
@@ -1526,11 +1544,23 @@ export default function BookNow({ onNavigate }: BookNowProps) {
 
     load
       .then(([todaySlots, tomorrowSlots]) => {
-        const merged = [...todaySlots];
+        const seen = new Set<string>();
+        const merged: ApiTimeSlot[] = [];
+        for (const slot of todaySlots) {
+          const key = String(slot.start || '').trim();
+          if (!key || seen.has(key)) continue;
+          seen.add(key);
+          merged.push(slot);
+        }
         for (const slot of tomorrowSlots) {
           const hour = Number(String(slot.startHHMM || '').slice(0, 2));
-          if (Number.isFinite(hour) && hour >= 0 && hour <= 4) merged.push(slot);
+          if (!(Number.isFinite(hour) && hour >= 0 && hour <= 4)) continue;
+          const key = String(slot.start || '').trim();
+          if (!key || seen.has(key)) continue;
+          seen.add(key);
+          merged.push(slot);
         }
+        merged.sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
         setTimeSlots(merged);
         if (merged.length > 0) {
           setBookingData((prev) => {
@@ -1857,11 +1887,13 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     isBioPackageFlow && selectedBioPackage
       ? {
           primary: `${selectedBioPackage.cardTitle} — $${(bioFourCheckoutDisplay?.totalUsd ?? selectedBioPackage.directPriceUsd).toFixed(2)}`,
-          sub: `${bioFourCheckoutDisplay ? bioFourCheckoutDisplay.guestCount : selectedBioPackage.guestCount} guest${
-            (bioFourCheckoutDisplay ? bioFourCheckoutDisplay.guestCount : selectedBioPackage.guestCount) === 1 ? '' : 's'
-          } · ${formatCharterDurationLabel(selectedBioPackage.durationMinutes)} · $${
-            bioFourCheckoutDisplay ? bioFourCheckoutDisplay.perGuestUsdLabel : selectedBioPackage.perGuestUsd.toFixed(2)
-          } per guest`,
+          sub: isBioPrivatePackageId(selectedBioPackage.id)
+            ? `${bookingData.passengerCount} guest${bookingData.passengerCount === 1 ? '' : 's'} · private boat · ${formatCharterDurationLabel(selectedBioPackage.durationMinutes)} · $${selectedBioPackage.directPriceUsd.toFixed(2)} fixed total`
+            : `${bioFourCheckoutDisplay ? bioFourCheckoutDisplay.guestCount : selectedBioPackage.guestCount} guest${
+                (bioFourCheckoutDisplay ? bioFourCheckoutDisplay.guestCount : selectedBioPackage.guestCount) === 1 ? '' : 's'
+              } · ${formatCharterDurationLabel(selectedBioPackage.durationMinutes)} · $${
+                bioFourCheckoutDisplay ? bioFourCheckoutDisplay.perGuestUsdLabel : selectedBioPackage.perGuestUsd.toFixed(2)
+              } per guest`,
         }
       : isRocketPackageFlow && selectedRocketPackage
         ? {
@@ -3011,6 +3043,21 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                             Late-night bio tours are available during peak glowing conditions. Times after midnight are booked as the next morning for the selected night.
                           </p>
                         )}
+                        {isBioPackageFlow && selectedBioPackage?.seating === 'shared' ? (
+                          <p className="mb-3 text-sm text-slate-200">{BIO_SHARED_FILL_FORWARD_MESSAGE}</p>
+                        ) : null}
+                        {isBioPackageFlow && selectedBioPackage?.seating !== 'private' ? (
+                          <div className="mb-3 rounded-xl border border-white/12 bg-slate-950/45 px-4 py-3">
+                            <p className="text-sm font-semibold text-white">{BIO_PRIVATE_UPSELL_MESSAGE}</p>
+                            <button
+                              type="button"
+                              className="mt-2 text-sm font-semibold text-cyan-300 underline underline-offset-2"
+                              onClick={() => handleSelectBioPackage('bio_private')}
+                            >
+                              View private tour — {formatBioPackagePriceUsd(249.99)}
+                            </button>
+                          </div>
+                        ) : null}
                         {isBioCharter ? <BioBookingHelp /> : null}
                         {isRocketCharter && (
                           <p className="mb-3 rounded-lg border border-amber-400/25 bg-amber-950/25 px-3 py-2 text-xs font-semibold text-amber-100">
@@ -3087,6 +3134,10 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                           {charterTimeOptions.map((time) => {
                             const slot = timeSlots.find((row) => row.startHHMM === time);
                             const available = !charterTimesFromApi || availableCharterTimes.has(time);
+                            const seatsLeft =
+                              slot?.capacity?.remaining != null && Number.isFinite(Number(slot.capacity.remaining))
+                                ? Math.max(0, Math.floor(Number(slot.capacity.remaining)))
+                                : null;
                             const slotLabel =
                               isBioCharter &&
                               isNextMorningNightCharterStart(bookingData.charterType, time)
@@ -3095,6 +3146,9 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                             const active =
                               (bookingData.time === time && !bookingData.slotStartIso) ||
                               Boolean(slot && bookingData.slotStartIso === slot.start);
+                            if (charterTimesFromApi && !available) {
+                              return null;
+                            }
                             return (
                               <button
                                 key={time}
@@ -3119,7 +3173,14 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                                       : `border ${bookingChoiceIdle}`
                                 }`}
                               >
-                                {slotLabel}
+                                <span className="block">{slotLabel}</span>
+                                {isBioPackageFlow &&
+                                selectedBioPackage?.seating === 'shared' &&
+                                seatsLeft != null ? (
+                                  <span className="mt-1 block text-[11px] font-medium text-cyan-100/85">
+                                    {seatsLeft} seat{seatsLeft === 1 ? '' : 's'} left
+                                  </span>
+                                ) : null}
                               </button>
                             );
                           })}
@@ -3175,6 +3236,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                             <BioluminescencePackageCards
                               selectedPackageId={bioPackageId}
                               onSelect={handleSelectBioPackage}
+                              variant="all"
                             />
                           ) : (
                             <div className={`${bookingCard} border-cyan-400/25`}>
@@ -3183,7 +3245,9 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                               </p>
                               <p className="mt-2 text-lg font-bold text-white">{selectedBioPackage.cardTitle}</p>
                               <p className="mt-1 text-sm text-slate-300">
-                                {bioFourCheckoutDisplay
+                                {isBioPrivatePackageId(selectedBioPackage.id)
+                                  ? `Up to 5 guests · $${selectedBioPackage.directPriceUsd.toFixed(2)} total · private boat`
+                                  : bioFourCheckoutDisplay
                                   ? `${bioFourCheckoutDisplay.guestCount} guest${
                                       bioFourCheckoutDisplay.guestCount === 1 ? '' : 's'
                                     } · $${bioFourCheckoutDisplay.totalUsd.toFixed(2)} total · $${
@@ -3193,6 +3257,37 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                                       selectedBioPackage.guestCount === 1 ? '' : 's'
                                     } · $${selectedBioPackage.directPriceUsd.toFixed(2)} total · $${selectedBioPackage.perGuestUsd.toFixed(2)} per guest`}
                               </p>
+                              {isBioPrivatePackageId(selectedBioPackage.id) ? (
+                                <div className="mt-4">
+                                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+                                    Guests (1–5)
+                                  </p>
+                                  <div className="flex flex-wrap gap-2">
+                                    {Array.from({ length: selectedBioPackage.maxGuests ?? 5 }, (_, i) => {
+                                      const count = i + 1;
+                                      return (
+                                        <button
+                                          key={count}
+                                          type="button"
+                                          onClick={() =>
+                                            setBookingData({ ...bookingData, passengerCount: count })
+                                          }
+                                          className={`min-h-[44px] min-w-[44px] rounded-xl border px-3 py-2 text-sm font-semibold ${
+                                            bookingData.passengerCount === count
+                                              ? bookingChoiceActive
+                                              : bookingChoiceIdle
+                                          }`}
+                                        >
+                                          {count}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                  <p className="mt-2 text-xs text-slate-400">
+                                    Price stays {formatBioPackagePriceUsd(selectedBioPackage.directPriceUsd)} for any group size.
+                                  </p>
+                                </div>
+                              ) : null}
                               {bioFourAddonEligible ? (
                                 <div className="mt-4 rounded-xl border border-white/15 bg-slate-950/70 p-4">
                                   <label

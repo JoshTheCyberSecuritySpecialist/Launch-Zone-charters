@@ -722,6 +722,22 @@ export default function Admin({ onNavigate }: AdminProps) {
     bookingId: string,
     status: 'pending' | 'pending_verification' | 'confirmed' | 'ready_for_departure' | 'cancelled' | 'completed'
   ) => {
+    if (status === 'ready_for_departure') {
+      try {
+        await apiRequest(`/api/admin/bookings/${encodeURIComponent(bookingId)}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'ready_for_departure' }),
+        });
+        void loadBookings();
+        return { error: null };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Could not mark ready for departure.';
+        logSupabaseError('Admin.handleStatusUpdate.ready', { message });
+        return { error: { message } };
+      }
+    }
+
     const { error } = await supabase.from('bookings').update({ status }).eq('id', bookingId);
 
     logSupabaseError('Admin.handleStatusUpdate', error);

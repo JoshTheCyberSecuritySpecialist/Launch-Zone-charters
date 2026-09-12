@@ -181,6 +181,9 @@ async function createGrouponBooking(supabase, deps, input) {
     charterInsertFields = await availabilityService.prepareCharterBookingInsertFields({
       charterType: mapping.charter_type,
       charterVariant: 'shared',
+      startTime: startTime.toISOString(),
+      endTime: endTime.toISOString(),
+      passengerCount: coveredGuestCount,
     });
   }
 

@@ -715,6 +715,7 @@ module.exports = {
   loadBookingForCapacity,
   tripContextFromBooking,
   tripContextFromTripType,
+  resolveBoatIdByRegistration,
   resolveBoatIdForTripType,
   replacePassengers,
   saveCapacityCalculation,

@@ -28,6 +28,8 @@ const boatSafetyCapacity = require('./lib/boatSafetyCapacity');
 const waiverContent = require('./content/waiverContent');
 const bookingReliability = require('./services/bookingReliability');
 const checkoutHoldService = require('./services/checkoutHoldService');
+const charterFleetAtomic = require('./services/charterFleetAtomic');
+const charterDualCaptainRules = require('./services/charterDualCaptainRules');
 const captainBookingService = require('./services/captainBookingService');
 const bookingCommunications = require('./services/bookingCommunications');
 const bookingConfirmationService = require('./services/bookingConfirmationService');
@@ -255,12 +257,42 @@ function sharedCharterErrorMessage(err) {
   }
   const cap = msg.match(/shared_charter_capacity_exceeded:(\d+)/i);
   if (cap) {
-    return formatCapacityMessage(Number(cap[1]));
+    return require('./services/bioSharedFillForward').BIO_DEPARTURE_JUST_FILLED_MESSAGE;
   }
   if (/shared_charter_capacity/i.test(msg)) {
-    return 'This charter is full for the selected time.';
+    return require('./services/bioSharedFillForward').BIO_DEPARTURE_JUST_FILLED_MESSAGE;
   }
   return null;
+}
+
+async function reallocateCharterBoatForContention({
+  startTime,
+  endTime,
+  passengerCount,
+  charterSeating,
+  excludeBookingId = null,
+  preferredBoatId = null,
+  stickyBoatAssignment = false,
+}) {
+  const shared = String(charterSeating || '').trim().toLowerCase() !== 'private';
+  const allocated = await availabilityService.allocateCharterFleetForSlot({
+    startTime,
+    endTime,
+    passengerCount,
+    shared,
+    excludeBookingId,
+    preferredBoatId: stickyBoatAssignment ? preferredBoatId : null,
+    stickyBoatAssignment: Boolean(stickyBoatAssignment && preferredBoatId),
+  });
+  if (!allocated.available || !allocated.boatId) {
+    return {
+      ok: false,
+      message:
+        allocated.message ||
+        require('./services/bioSharedFillForward').BIO_DEPARTURE_JUST_FILLED_MESSAGE,
+    };
+  }
+  return { ok: true, boatId: allocated.boatId, capacity: allocated.capacity || null };
 }
 
 function isUniqueConstraintError(err) {
@@ -1006,7 +1038,7 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
 
   const { data: holdRow } = await supabase
     .from('bookings')
-    .select('id, expires_at, stripe_checkout_session_id')
+    .select('id, boat_id, expires_at, stripe_checkout_session_id, charter_seating, guest_count, start_time, end_time')
     .eq('stripe_checkout_session_id', stripeSessionId)
     .maybeSingle();
 
@@ -1299,6 +1331,14 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
         bioPackage: expected.bioPackage || null,
         rocketPackage: expected.rocketPackage || null,
         sunsetPackage: expected.sunsetPackage || null,
+        startTime: booking.start_time,
+        endTime: isCharterBooking
+          ? new Date(new Date(String(booking.start_time)).getTime() + 60 * 60 * 1000).toISOString()
+          : booking.end_time,
+        passengerCount,
+        excludeBookingId: holdRow?.id || null,
+        preferredBoatId: holdRow?.boat_id || null,
+        stickyBoatAssignment: Boolean(holdRow?.boat_id),
       })
     : null;
 
@@ -1461,12 +1501,43 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
   let bookingRow;
 
   if (holdRow?.id) {
-    const { data: updated, error: updErr } = await supabase
-      .from('bookings')
-      .update(bookingInsert)
-      .eq('id', holdRow.id)
-      .select('id')
-      .single();
+    let finalizePayload = { ...bookingInsert };
+    let updated = null;
+    let updErr = null;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const result = await supabase
+        .from('bookings')
+        .update(finalizePayload)
+        .eq('id', holdRow.id)
+        .select('id')
+        .single();
+      updated = result.data;
+      updErr = result.error;
+      if (!updErr && updated) break;
+      if (isUniqueConstraintError(updErr)) break;
+      const canRetry =
+        attempt === 0 &&
+        isCharterBooking &&
+        charterFleetAtomic.isCharterHoldContentionError(updErr);
+      if (!canRetry) break;
+      const retry = await reallocateCharterBoatForContention({
+        startTime: booking.start_time,
+        endTime: bookingInsert.end_time,
+        passengerCount,
+        charterSeating: finalizePayload.charter_seating || charterInsertFields?.charter_seating,
+        excludeBookingId: holdRow.id,
+        preferredBoatId: null,
+        stickyBoatAssignment: false,
+      });
+      if (!retry.ok) {
+        updErr = updErr || { message: retry.message };
+        break;
+      }
+      finalizePayload = { ...finalizePayload, boat_id: retry.boatId };
+      console.warn(
+        `[finalize] charter boat contention; retried allocation boat_id=${retry.boatId} hold=${holdRow.id}`
+      );
+    }
     if (updErr || !updated) {
       if (isUniqueConstraintError(updErr)) {
         const { data: existing } = await supabase
@@ -1489,30 +1560,23 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
           });
         }
       }
-      if (isOverlapConstraintError(updErr)) {
+      if (isOverlapConstraintError(updErr) || sharedCharterErrorMessage(updErr)) {
         const refund = await refundStripeCheckoutSession(session);
         if (!refund.ok) {
           await bookingReliability.enqueueRecovery(supabase, {
             ...bookingReliability.recoveryPayloadFromSession(session),
             reason: 'refund_failed',
-            error: refund.error || refund.reason || SLOT_TAKEN_USER_MESSAGE,
+            error:
+              refund.error ||
+              refund.reason ||
+              sharedCharterErrorMessage(updErr) ||
+              SLOT_TAKEN_USER_MESSAGE,
           });
         }
-        const err = new Error(SLOT_TAKEN_USER_MESSAGE);
-        err.statusCode = 409;
-        throw err;
-      }
-      const sharedUpdMsg = sharedCharterErrorMessage(updErr);
-      if (sharedUpdMsg) {
-        const refund = await refundStripeCheckoutSession(session);
-        if (!refund.ok) {
-          await bookingReliability.enqueueRecovery(supabase, {
-            ...bookingReliability.recoveryPayloadFromSession(session),
-            reason: 'refund_failed',
-            error: refund.error || refund.reason || sharedUpdMsg,
-          });
-        }
-        const err = new Error(sharedUpdMsg);
+        const err = new Error(
+          sharedCharterErrorMessage(updErr) ||
+            require('./services/bioSharedFillForward').BIO_DEPARTURE_JUST_FILLED_MESSAGE
+        );
         err.statusCode = 409;
         throw err;
       }
@@ -3099,6 +3163,21 @@ app.patch('/api/admin/calendar-bookings/:id', async (req, res) => {
 
     if (Object.keys(update).length === 0) return res.status(400).json({ error: 'No changes supplied.' });
 
+    if (String(update.status || '') === 'ready_for_departure') {
+      try {
+        await charterDualCaptainRules.assertReadyForDepartureAllowed(supabase, {
+          ...existing,
+          ...update,
+          id: existing.id,
+        });
+      } catch (readyErr) {
+        return res.status(readyErr.statusCode || 409).json({
+          error: readyErr.message || 'Cannot mark ready for departure.',
+          conflicts: readyErr.conflicts || undefined,
+        });
+      }
+    }
+
     const { data, error } = await supabase
       .from('bookings')
       .update(update)
@@ -4048,6 +4127,21 @@ app.patch('/api/admin/bookings/:id', async (req, res) => {
     const bookingChanges = adminBookingUpdate.bookingFieldChanges(beforeBooking, update);
     const allChanges = [...customerChanges, ...bookingChanges];
 
+    if (String(update.status || '') === 'ready_for_departure') {
+      try {
+        await charterDualCaptainRules.assertReadyForDepartureAllowed(supabase, {
+          ...existing,
+          ...update,
+          id: existing.id,
+        });
+      } catch (readyErr) {
+        return res.status(readyErr.statusCode || 409).json({
+          error: readyErr.message || 'Cannot mark ready for departure.',
+          conflicts: readyErr.conflicts || undefined,
+        });
+      }
+    }
+
     if (Object.keys(update).length > 0) {
       const { error } = await supabase.from('bookings').update(update).eq('id', id);
       if (error) {
@@ -4258,12 +4352,17 @@ app.post('/api/admin/bookings/:id/actions', async (req, res) => {
       const reason = cleanText(req.body?.reason, 500) || 'Customer marked arrived by admin.';
       const { data: existing, error: existingError } = await supabase
         .from('bookings')
-        .select('id, status')
+        .select(
+          'id, status, boat_id, captain_id, start_time, end_time, booking_type, charter_type, charter_seating, pricing_package_id, expires_at, hold_expires_at, boats(id, name, type)'
+        )
         .eq('id', id)
         .maybeSingle();
       if (existingError) throw existingError;
       if (!existing?.id) return res.status(404).json({ error: 'Booking not found.' });
       const nextStatus = existing.status === 'confirmed' ? 'ready_for_departure' : existing.status;
+      if (nextStatus === 'ready_for_departure') {
+        await charterDualCaptainRules.assertReadyForDepartureAllowed(supabase, existing);
+      }
       const { error } = await supabase.from('bookings').update({ status: nextStatus }).eq('id', id);
       if (error) throw error;
       await bookingReliability.insertActivity(supabase, {
@@ -4407,6 +4506,9 @@ app.post('/api/admin/bookings/:id/actions', async (req, res) => {
 
     const nextStatus = statusByAction[action];
     if (!nextStatus) return res.status(400).json({ error: 'Unknown action.' });
+    if (nextStatus === 'ready_for_departure') {
+      await charterDualCaptainRules.assertReadyForDepartureAllowed(supabase, id);
+    }
     const { error } = await supabase.from('bookings').update({ status: nextStatus }).eq('id', id);
     if (error) throw error;
     await bookingReliability.insertActivity(supabase, {
@@ -5903,6 +6005,8 @@ app.get('/api/admin/operations-dashboard', async (req, res) => {
       sort: opsSort,
       filter: opsFilter,
       lastReviewedAt,
+      twoBoatCoverageEnabled: charterDualCaptainRules.isTwoBoatCoverageEnabled(),
+      maxSimultaneousCharterBoats: require('./config/charterFleetPriority').getMaxSimultaneousCharterBoats(),
       counts,
       newBookings,
       newBookingsGrouped,
@@ -7849,6 +7953,11 @@ app.post('/api/create-checkout-session', async (req, res) => {
           bioPackage: expected.bioPackage || null,
           rocketPackage: expected.rocketPackage || null,
           sunsetPackage: expected.sunsetPackage || null,
+          startTime: authoritativeBooking.start_time,
+          endTime: isCharterBooking
+            ? new Date(new Date(String(authoritativeBooking.start_time)).getTime() + 60 * 60 * 1000).toISOString()
+            : authoritativeBooking.end_time,
+          passengerCount: isCharterBooking ? passengerCount : 1,
         })
       : null;
 
@@ -7979,15 +8088,55 @@ app.post('/api/create-checkout-session', async (req, res) => {
       });
     }
 
-    const { error: holdErr } = await supabase.from('bookings').insert(holdInsert);
+    const { error: holdErr } = await (async () => {
+      let payload = { ...holdInsert };
+      let lastError = null;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const { error } = await supabase.from('bookings').insert(payload);
+        if (!error) return { error: null };
+        lastError = error;
+        const canRetry =
+          attempt === 0 &&
+          isCharterBooking &&
+          charterFleetAtomic.isCharterHoldContentionError(error);
+        if (!canRetry) return { error };
+        const retry = await reallocateCharterBoatForContention({
+          startTime: authoritativeBooking.start_time,
+          endTime: payload.end_time,
+          passengerCount,
+          charterSeating: payload.charter_seating,
+          preferredBoatId: null,
+          stickyBoatAssignment: false,
+        });
+        if (!retry.ok) {
+          return {
+            error: {
+              message:
+                retry.message ||
+                require('./services/bioSharedFillForward').BIO_DEPARTURE_JUST_FILLED_MESSAGE,
+            },
+          };
+        }
+        payload = { ...payload, boat_id: retry.boatId };
+        holdInsert.boat_id = retry.boatId;
+        console.warn(
+          `[create-checkout-session] charter boat contention; retried allocation boat_id=${retry.boatId}`
+        );
+      }
+      return { error: lastError };
+    })();
     if (holdErr) {
       await stripe.checkout.sessions.expire(session.id).catch(() => {});
       const sharedMsg = sharedCharterErrorMessage(holdErr);
       if (sharedMsg) {
         return res.status(409).json({ error: sharedMsg });
       }
-      if (isOverlapConstraintError(holdErr)) {
-        return res.status(409).json({ error: SLOT_TAKEN_USER_MESSAGE });
+      if (isOverlapConstraintError(holdErr) || /just filled/i.test(String(holdErr.message || ''))) {
+        return res.status(409).json({
+          error:
+            require('./services/bioSharedFillForward').BIO_DEPARTURE_JUST_FILLED_MESSAGE ||
+            SLOT_TAKEN_USER_MESSAGE,
+        });
       }
       console.error('[create-checkout-session] hold insert:', holdErr.message);
       return res.status(409).json({ error: SLOT_TAKEN_USER_MESSAGE });

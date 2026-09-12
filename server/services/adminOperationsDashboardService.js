@@ -7,6 +7,10 @@ const {
   isSharedCharterBooking,
   bookingRowBlocksSlot,
 } = require('../lib/sharedCharterCapacity');
+const {
+  findDualBoatCaptainIssues,
+  isTwoBoatCoverageEnabled,
+} = require('./charterDualCaptainRules');
 
 const DEFAULT_LAST_REVIEWED = '1970-01-01T00:00:00.000Z';
 const NEW_BOOKINGS_LOOKBACK_DAYS = 14;
@@ -399,6 +403,7 @@ function buildScheduleConflicts(normalizedBookings, rawRows, zone) {
   }
   conflicts.push(...detectSharedDepartureCapacityConflicts(rawRows || [], tz));
   conflicts.push(...detectCaptainOverlapConflicts(rawRows || []));
+  conflicts.push(...findDualBoatCaptainIssues(rawRows || []));
   conflicts.push(...detectAssignmentWarnings(normalizedBookings, tz));
   conflicts.push(...detectDuplicateBookingWarnings(rawRows || [], tz));
 
@@ -703,13 +708,15 @@ const CONFLICT_PRIORITY = {
   invalid_times: 1,
   shared_capacity_exceeded: 2,
   boat_exclusive_overlap: 3,
-  captain_overlap: 4,
-  missing_captain: 5,
-  missing_boat: 6,
-  duplicate_groupon_voucher: 7,
-  duplicate_stripe_session: 7,
-  duplicate_external_reference: 7,
-  duplicate_customer_slot: 7,
+  dual_boat_captain_gap: 4,
+  captain_overlap: 5,
+  center_console_missing_captain: 6,
+  missing_captain: 7,
+  missing_boat: 8,
+  duplicate_groupon_voucher: 9,
+  duplicate_stripe_session: 9,
+  duplicate_external_reference: 9,
+  duplicate_customer_slot: 9,
 };
 
 function primaryConflictStatus(details) {
@@ -722,7 +729,9 @@ function primaryConflictStatus(details) {
     invalid_times: 'Invalid time',
     shared_capacity_exceeded: 'Capacity exceeded',
     boat_exclusive_overlap: 'Possible boat conflict',
+    dual_boat_captain_gap: 'Need two captains',
     captain_overlap: 'Possible captain conflict',
+    center_console_missing_captain: 'Center console needs captain',
     missing_boat: 'Missing boat',
     missing_captain: 'Missing captain',
     duplicate_groupon_voucher: 'Possible duplicate',
@@ -1250,6 +1259,8 @@ module.exports = {
   detectBoatOverlapConflicts,
   detectSharedDepartureCapacityConflicts,
   detectDuplicateBookingWarnings,
+  findDualBoatCaptainIssues,
+  isTwoBoatCoverageEnabled,
   sharedDepartureGroupKey,
   evaluateSharedCharterCapacity,
   buildNewBookingCards,

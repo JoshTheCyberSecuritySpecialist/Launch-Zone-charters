@@ -103,6 +103,9 @@ export type OpsDashboardPayload = {
   sort: string;
   filter: string | null;
   lastReviewedAt: string;
+  /** Server env: CHARTER_MAX_SIMULTANEOUS_BOATS / CHARTER_TWO_BOAT_COVERAGE */
+  twoBoatCoverageEnabled?: boolean;
+  maxSimultaneousCharterBoats?: number;
   counts: OpsDashboardCounts;
   newBookings: OpsNewBookingCard[];
   newBookingsGrouped: OpsNewBookingGroup[];

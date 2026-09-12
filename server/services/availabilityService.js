@@ -23,7 +23,10 @@ const boatCapacityService = require('./boatCapacityService');
 const rocketDepartureService = require('./rocketDepartureService');
 const sunsetDepartureService = require('./sunsetDepartureService');
 const bioSharedFillForward = require('./bioSharedFillForward');
+const charterFleetAllocation = require('./charterFleetAllocation');
+const charterFleetAtomic = require('./charterFleetAtomic');
 const { isBioPrivatePackageId } = require('../config/bioluminescencePackages');
+const { getMaxSimultaneousCharterBoats } = require('../config/charterFleetPriority');
 
 const BUSINESS_TZ = String(process.env.BUSINESS_TIMEZONE || 'America/New_York').trim();
 const DEFAULT_OPEN_HOUR = Number(process.env.AVAILABILITY_OPEN_HOUR || 7);
@@ -610,9 +613,195 @@ async function resolveCharterBoatId(charterType) {
   return boatCapacityService.resolveBoatIdForTripType(supabase, tripType);
 }
 
-async function prepareCharterBookingInsertFields(input) {
-  const boatId = await resolveCharterBoatId(input.charterType);
+/**
+ * Evaluate each active fleet boat at a slot and pick one for the full party.
+ * Prefers the Postgres advisory-lock RPC when available; falls back to in-process checks.
+ * Public customers never choose the boat — server assigns by priority + fit.
+ */
+async function allocateCharterFleetForSlot({
+  startTime,
+  endTime,
+  passengerCount = 1,
+  shared = true,
+  excludeBookingId = null,
+  preferredBoatId = null,
+  stickyBoatAssignment = false,
+} = {}) {
+  const atomic = await charterFleetAtomic.pickCharterFleetBoatAtomic(supabase, boatCapacityService, {
+    startTime,
+    endTime,
+    passengerCount,
+    shared,
+    excludeBookingId,
+    preferredBoatId,
+    stickyBoatAssignment,
+  });
+  if (atomic.source === 'rpc') {
+    return {
+      available: atomic.available,
+      reason: atomic.reason,
+      conflict: null,
+      message: atomic.message,
+      boatId: atomic.boatId,
+      capacity: atomic.capacity,
+      boatStates: [],
+      allocationSource: 'rpc',
+    };
+  }
+
+  const fleet = await charterFleetAllocation.resolveCharterFleetBoats(supabase, boatCapacityService);
+  if (fleet.length === 0) {
+    return {
+      available: false,
+      reason: 'no_boat',
+      conflict: null,
+      message: 'Charter boat is not available for this departure. Please call us for help.',
+      boatId: null,
+      capacity: null,
+      boatStates: [],
+      allocationSource: 'fallback',
+    };
+  }
+
+  const preferred = String(preferredBoatId || '').trim();
+  if (stickyBoatAssignment && preferred) {
+    const stickyCheck = shared
+      ? await checkSharedCharterSlotAvailability({
+          boatId: preferred,
+          startTime,
+          endTime,
+          passengerCount,
+          excludeBookingId,
+        })
+      : await checkBookingSlotAvailability({
+          boatId: preferred,
+          startTime,
+          endTime,
+          excludeBookingId,
+        });
+    if (stickyCheck.available) {
+      return {
+        ...stickyCheck,
+        boatId: preferred,
+        capacity: stickyCheck.capacity
+          ? { ...stickyCheck.capacity, fleetUsed: stickyCheck.capacity.used || 0 }
+          : stickyCheck.capacity,
+        boatStates: [],
+        allocationSource: 'fallback',
+      };
+    }
+    // Fall through and re-allocate if sticky boat can no longer accept the party.
+  }
+
+  const boatStates = [];
+  for (const entry of fleet) {
+    const check = shared
+      ? await checkSharedCharterSlotAvailability({
+          boatId: entry.boatId,
+          startTime,
+          endTime,
+          passengerCount,
+          excludeBookingId,
+        })
+      : await checkBookingSlotAvailability({
+          boatId: entry.boatId,
+          startTime,
+          endTime,
+          excludeBookingId,
+        });
+
+    let used = Number(check.capacity?.used);
+    let remaining = Number(check.capacity?.remaining);
+    if (!shared) {
+      used = check.available ? 0 : 1;
+      remaining = check.available ? Number.POSITIVE_INFINITY : 0;
+    } else if (!Number.isFinite(used) && check.available) {
+      used = 0;
+    }
+    if (!Number.isFinite(remaining) && check.available && shared) {
+      remaining = Math.max(0, (check.capacity?.max || 5) - (used || 0));
+    }
+
+    boatStates.push({
+      boatId: entry.boatId,
+      priority: entry.priority,
+      role: entry.role,
+      available: Boolean(check.available),
+      used: Number.isFinite(used) ? used : 0,
+      remaining: Number.isFinite(remaining) ? remaining : 0,
+      capacity: check.capacity || null,
+      reason: check.reason || null,
+      message: check.message || null,
+      conflict: check.conflict || null,
+    });
+  }
+
+  const selected = charterFleetAllocation.selectFleetBoatForParty(boatStates, {
+    passengerCount,
+    mode: shared ? 'shared' : 'private',
+  });
+
+  if (!selected) {
+    const capacityHint = boatStates.find((row) => row.capacity)?.capacity || null;
+    return {
+      available: false,
+      reason: 'charter_capacity',
+      conflict: boatStates.find((row) => row.conflict)?.conflict || null,
+      message: bioSharedFillForward.BIO_DEPARTURE_JUST_FILLED_MESSAGE,
+      boatId: null,
+      capacity: capacityHint
+        ? { ...capacityHint, fleetUsed: charterFleetAllocation.sumFleetUsed(boatStates) }
+        : { fleetUsed: charterFleetAllocation.sumFleetUsed(boatStates) },
+      boatStates,
+      allocationSource: 'fallback',
+    };
+  }
+
+  return {
+    available: true,
+    reason: null,
+    conflict: null,
+    message: null,
+    boatId: selected.boatId,
+    capacity: charterFleetAllocation.buildAssignedCapacity(selected, boatStates),
+    boatStates,
+    allocationSource: 'fallback',
+  };
+}
+
+async function prepareCharterBookingInsertFields(input = {}) {
   const charter_seating = resolveCharterSeatingForInsert(input);
+  const shared = charter_seating === 'shared';
+  const preferredBoatId = String(input.preferredBoatId || input.boatId || '').trim() || null;
+  const stickyBoatAssignment = Boolean(input.stickyBoatAssignment) && Boolean(preferredBoatId);
+
+  // Staff/admin may pin a specific boat; public checkout never trusts a client boat id unless sticky hold.
+  if (input.forceBoatId) {
+    const forced = String(input.forceBoatId || '').trim();
+    if (forced) return { boat_id: forced, charter_seating };
+  }
+
+  if (input.startTime && input.endTime) {
+    const allocated = await allocateCharterFleetForSlot({
+      startTime: input.startTime,
+      endTime: input.endTime,
+      passengerCount: input.passengerCount || 1,
+      shared,
+      excludeBookingId: input.excludeBookingId || null,
+      preferredBoatId,
+      stickyBoatAssignment,
+    });
+    if (allocated.available && allocated.boatId) {
+      return { boat_id: allocated.boatId, charter_seating };
+    }
+  }
+
+  if (stickyBoatAssignment && preferredBoatId) {
+    return { boat_id: preferredBoatId, charter_seating };
+  }
+
+  // Fallback: primary pontoon (legacy callers without a concrete slot).
+  const boatId = await resolveCharterBoatId(input.charterType);
   return { boat_id: boatId, charter_seating };
 }
 
@@ -922,18 +1111,32 @@ async function checkUnifiedCharterSlotAvailability({
     rocketPackage,
     sunsetPackage,
   });
-  const boatId = await resolveCharterBoatId(charterType);
   const charterSeatingResolved = shared ? 'shared' : 'private';
+  const fleetAllocation = await allocateCharterFleetForSlot({
+    startTime: slot.startIso,
+    endTime: slot.endIso,
+    passengerCount,
+    shared,
+    excludeBookingId,
+    preferredBoatId: null,
+    stickyBoatAssignment: false,
+  });
+  const boatId = fleetAllocation.boatId || null;
 
   if (shared) {
-    if (!boatId) {
+    if (!boatId || !fleetAllocation.available) {
       const result = {
         available: false,
-        reason: 'no_boat',
-        conflict: null,
-        message: 'Charter boat is not available for this departure. Please call us for help.',
+        reason: fleetAllocation.reason || 'no_boat',
+        conflict: fleetAllocation.conflict || null,
+        message:
+          fleetAllocation.message ||
+          (fleetAllocation.reason === 'no_boat'
+            ? 'Charter boat is not available for this departure. Please call us for help.'
+            : bioSharedFillForward.BIO_DEPARTURE_JUST_FILLED_MESSAGE),
         boatId: null,
         charterSeating: charterSeatingResolved,
+        capacity: fleetAllocation.capacity || null,
       };
       logBookingConflictDecision(
         conflictDecisionPayload(
@@ -946,13 +1149,15 @@ async function checkUnifiedCharterSlotAvailability({
       );
       return result;
     }
-    const result = await checkSharedCharterSlotAvailability({
+    const result = {
+      available: true,
+      reason: null,
+      conflict: null,
+      message: null,
+      capacity: fleetAllocation.capacity || null,
       boatId,
-      startTime: slot.startIso,
-      endTime: slot.endIso,
-      passengerCount,
-      excludeBookingId,
-    });
+      charterSeating: charterSeatingResolved,
+    };
     if (
       result.available &&
       sunsetPackage &&
@@ -1023,14 +1228,27 @@ async function checkUnifiedCharterSlotAvailability({
         return denied;
       }
     }
+    logBookingConflictDecision(
+      conflictDecisionPayload(
+        result,
+        slot,
+        { startTime, endTime, charterType, passengerCount, bookingSource },
+        boatId,
+        true
+      )
+    );
+    return result;
+  }
+
+  if (boatId && fleetAllocation.available) {
     const unified = {
-      ...result,
+      available: true,
+      reason: null,
+      conflict: null,
+      message: null,
+      capacity: fleetAllocation.capacity || null,
       boatId,
       charterSeating: charterSeatingResolved,
-      message:
-        result.reason === 'charter_capacity'
-          ? bioSharedFillForward.BIO_DEPARTURE_JUST_FILLED_MESSAGE
-          : result.message,
     };
     logBookingConflictDecision(
       conflictDecisionPayload(
@@ -1038,24 +1256,21 @@ async function checkUnifiedCharterSlotAvailability({
         slot,
         { startTime, endTime, charterType, passengerCount, bookingSource },
         boatId,
-        true
+        false
       )
     );
     return unified;
   }
 
-  if (boatId) {
-    const result = await checkBookingSlotAvailability({
-      boatId,
-      startTime: slot.startIso,
-      endTime: slot.endIso,
-      excludeBookingId,
-    });
+  if (boatId && !fleetAllocation.available) {
     const unified = {
-      ...result,
+      available: false,
+      reason: fleetAllocation.reason || 'conflict',
+      conflict: fleetAllocation.conflict || null,
+      message: fleetAllocation.message || SLOT_TAKEN_USER_MESSAGE,
+      capacity: fleetAllocation.capacity || null,
       boatId,
       charterSeating: charterSeatingResolved,
-      message: result.available ? null : SLOT_TAKEN_USER_MESSAGE,
     };
     logBookingConflictDecision(
       conflictDecisionPayload(
@@ -1302,18 +1517,18 @@ async function listCharterSlotsForDay(dateStr, charterType, options = {}) {
     sunsetPackage: options.sunsetPackage,
     pricingPackageId: options.bioPackage?.id || options.pricingPackageId,
   });
-  const boatId = sharedListing ? await resolveCharterBoatId(charterType) : null;
+  const primaryBoatId = sharedListing ? await resolveCharterBoatId(charterType) : null;
   const intervals =
-    sharedListing && boatId
+    sharedListing && primaryBoatId
       ? await loadCharterExternalBlockingIntervals(rangeStartIso, rangeEndIso)
       : await loadCharterBlockingIntervals(rangeStartIso, rangeEndIso);
   const minStartMs = minBookableStartMs();
   const minGuests = Math.max(1, Number(options.passengerCount || options.minGuests || 1) || 1);
 
   if (normalizedType === 'sunset' && options.sunsetPackage?.id === 'sunset_solo') {
-    if (!boatId) return [];
+    if (!primaryBoatId) return [];
     const joinable = await sunsetDepartureService.listJoinableSunsetSoloSlots(supabase, {
-      boatId,
+      boatId: primaryBoatId,
       rangeStartIso,
       rangeEndIso,
       passengerCount: minGuests,
@@ -1332,11 +1547,11 @@ async function listCharterSlotsForDay(dateStr, charterType, options = {}) {
         endIso: endDt.toUTC().toISO(),
       });
       if (!windowCheck.valid) continue;
-      const availability = await checkSharedCharterSlotAvailability({
-        boatId,
+      const availability = await allocateCharterFleetForSlot({
         startTime: startDt.toUTC().toISO(),
         endTime: endDt.toUTC().toISO(),
         passengerCount: minGuests,
+        shared: true,
       });
       if (!availability.available) continue;
       if (slotConflicts(startMs, endMs, intervals)) continue;
@@ -1380,12 +1595,13 @@ async function listCharterSlotsForDay(dateStr, charterType, options = {}) {
 
     let available = false;
     let capacity = null;
-    if (sharedListing && boatId) {
-      const availability = await checkSharedCharterSlotAvailability({
-        boatId,
+    if (sharedListing && primaryBoatId) {
+      const availability = await allocateCharterFleetForSlot({
         startTime: startDt.toUTC().toISO(),
         endTime: endDt.toUTC().toISO(),
         passengerCount: minGuests,
+        shared: true,
+        excludeBookingId: options.excludeBookingId || null,
       });
       available = availability.available;
       capacity = availability.capacity || null;
@@ -1714,7 +1930,9 @@ module.exports = {
   resolveCharterBoatId,
   resolveCharterSeatingForInsert,
   prepareCharterBookingInsertFields,
+  allocateCharterFleetForSlot,
   isSharedCharterBookingRequest,
+  getMaxSimultaneousCharterBoats,
   listRentalSlotsForLocation,
   rentalTripTypeForLocation,
   assertCharterSlotAvailable,

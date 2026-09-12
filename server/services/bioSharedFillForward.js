@@ -8,7 +8,7 @@ const { getCaptainNightAnchorDay, BUSINESS_TZ } = require('../lib/captainNightSc
 const { CHARTER_MAX_PASSENGERS } = require('../lib/sharedCharterCapacity');
 
 const BIO_SHARED_FILL_FORWARD_MESSAGE =
-  'Shared tours are filled one departure at a time. Join the currently available departure below, or choose a private tour to select another available time.';
+  'We fill one departure at a time. When one boat fills, additional guests may be placed on our next available charter boat. Join the currently available departure below, or choose a private tour to select another available time.';
 
 const BIO_PRIVATE_UPSELL_MESSAGE =
   'Need a different time? Reserve the entire boat with a private tour.';
@@ -33,6 +33,13 @@ function slotUsedGuests(slot) {
   return 0;
 }
 
+/** Guests already on any fleet boat at this departure (fill-forward ranking). */
+function slotFleetUsedGuests(slot) {
+  const fleetUsed = Number(slot?.capacity?.fleetUsed);
+  if (Number.isFinite(fleetUsed) && fleetUsed >= 0) return Math.floor(fleetUsed);
+  return slotUsedGuests(slot);
+}
+
 function slotRemainingGuests(slot) {
   const remaining = Number(slot?.capacity?.remaining);
   if (Number.isFinite(remaining) && remaining >= 0) return Math.floor(remaining);
@@ -52,7 +59,8 @@ function operatingAnchorKey(slot) {
 
 /**
  * Among eligible shared slots for one operating night, return the single fill target.
- * Prefer the earliest partially filled open boat; otherwise the earliest empty eligible time.
+ * Prefer the earliest departure that already has passengers on any fleet boat and can
+ * still accept this party; otherwise the earliest empty eligible time.
  */
 function selectFillForwardTarget(eligibleSlots) {
   const sorted = (eligibleSlots || [])
@@ -61,9 +69,9 @@ function selectFillForwardTarget(eligibleSlots) {
   if (sorted.length === 0) return null;
 
   const partialOpen = sorted.filter((slot) => {
-    const used = slotUsedGuests(slot);
+    const fleetUsed = slotFleetUsedGuests(slot);
     const remaining = slotRemainingGuests(slot);
-    return used > 0 && remaining > 0;
+    return fleetUsed > 0 && remaining > 0;
   });
   if (partialOpen.length > 0) return partialOpen[0];
   return sorted[0];
@@ -104,6 +112,7 @@ module.exports = {
   isRequestedStartFillForwardTarget,
   operatingAnchorKey,
   selectFillForwardTarget,
+  slotFleetUsedGuests,
   slotRemainingGuests,
   slotStartMs,
   slotUsedGuests,

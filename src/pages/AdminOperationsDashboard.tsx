@@ -692,7 +692,10 @@ export default function AdminOperationsDashboard() {
           onMarkReviewed={(id) => void handleMarkReviewed(id)}
         />
 
-        <AdminOpsConflictsSection conflicts={payload.conflicts ?? []} />
+        <AdminOpsConflictsSection
+          conflicts={payload.conflicts ?? []}
+          twoBoatCoverageEnabled={Boolean(payload.twoBoatCoverageEnabled)}
+        />
 
         <AdminOpsUpcomingSection upcoming={payload.upcoming} />
 

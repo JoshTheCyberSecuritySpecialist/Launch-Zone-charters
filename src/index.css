@@ -435,6 +435,73 @@
     box-shadow: 0 12px 40px rgba(255, 100, 0, 0.6);
   }
 
+  /* Bioluminescence: secondary glow-forecast CTA (not orange primary) */
+  .lz-btn-glow-forecast {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.625rem;
+    width: 100%;
+    min-height: 56px;
+    padding: 0.85rem 1.25rem;
+    border-radius: 12px;
+    border: 2px solid #38d9ff;
+    background: linear-gradient(135deg, #0b4f66 0%, #0a3d5c 45%, #0c2f55 100%);
+    color: #ffffff;
+    font-size: 0.8125rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    line-height: 1.25;
+    text-align: center;
+    cursor: pointer;
+    box-shadow:
+      0 0 0 1px rgba(56, 217, 255, 0.15),
+      0 8px 28px rgba(0, 180, 220, 0.28);
+    transition:
+      transform 0.15s ease,
+      box-shadow 0.15s ease,
+      border-color 0.15s ease,
+      filter 0.15s ease;
+  }
+
+  .lz-btn-glow-forecast:hover {
+    border-color: #7ae8ff;
+    filter: brightness(1.08);
+    box-shadow:
+      0 0 0 1px rgba(56, 217, 255, 0.25),
+      0 10px 32px rgba(56, 217, 255, 0.35);
+  }
+
+  .lz-btn-glow-forecast:active {
+    transform: translateY(1px);
+    filter: brightness(0.96);
+  }
+
+  .lz-btn-glow-forecast:focus-visible {
+    outline: 2px solid #38d9ff;
+    outline-offset: 3px;
+  }
+
+  .lz-btn-glow-forecast:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+    filter: none;
+    transform: none;
+    box-shadow:
+      0 0 0 1px rgba(56, 217, 255, 0.08),
+      0 4px 16px rgba(0, 0, 0, 0.25);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .lz-btn-glow-forecast,
+    .lz-btn-glow-forecast:hover,
+    .lz-btn-glow-forecast:active {
+      transition: none;
+      transform: none;
+    }
+  }
+
   .btn-secondary {
     display: inline-flex;
     align-items: center;

@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { Helmet } from 'react-helmet-async';
 import { Link, useNavigate } from 'react-router-dom';
-import { Loader2, Check, Phone, AlertTriangle, Info, XCircle } from 'lucide-react';
+import { Loader2, Check, Phone, AlertTriangle, Info, XCircle, Moon, ChevronRight } from 'lucide-react';
 import { parseAiGoNoGo } from '../lib/aiDecision';
 import {
   fetchBioluminescence,
@@ -68,8 +68,7 @@ const accent = '#00cfff';
 /** Hero taglines: same legibility treatment as Marine Conditions hero */
 const BIO_HERO_LINE_SHADOW = '0 2px 8px rgba(0,0,0,0.8), 0 0 20px rgba(0,207,255,0.28)';
 
-const glowCheckSecondaryBtn =
-  'inline-flex items-center justify-center rounded-xl border border-cyan-400/35 bg-transparent px-5 py-2.5 text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300/95 shadow-[0_0_16px_rgba(34,211,238,0.12)] transition hover:border-cyan-300/55 hover:bg-cyan-500/10 disabled:cursor-not-allowed disabled:opacity-60';
+const glowCheckSecondaryBtn = 'lz-btn-glow-forecast';
 
 const DEFAULT_SITE_ORIGIN = 'https://launchzonecharters.com';
 
@@ -143,7 +142,13 @@ export default function BioluminescentTours({ onNavigate }: BioluminescentToursP
   const scrollToGlowCheck = useMemo(
     () =>
       wrapSyncClick('bio_scroll_glow_check', () => {
-        document.getElementById('glow-live-status')?.scrollIntoView({ behavior: 'smooth' });
+        const reduced =
+          typeof window !== 'undefined' &&
+          window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        document.getElementById('glow-live-status')?.scrollIntoView({
+          behavior: reduced ? 'auto' : 'smooth',
+          block: 'start',
+        });
       }),
     []
   );
@@ -297,7 +302,8 @@ export default function BioluminescentTours({ onNavigate }: BioluminescentToursP
             <div className="mt-6 flex flex-col items-center gap-4 md:mt-7 md:gap-5">
               <div className="max-w-xl space-y-2">
                 <p className="text-pretty text-sm font-semibold leading-relaxed text-slate-200/95 sm:text-base">
-                  Reserve your evening ride, then scroll to see if tonight&apos;s conditions score a glow night.
+                  Want to check the conditions first? View tonight&apos;s glow forecast before choosing
+                  your package.
                 </p>
                 <p className="text-pretty text-xs leading-relaxed text-slate-400 sm:text-sm">
                   Captain-led tour — this is not a self-drive boat rental.
@@ -307,16 +313,18 @@ export default function BioluminescentTours({ onNavigate }: BioluminescentToursP
                 <button
                   type="button"
                   onClick={navigateBookBioCharter}
-                  className="btn-primary order-1 w-full min-h-[44px] sm:order-none sm:min-w-0 sm:flex-1 sm:max-w-[min(100%,280px)]"
+                  className="btn-primary order-1 w-full min-h-[56px] sm:order-none sm:min-w-0 sm:flex-1 sm:max-w-[min(100%,280px)]"
                 >
                   {EXPERIENCE_BIO.bookCta}
                 </button>
                 <button
                   type="button"
                   onClick={scrollToGlowCheck}
-                  className={`${glowCheckSecondaryBtn} order-2 w-full sm:order-none sm:min-w-0 sm:flex-1 sm:max-w-[min(100%,280px)]`}
+                  className={`${glowCheckSecondaryBtn} order-2 sm:order-none sm:min-w-0 sm:flex-1 sm:max-w-[min(100%,280px)]`}
                 >
-                  Check tonight&apos;s glow
+                  <Moon className="h-4 w-4 shrink-0 text-cyan-100" aria-hidden />
+                  <span className="min-w-0 flex-1 text-balance">View tonight&apos;s glow forecast</span>
+                  <ChevronRight className="h-4 w-4 shrink-0 text-cyan-100" aria-hidden />
                 </button>
               </div>
               <p className="max-w-md text-center text-[11px] font-medium uppercase tracking-[0.18em] text-white/65 sm:text-xs">
@@ -472,7 +480,7 @@ export default function BioluminescentTours({ onNavigate }: BioluminescentToursP
       {/* Core product: live glow command center */}
       <section
         id="glow-live-status"
-        className="relative scroll-mt-24 border-t border-[#00cfff]/35 bg-lz-bg py-16 md:py-24"
+        className="relative scroll-mt-[calc(var(--lz-header-offset)+0.75rem)] border-t border-[#00cfff]/35 bg-lz-bg py-16 md:py-24"
         aria-labelledby="bio-command-heading"
       >
         <div
@@ -754,7 +762,7 @@ export default function BioluminescentTours({ onNavigate }: BioluminescentToursP
                   void checkTonightsGlow();
                 }}
                 disabled={glowLoading}
-                className={`${glowCheckSecondaryBtn} disabled:cursor-not-allowed disabled:opacity-60`}
+                className={glowCheckSecondaryBtn}
               >
                 {glowLoading ? (
                   <span className="inline-flex items-center justify-center gap-2">
@@ -762,7 +770,11 @@ export default function BioluminescentTours({ onNavigate }: BioluminescentToursP
                     Checking…
                   </span>
                 ) : (
-                  "Check tonight's glow"
+                  <>
+                    <Moon className="h-4 w-4 shrink-0 text-cyan-100" aria-hidden />
+                    <span className="min-w-0 flex-1">Check tonight&apos;s glow</span>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-cyan-100" aria-hidden />
+                  </>
                 )}
               </button>
             </div>

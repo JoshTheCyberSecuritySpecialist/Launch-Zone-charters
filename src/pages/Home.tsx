@@ -10,7 +10,7 @@ import ObservationBottlePromo from '../components/ObservationBottlePromo';
 import { formatBestViewingWindow, getLaunchConfidence } from '../lib/launchFormat';
 import { getBookingWindow } from '../lib/launchBookingWindow';
 import { env } from '../config/env.js';
-import { wrapNavigateClick, wrapRouterNavigate } from '../lib/clickPerf';
+import { wrapNavigateClick, wrapRouterNavigate, wrapSyncClick } from '../lib/clickPerf';
 import {
   EXPERIENCE_BIO,
   EXPERIENCE_RENTAL,
@@ -135,7 +135,7 @@ export default function Home({ onNavigate }: HomeProps) {
   }, []);
 
   const goToLaunchSchedule = wrapRouterNavigate(
-    'home',
+    'homepage_hero',
     'launches_schedule',
     navigate,
     '/launches#launch-schedule'
@@ -312,24 +312,34 @@ export default function Home({ onNavigate }: HomeProps) {
               <div className="hero-buttons">
                 <button
                   type="button"
-                  onClick={wrapNavigateClick('home', 'experiences', onNavigate)}
-                  className="lz-btn-primary w-full min-h-[48px] sm:w-auto"
+                  onClick={wrapNavigateClick('homepage_hero', 'experiences', onNavigate)}
+                  className="lz-btn-primary w-full min-h-[52px] sm:w-auto"
                 >
                   Book an Experience
                 </button>
                 <button
                   type="button"
-                  onClick={wrapNavigateClick('home', 'fleet-daytona', onNavigate)}
-                  className="lz-btn-secondary lz-btn-secondary-hero w-full min-h-[48px] sm:w-auto"
+                  onClick={wrapNavigateClick('homepage_hero', 'fleet-daytona', onNavigate)}
+                  className="lz-btn-secondary lz-btn-secondary-hero w-full min-h-[52px] sm:w-auto"
                 >
                   Rent a Boat
                 </button>
                 <button
                   type="button"
                   onClick={goToLaunchSchedule}
-                  className="lz-btn-secondary lz-btn-secondary-hero w-full min-h-[48px] sm:w-auto"
+                  className="lz-btn-secondary lz-btn-secondary-hero w-full min-h-[52px] sm:w-auto"
                 >
-                  See launch dates
+                  See Launch Dates
+                </button>
+                <button
+                  type="button"
+                  onClick={wrapSyncClick('waivers_entry_homepage_hero', () => onNavigate('waivers-insurance'))}
+                  className="lz-btn-waivers-hero w-full min-h-[52px] sm:w-auto"
+                >
+                  <span className="block leading-tight">Waivers &amp; Insurance</span>
+                  <span className="mt-0.5 block text-[11px] font-medium normal-case tracking-normal text-cyan-100/90 sm:text-xs">
+                    Complete your required trip documents
+                  </span>
                 </button>
               </div>
             </div>

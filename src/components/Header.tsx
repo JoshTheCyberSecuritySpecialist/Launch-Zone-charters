@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Shield, Award, Star } from 'lucide-react';
+import { X, Shield, Award, Star, ClipboardCheck } from 'lucide-react';
 import { useAuth } from '../contexts/useAuth';
 import Logo from './ui/Logo';
 import { perfActionSegment, wrapSyncClick } from '../lib/clickPerf';
@@ -40,6 +40,7 @@ const MENU_SECTIONS: MenuSection[] = [
   {
     title: 'Plan Your Trip',
     items: [
+      { kind: 'link', name: 'Waivers & Insurance', path: 'waivers-insurance' },
       { kind: 'link', name: 'Marine Conditions', path: 'conditions' },
       { kind: 'link', name: 'Bioluminescence Guide', path: 'bioluminescence' },
       { kind: 'link', name: 'Rocket Launch Schedule', path: 'launches' },
@@ -50,10 +51,6 @@ const MENU_SECTIONS: MenuSection[] = [
   {
     title: 'Groupon',
     items: [{ kind: 'link', name: 'Redeem Groupon Voucher', path: 'groupon-redeem' }],
-  },
-  {
-    title: 'Before your trip',
-    items: [{ kind: 'link', name: 'Waivers & Insurance', path: 'waivers-insurance' }],
   },
   {
     title: 'Company',
@@ -69,6 +66,26 @@ const MENU_SECTIONS: MenuSection[] = [
   },
 ];
 
+const TRUST_TICKER_STATIC = [
+  { id: 'licensed', label: 'Licensed & Insured', icon: 'shield' as const, path: null },
+  { id: 'local', label: 'Local Experts', icon: 'award' as const, path: null },
+  { id: 'stars', label: '5-Star Service', icon: 'star' as const, path: null },
+  {
+    id: 'waivers',
+    label: 'Complete Waivers & Insurance',
+    icon: 'clipboard' as const,
+    path: 'waivers-insurance' as const,
+  },
+];
+
+function TrustTickerIcon({ kind }: { kind: 'shield' | 'award' | 'star' | 'clipboard' }) {
+  const cls = 'h-3.5 w-3.5 shrink-0';
+  if (kind === 'award') return <Award className={`${cls} text-lz-accent`} aria-hidden />;
+  if (kind === 'star') return <Star className={`${cls} fill-lz-accent text-lz-accent`} aria-hidden />;
+  if (kind === 'clipboard') return <ClipboardCheck className={`${cls} text-cyan-300`} aria-hidden />;
+  return <Shield className={`${cls} text-lz-accent`} aria-hidden />;
+}
+
 export default function Header({ onNavigate, currentPage }: HeaderProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const { isAdmin } = useAuth();
@@ -78,14 +95,57 @@ export default function Header({ onNavigate, currentPage }: HeaderProps) {
   const navActive = (path: string) =>
     currentPage === path || (path === 'captains-log' && currentPage === 'log-article');
 
-  const handleNavigation = (path: string) => {
-    wrapSyncClick(`header_nav_${perfActionSegment(path)}`, () => {
+  const handleNavigation = (path: string, source: 'mobile_menu' | 'desktop_menu' | 'announcement_bar' = 'mobile_menu') => {
+    const action =
+      path === 'waivers-insurance'
+        ? `waivers_entry_${source}`
+        : `header_nav_${perfActionSegment(path)}`;
+    wrapSyncClick(action, () => {
       onNavigate(path);
       setMenuOpen(false);
     })();
   };
 
   const closeMenu = () => wrapSyncClick('header_menu_close', () => setMenuOpen(false))();
+
+  const renderTrustItem = (
+    item: (typeof TRUST_TICKER_STATIC)[number],
+    opts: { interactive: boolean; keyPrefix: string }
+  ) => {
+    const content = (
+      <>
+        <TrustTickerIcon kind={item.icon} />
+        <span
+          className={`font-semibold tracking-wide ${
+            item.path ? 'text-cyan-200 underline decoration-cyan-400/40 underline-offset-2' : 'text-slate-200'
+          }`}
+        >
+          {item.label}
+        </span>
+      </>
+    );
+    if (item.path && opts.interactive) {
+      return (
+        <button
+          key={`${opts.keyPrefix}-${item.id}`}
+          type="button"
+          onClick={() => handleNavigation(item.path!, 'announcement_bar')}
+          className="lz-trust-ticker__item lz-trust-ticker__item--link inline-flex min-h-11 items-center gap-2 px-3 py-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/60"
+        >
+          {content}
+        </button>
+      );
+    }
+    return (
+      <span
+        key={`${opts.keyPrefix}-${item.id}`}
+        className="lz-trust-ticker__item inline-flex min-h-11 items-center gap-2 px-3 py-2"
+        aria-hidden={!opts.interactive}
+      >
+        {content}
+      </span>
+    );
+  };
 
   useEffect(() => {
     document.body.style.overflow = menuOpen ? 'hidden' : '';
@@ -285,18 +345,20 @@ export default function Header({ onNavigate, currentPage }: HeaderProps) {
     <>
       <header ref={headerRef} className="lz-header fixed top-0 left-0 z-50 w-full text-white">
         <div className="lz-header-trust border-b border-white/10 border-opacity-50 bg-transparent">
-          <div className="lz-header-nav-shell mx-auto flex w-full max-w-[1200px] flex-wrap items-center justify-center gap-x-5 gap-y-0 px-4 py-0 text-[10px] md:justify-between md:text-[11px]">
-            <div className="flex items-center gap-2 text-slate-300">
-              <Shield className="h-3 w-3 shrink-0 text-lz-accent" aria-hidden />
-              <span className="font-medium tracking-wide">Licensed & Insured</span>
-            </div>
-            <div className="hidden items-center gap-2 text-slate-300 sm:flex">
-              <Award className="h-3 w-3 shrink-0 text-lz-accent" aria-hidden />
-              <span className="font-medium tracking-wide">Local Experts</span>
-            </div>
-            <div className="hidden items-center gap-2 text-slate-300 sm:flex">
-              <Star className="h-3 w-3 shrink-0 fill-lz-accent text-lz-accent" aria-hidden />
-              <span className="font-medium tracking-wide">5-Star Service</span>
+          <div className="lz-header-nav-shell mx-auto w-full max-w-[1200px] overflow-hidden px-2 sm:px-4">
+            <div className="lz-trust-ticker" aria-label="Site highlights">
+              <div className="lz-trust-ticker__track">
+                <div className="lz-trust-ticker__group">
+                  {TRUST_TICKER_STATIC.map((item) =>
+                    renderTrustItem(item, { interactive: true, keyPrefix: 'a' })
+                  )}
+                </div>
+                <div className="lz-trust-ticker__group" aria-hidden="true">
+                  {TRUST_TICKER_STATIC.map((item) =>
+                    renderTrustItem(item, { interactive: false, keyPrefix: 'b' })
+                  )}
+                </div>
+              </div>
             </div>
           </div>
         </div>

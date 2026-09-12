@@ -37,6 +37,7 @@ import {
 import {
   WI_BODY,
   WI_CHOICE_CARD,
+  WI_CYAN_BTN,
   WI_FIELD,
   WI_HINT,
   WI_LABEL,
@@ -561,14 +562,14 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
       : 'complete';
 
   return (
-    <div className="relative min-h-screen overflow-x-hidden px-4 pb-12 pt-6 sm:px-5 sm:pt-8 md:pb-16 md:pt-10">
-      <div className="relative z-[1] mx-auto w-full max-w-xl">
-        <header ref={pageTopRef} className="mb-6 text-center sm:mb-8">
+    <div className="relative min-h-screen overflow-x-hidden px-4 pb-12 pt-8 sm:px-5 sm:pt-10 md:pb-16 md:pt-12">
+      <div className="relative z-[1] mx-auto w-full max-w-3xl">
+        <header ref={pageTopRef} className="mb-6 scroll-mt-[calc(var(--lz-header-offset)+0.75rem)] text-center sm:mb-8">
           <h1 className="font-display text-[1.75rem] font-bold leading-tight text-white sm:text-3xl">
             Complete Your Trip Documents
           </h1>
           <p className={`mx-auto mt-3 max-w-md ${WI_BODY}`}>
-            Choose an option below to complete your waiver and required trip documents.
+            Choose an option below to complete your waiver and required insurance documents.
           </p>
           <p className="mt-3 text-sm font-medium text-slate-400 sm:text-base">
             Secure submission · Usually takes about 5 minutes
@@ -645,51 +646,53 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
               Do you already have a booking?
             </h2>
 
-            <article
-              className={`${WI_CHOICE_CARD} border-[var(--lz-cta)]/45 bg-[rgba(255,140,43,0.08)]`}
-            >
-              <button
-                type="button"
-                className="absolute inset-0 z-0 rounded-2xl focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--lz-cta)]/60"
-                aria-label="Yes, I have a booking. Find my booking."
-                onClick={wrapSyncClick('waivers_choose_booking_lookup', chooseBookingPath)}
-              />
-              <div className="relative z-[1] pointer-events-none">
-                <span className="inline-flex rounded-full bg-[var(--lz-cta)] px-3 py-1 text-xs font-bold uppercase tracking-wide text-[#02111f]">
-                  Recommended
-                </span>
-                <h3 className="mt-3 text-xl font-bold text-white sm:text-2xl">Yes, I Have a Booking</h3>
-                <p className={`mt-2 ${WI_BODY}`}>
-                  Find your reservation and attach your documents directly to your trip.
-                </p>
-                <span className={`${WI_PRIMARY_BTN} mt-5`}>
-                  <Search className="h-5 w-5" aria-hidden />
-                  Find My Booking
-                </span>
-              </div>
-            </article>
+            <div className="grid gap-4 md:grid-cols-2 md:gap-5">
+              <article
+                className={`${WI_CHOICE_CARD} border-[var(--lz-cta)]/45 bg-[rgba(255,140,43,0.08)]`}
+              >
+                <button
+                  type="button"
+                  className="absolute inset-0 z-0 rounded-2xl focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--lz-cta)]/60"
+                  aria-label="Yes, I have a booking. Find my booking."
+                  onClick={wrapSyncClick('waivers_choose_booking_lookup', chooseBookingPath)}
+                />
+                <div className="relative z-[1] pointer-events-none">
+                  <span className="inline-flex rounded-full bg-[var(--lz-cta)] px-3 py-1 text-xs font-bold uppercase tracking-wide text-[#02111f]">
+                    Recommended
+                  </span>
+                  <h3 className="mt-3 text-xl font-bold text-white sm:text-2xl">Yes, I Have a Booking</h3>
+                  <p className={`mt-2 ${WI_BODY}`}>
+                    Find your reservation and attach your documents directly to your trip.
+                  </p>
+                  <span className={`${WI_PRIMARY_BTN} mt-5`}>
+                    <Search className="h-5 w-5" aria-hidden />
+                    Find My Booking
+                  </span>
+                </div>
+              </article>
 
-            <article className={`${WI_CHOICE_CARD} border-white/12 bg-slate-950/50`}>
-              <button
-                type="button"
-                className="absolute inset-0 z-0 rounded-2xl focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/50"
-                aria-label="No, I do not have a booking yet. Continue without a booking."
-                onClick={wrapSyncClick('waivers_choose_manual_submission', chooseManualPath)}
-              />
-              <div className="relative z-[1] pointer-events-none">
-                <h3 className="text-xl font-bold text-white sm:text-2xl">
-                  No, I Don&apos;t Have a Booking Yet
-                </h3>
-                <p className={`mt-2 ${WI_BODY}`}>
-                  You can still complete your documents now. Our team will match them to your
-                  reservation later.
-                </p>
-                <span className={`${WI_SECONDARY_BTN} mt-5`}>
-                  <ClipboardCheck className="h-5 w-5" aria-hidden />
-                  Continue Without a Booking
-                </span>
-              </div>
-            </article>
+              <article className={`${WI_CHOICE_CARD} border-cyan-400/35 bg-cyan-950/20`}>
+                <button
+                  type="button"
+                  className="absolute inset-0 z-0 rounded-2xl focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/50"
+                  aria-label="No, I do not have a booking yet. Continue without a booking."
+                  onClick={wrapSyncClick('waivers_choose_manual_submission', chooseManualPath)}
+                />
+                <div className="relative z-[1] pointer-events-none">
+                  <h3 className="text-xl font-bold text-white sm:text-2xl">
+                    No, I Don&apos;t Have a Booking Yet
+                  </h3>
+                  <p className={`mt-2 ${WI_BODY}`}>
+                    You can still complete your documents now. Our team will match them to your
+                    reservation later.
+                  </p>
+                  <span className={`${WI_CYAN_BTN} mt-5`}>
+                    <ClipboardCheck className="h-5 w-5 text-cyan-100" aria-hidden />
+                    Continue Without Booking
+                  </span>
+                </div>
+              </article>
+            </div>
 
             <WaiversHelpCard className="mt-2" />
           </section>
@@ -800,9 +803,9 @@ export default function WaiversInsurance({ onNavigate }: WaiversInsuranceProps) 
                   <button
                     type="button"
                     onClick={wrapSyncClick('waivers_choose_manual_submission', chooseManualPath)}
-                    className={WI_SECONDARY_BTN}
+                    className={WI_CYAN_BTN}
                   >
-                    Continue Without a Booking
+                    Continue Without Booking
                   </button>
                 </div>
               ) : null}

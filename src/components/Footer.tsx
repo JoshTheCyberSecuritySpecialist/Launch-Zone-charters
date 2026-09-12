@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom';
 import { Phone, MapPin } from 'lucide-react';
 import Logo from './ui/Logo';
-import { wrapNavigateClick } from '../lib/clickPerf';
+import { wrapNavigateClick, wrapSyncClick } from '../lib/clickPerf';
 
 interface FooterProps {
   onNavigate: (page: string) => void;
@@ -15,6 +15,7 @@ const footerMiniLinks = [
   { label: 'Daytona Rentals', path: 'fleet-daytona' as const },
   { label: 'Titusville Rentals', path: 'fleet-titusville' as const },
   { label: 'Rental Pricing', path: 'pricing' as const },
+  { label: 'Waivers & Insurance', path: 'waivers-insurance' as const },
   { label: 'Marine Conditions', path: 'conditions' as const },
   { label: 'Bioluminescence Guide', path: 'bioluminescence' as const },
   { label: 'Observation Bottle', path: 'observation-bottle' as const },
@@ -42,8 +43,16 @@ export default function Footer({ onNavigate }: FooterProps) {
                 <button
                   key={path}
                   type="button"
-                  onClick={wrapNavigateClick('footer', path, onNavigate)}
-                  className="text-slate-400 transition-colors hover:text-amber-400"
+                  onClick={
+                    path === 'waivers-insurance'
+                      ? wrapSyncClick('waivers_entry_footer', () => onNavigate(path))
+                      : wrapNavigateClick('footer', path, onNavigate)
+                  }
+                  className={
+                    path === 'waivers-insurance'
+                      ? 'font-semibold text-cyan-200 transition-colors hover:text-amber-400'
+                      : 'text-slate-400 transition-colors hover:text-amber-400'
+                  }
                 >
                   {label}
                 </button>
@@ -150,6 +159,15 @@ export default function Footer({ onNavigate }: FooterProps) {
                   className="transition-colors hover:text-amber-400"
                 >
                   Refund Policy
+                </button>
+              </li>
+              <li>
+                <button
+                  type="button"
+                  onClick={wrapSyncClick('waivers_entry_footer', () => onNavigate('waivers-insurance'))}
+                  className="font-semibold text-cyan-200 transition-colors hover:text-amber-400"
+                >
+                  Waivers &amp; Insurance
                 </button>
               </li>
               <li>

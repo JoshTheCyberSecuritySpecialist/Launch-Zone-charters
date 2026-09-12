@@ -332,6 +332,48 @@
     background: rgba(0, 207, 255, 0.06);
   }
 
+  /* Home hero: cyan utility CTA for Waivers & Insurance */
+  .lz-btn-waivers-hero {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    min-height: 52px;
+    padding: 0.7rem 1.15rem;
+    border-radius: var(--lz-radius, 0.75rem);
+    border: 1.5px solid rgba(34, 211, 238, 0.75);
+    background: rgba(8, 51, 68, 0.72);
+    color: #fff;
+    font-size: 0.8rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    box-shadow: 0 0 16px rgba(34, 211, 238, 0.18);
+    transition:
+      border-color 0.2s ease,
+      background 0.2s ease,
+      box-shadow 0.2s ease,
+      transform 0.15s ease;
+  }
+
+  .lz-btn-waivers-hero:hover {
+    border-color: #22d3ee;
+    background: rgba(14, 116, 144, 0.55);
+    box-shadow: 0 0 22px rgba(34, 211, 238, 0.32);
+  }
+
+  .lz-btn-waivers-hero:focus-visible {
+    outline: 2px solid #22d3ee;
+    outline-offset: 3px;
+  }
+
+  .lz-btn-waivers-hero:active {
+    transform: translateY(1px);
+  }
+
   /* Home hero: Busier background — slight tint keeps label legible (blur still primary) */
   .lz-btn-secondary.lz-btn-secondary-hero {
     background: rgba(2, 6, 23, 0.35);
@@ -342,9 +384,9 @@
   /* Home hero — in-flow CTAs (no .lz-hero-cta: avoids absolute / translate overlap) */
   .hero-buttons {
     display: flex;
-    gap: 16px;
+    gap: 12px;
     margin-top: 24px;
-    align-items: center;
+    align-items: stretch;
     flex-wrap: wrap;
   }
 
@@ -924,6 +966,73 @@
 .lz-header-trust {
   box-sizing: border-box;
   min-height: var(--lz-header-trust-h);
+  overflow: hidden;
+}
+
+.lz-trust-ticker {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  font-size: 10px;
+}
+
+@media (min-width: 768px) {
+  .lz-trust-ticker {
+    font-size: 11px;
+  }
+}
+
+.lz-trust-ticker__track {
+  display: flex;
+  width: max-content;
+  align-items: center;
+  animation: lz-trust-marquee 42s linear infinite;
+}
+
+.lz-trust-ticker:hover .lz-trust-ticker__track,
+.lz-trust-ticker:focus-within .lz-trust-ticker__track {
+  animation-play-state: paused;
+}
+
+.lz-trust-ticker__group {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 0.25rem;
+  padding-right: 1.5rem;
+}
+
+.lz-trust-ticker__item--link {
+  border-radius: 0.5rem;
+  background: rgba(8, 145, 178, 0.12);
+  border: 1px solid rgba(34, 211, 238, 0.28);
+}
+
+.lz-trust-ticker__item--link:hover {
+  background: rgba(8, 145, 178, 0.22);
+  border-color: rgba(34, 211, 238, 0.5);
+}
+
+@keyframes lz-trust-marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lz-trust-ticker__track {
+    animation: none;
+    width: 100%;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  .lz-trust-ticker__group[aria-hidden='true'] {
+    display: none;
+  }
 }
 
 .lz-header-inner {

@@ -8,7 +8,7 @@ import {
   type BuoyInsuranceConfig,
 } from '../config/buoyInsurance';
 import { env } from '../config/env.js';
-import { wrapNavigateClick, wrapRouterNavigate, wrapSyncClick } from '../lib/clickPerf';
+import { wrapNavigateClick, wrapSyncClick } from '../lib/clickPerf';
 import { supabase } from '../lib/supabase';
 import {
   ROCKET_LAUNCH_MIN_GUESTS,
@@ -245,12 +245,9 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
 
   const goWaiversInsurance = useMemo(
     () =>
-      wrapRouterNavigate(
-        'booking_success',
-        'waivers_insurance',
-        navigate,
-        `/waivers-insurance?bookingId=${encodeURIComponent(activeBookingId)}`
-      ),
+      wrapSyncClick('waivers_entry_booking_confirmation', () => {
+        navigate(`/waivers-insurance?bookingId=${encodeURIComponent(activeBookingId)}`);
+      }),
     [navigate, activeBookingId]
   );
 

@@ -13,10 +13,14 @@ export const WI_SECTION =
   'rounded-2xl border border-white/10 bg-slate-950/55 p-5 shadow-[0_8px_28px_rgba(0,0,0,0.28)] sm:p-6 md:p-8';
 
 export const WI_PRIMARY_BTN =
-  'lz-btn-primary flex min-h-12 w-full items-center justify-center gap-2 px-5 py-3.5 text-base font-semibold !normal-case !tracking-wide sm:text-lg';
+  'lz-btn-primary flex min-h-[52px] w-full items-center justify-center gap-2 px-5 py-3.5 text-base font-semibold !normal-case !tracking-wide sm:text-lg';
 
 export const WI_SECONDARY_BTN =
   'flex min-h-12 w-full items-center justify-center rounded-xl border border-white/20 bg-slate-950/50 px-5 py-3.5 text-base font-semibold text-cyan-100 hover:bg-slate-900/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/50 sm:text-lg';
+
+/** Clearly enabled cyan utility CTA (never looks disabled). */
+export const WI_CYAN_BTN =
+  'flex min-h-[52px] w-full items-center justify-center gap-2 rounded-xl border-2 border-cyan-400/80 bg-cyan-950/70 px-5 py-3.5 text-base font-semibold text-white shadow-[0_0_18px_rgba(34,211,238,0.22)] transition hover:border-cyan-300 hover:bg-cyan-900/75 hover:shadow-[0_0_24px_rgba(34,211,238,0.35)] focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/70 active:translate-y-px disabled:cursor-not-allowed disabled:border-white/15 disabled:bg-slate-900/40 disabled:text-slate-500 disabled:shadow-none sm:text-lg';
 
 export const WI_CHOICE_CARD =
   'relative overflow-hidden rounded-2xl border p-5 text-left shadow-[0_8px_28px_rgba(0,0,0,0.28)] transition sm:p-6';

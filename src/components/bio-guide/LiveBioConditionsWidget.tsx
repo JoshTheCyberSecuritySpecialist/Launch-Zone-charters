@@ -99,7 +99,7 @@ export default function LiveBioConditionsWidget() {
             Tonight&apos;s Bioluminescence Conditions
           </h2>
           <p className="mt-1 text-sm text-slate-400">
-            Live snapshot from the same server model used on our{' '}
+            Current conditions from the same server model used on our{' '}
             <Link to="/bioluminescent-tours" className="text-cyan-300 underline-offset-2 hover:underline">
               tour operations page
             </Link>

@@ -14,33 +14,6 @@ type BioSchemaProps = {
   wordCount: number;
 };
 
-const SAFE_OBSERVATION_HOWTO = {
-  '@type': 'HowTo',
-  name: 'How to safely observe bioluminescent lagoon water briefly',
-  description:
-    'Collect a small sample, observe briefly under dim light, and return water to the same Florida lagoon location.',
-  step: [
-    {
-      '@type': 'HowToStep',
-      position: 1,
-      name: 'Use a small clean container once',
-      text: 'Fill a cup or jar a single time rather than repeated scooping from the same patch.',
-    },
-    {
-      '@type': 'HowToStep',
-      position: 2,
-      name: 'Observe for one to two minutes',
-      text: 'Keep the sample shaded from bright deck lights. Do not drink the water.',
-    },
-    {
-      '@type': 'HowToStep',
-      position: 3,
-      name: 'Return water to the same location',
-      text: 'Pour the sample back where it was collected. Never transport lagoon water home or into storm drains.',
-    },
-  ],
-};
-
 export default function BioSchema({ canonicalUrl, wordCount }: BioSchemaProps) {
   const jsonLd = useMemo(() => {
     const origin = siteOrigin();
@@ -116,7 +89,28 @@ export default function BioSchema({ canonicalUrl, wordCount }: BioSchemaProps) {
           '@type': 'FAQPage',
           mainEntity: faqEntities,
         },
-        SAFE_OBSERVATION_HOWTO,
+        {
+          '@type': 'TouristTrip',
+          name: 'Bioluminescence Night Tour',
+          description: BIO_GUIDE_META.description,
+          touristType: 'Nature tourism',
+          itinerary: {
+            '@type': 'Place',
+            name: 'Indian River Lagoon',
+            address: {
+              '@type': 'PostalAddress',
+              addressLocality: 'Titusville',
+              addressRegion: 'FL',
+              addressCountry: 'US',
+            },
+          },
+          provider: {
+            '@type': 'Organization',
+            name: 'Launch Zone Charters',
+            url: origin,
+            telephone: '+1-803-542-1761',
+          },
+        },
         {
           '@type': 'BreadcrumbList',
           itemListElement: [
@@ -129,7 +123,7 @@ export default function BioSchema({ canonicalUrl, wordCount }: BioSchemaProps) {
             {
               '@type': 'ListItem',
               position: 2,
-              name: 'Florida Bioluminescence Guide',
+              name: 'Florida Bioluminescence Boat Tours',
               item: canonicalUrl,
             },
           ],

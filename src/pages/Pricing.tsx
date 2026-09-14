@@ -1,30 +1,20 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { Helmet } from 'react-helmet-async';
 import { Link } from 'react-router-dom';
 import { Check, Info, Plus } from 'lucide-react';
 import SmartImage from '../components/ui/SmartImage';
 import { PRICING } from '../config/pricing';
+import { RENTAL_PACKAGE_LIST, RENTAL_MAX_PASSENGERS } from '../lib/rentalPackages';
 import {
   SECURITY_DEPOSIT_CARD_INTRO,
   SECURITY_DEPOSIT_MARKETING_BULLETS,
   SECURITY_DEPOSIT_SECTION_HEADING,
 } from '../content/securityDeposit';
-import { supabase } from '../lib/supabase';
 import { wrapNavigateClick, wrapSyncClick } from '../lib/clickPerf';
 import { bioBookingUrl, BIO_PACKAGE_DISPLAY, formatBioPackagePriceUsd } from '../lib/bioluminescencePackages';
 
 interface PricingProps {
   onNavigate: (page: string) => void;
-}
-
-interface BoatPricingRow {
-  id: string;
-  name: string;
-  type: 'standard' | 'premium';
-  hourly_rate: number;
-  half_day_rate: number;
-  full_day_rate: number;
-  is_active: boolean;
 }
 
 const DEFAULT_SITE_ORIGIN = 'https://launchzonecharters.com';
@@ -53,48 +43,7 @@ function bioPackageBookCta(guestCount: number): string {
 
 export default function Pricing({ onNavigate }: PricingProps) {
   const canonicalUrl = useMemo(() => `${siteOrigin()}/pricing`, []);
-  const [standardRates, setStandardRates] = useState({ hourly: 70, halfDay: 280, fullDay: 450 });
-  const [keyLargoRates, setKeyLargoRates] = useState({ hourly: 80, halfDay: 300, fullDay: 500 });
 
-  useEffect(() => {
-    let cancelled = false;
-    async function loadLiveBoatRates() {
-      const { data, error } = await supabase
-        .from('boats')
-        .select('id, name, type, hourly_rate, half_day_rate, full_day_rate, is_active')
-        .eq('is_active', true)
-        .order('hourly_rate', { ascending: true });
-      if (error || !data || cancelled) return;
-
-      const boats = data as BoatPricingRow[];
-      const byName = (q: string) =>
-        boats.find((b) => b.name.toLowerCase().includes(q.toLowerCase()));
-      const byType = (type: 'standard' | 'premium') =>
-        boats.find((b) => b.type === type);
-
-      const standardBoat = byName('pontoon') || byType('standard') || boats[0];
-      const keyLargoBoat = byName('key largo') || byType('premium') || boats[1] || boats[0];
-
-      if (standardBoat) {
-        setStandardRates({
-          hourly: Number(standardBoat.hourly_rate),
-          halfDay: Number(standardBoat.half_day_rate),
-          fullDay: Number(standardBoat.full_day_rate),
-        });
-      }
-      if (keyLargoBoat) {
-        setKeyLargoRates({
-          hourly: Number(keyLargoBoat.hourly_rate),
-          halfDay: Number(keyLargoBoat.half_day_rate),
-          fullDay: Number(keyLargoBoat.full_day_rate),
-        });
-      }
-    }
-    void loadLiveBoatRates();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
   const goToPrefilledRental = (boat: 'standard_pontoon' | 'key_largo_18') => {
     if (typeof window !== 'undefined') {
       window.location.assign(`/booking?bookingMode=rental&boat=${boat}`);
@@ -109,11 +58,11 @@ export default function Pricing({ onNavigate }: PricingProps) {
         <title>Transparent Pricing | Launch Zone Charters Titusville Boat Rentals</title>
         <meta
           name="description"
-          content="Transparent Florida boat pricing for Launch Zone Charters. Compare hourly, half-day, and full-day rates for center console and pontoon boat rentals in Titusville and across the Space Coast."
+          content="Transparent Florida boat pricing for Launch Zone Charters. Compare 4-hour and 6-hour pontoon rental packages for Titusville and the Space Coast."
         />
         <meta
           name="keywords"
-          content="boat rentals Titusville Florida, Space Coast boat charters, center console boat rental, Florida boat pricing, transparent boat rental pricing"
+          content="boat rentals Titusville Florida, Space Coast boat charters, pontoon rental pricing, 4 hour boat rental, 6 hour boat rental"
         />
         <link rel="canonical" href={canonicalUrl} />
         <meta property="og:title" content="Transparent Pricing | Launch Zone Charters" />
@@ -296,30 +245,26 @@ export default function Pricing({ onNavigate }: PricingProps) {
                 Family-friendly setup for cruising and relaxed sandbar days at the most affordable rate.
               </div>
               <div className="space-y-5">
-                <div className="flex items-end justify-between border-b border-white/10 pb-4">
-                  <div>
-                    <p className="text-sm uppercase tracking-wider text-slate-400">Hourly rate</p>
-                    <p className="mt-1 text-sm text-slate-500">Minimum 2 hours</p>
+                {RENTAL_PACKAGE_LIST.map((pkg, idx) => (
+                  <div
+                    key={pkg.id}
+                    className={`flex items-end justify-between ${
+                      idx < RENTAL_PACKAGE_LIST.length - 1 ? 'border-b border-white/10 pb-4' : ''
+                    }`}
+                  >
+                    <div>
+                      <p className="text-sm uppercase tracking-wider text-slate-400">{pkg.name}</p>
+                      <p className="mt-1 text-sm text-slate-500">
+                        {pkg.durationHours} hours · up to {RENTAL_MAX_PASSENGERS} passengers · return by 5:00 PM
+                      </p>
+                    </div>
+                    <p className="text-3xl font-bold text-lz-cta">${pkg.priceUsd.toFixed(2)}</p>
                   </div>
-                  <p className="text-3xl font-bold text-lz-cta">
-                    ${standardRates.hourly.toFixed(0)}
-                    <span className="text-lg text-slate-400">/hr</span>
-                  </p>
-                </div>
-                <div className="flex items-end justify-between border-b border-white/10 pb-4">
-                  <div>
-                    <p className="text-sm uppercase tracking-wider text-slate-400">Half-day rental</p>
-                    <p className="mt-1 text-sm text-slate-500">4 hours</p>
-                  </div>
-                  <p className="text-3xl font-bold text-lz-cta">${standardRates.halfDay.toFixed(2)}</p>
-                </div>
-                <div className="flex items-end justify-between">
-                  <div>
-                    <p className="text-sm uppercase tracking-wider text-slate-400">Full-day rental</p>
-                    <p className="mt-1 text-sm text-slate-500">6 to 8 hours</p>
-                  </div>
-                  <p className="text-3xl font-bold text-lz-cta">${standardRates.fullDay.toFixed(2)}</p>
-                </div>
+                ))}
+                <p className="text-sm text-slate-500">
+                  Plus ${PRICING.securityDeposit.toFixed(0)} refundable security deposit. Fuel for standard cruising
+                  included; insurance proof required before departure.
+                </p>
               </div>
               <button
                 type="button"
@@ -361,30 +306,26 @@ export default function Pricing({ onNavigate }: PricingProps) {
                 Ideal for cruising, fishing, and sandbar trips. Easy to handle and perfect for small groups.
               </div>
               <div className="space-y-5">
-                <div className="flex items-end justify-between border-b border-white/10 pb-4">
-                  <div>
-                    <p className="text-sm uppercase tracking-wider text-cyan-200/90">Hourly rate</p>
-                    <p className="mt-1 text-sm text-cyan-100/70">Flexible booking</p>
+                {RENTAL_PACKAGE_LIST.map((pkg, idx) => (
+                  <div
+                    key={pkg.id}
+                    className={`flex items-end justify-between ${
+                      idx < RENTAL_PACKAGE_LIST.length - 1 ? 'border-b border-white/10 pb-4' : ''
+                    }`}
+                  >
+                    <div>
+                      <p className="text-sm uppercase tracking-wider text-cyan-200/90">{pkg.name}</p>
+                      <p className="mt-1 text-sm text-cyan-100/70">
+                        {pkg.durationHours} hours · up to {RENTAL_MAX_PASSENGERS} passengers · return by 5:00 PM
+                      </p>
+                    </div>
+                    <p className="text-3xl font-bold text-lz-cta">${pkg.priceUsd.toFixed(2)}</p>
                   </div>
-                  <p className="text-3xl font-bold text-lz-cta">
-                    ${keyLargoRates.hourly.toFixed(0)}
-                    <span className="text-lg text-cyan-100/70">/hr</span>
-                  </p>
-                </div>
-                <div className="flex items-end justify-between border-b border-white/10 pb-4">
-                  <div>
-                    <p className="text-sm uppercase tracking-wider text-cyan-200/90">Half-day rental</p>
-                    <p className="mt-1 text-sm text-cyan-100/70">4 hours</p>
-                  </div>
-                  <p className="text-3xl font-bold text-lz-cta">${keyLargoRates.halfDay.toFixed(2)}</p>
-                </div>
-                <div className="flex items-end justify-between">
-                  <div>
-                    <p className="text-sm uppercase tracking-wider text-cyan-200/90">Full-day rental</p>
-                    <p className="mt-1 text-sm text-cyan-100/70">6 to 8 hours</p>
-                  </div>
-                  <p className="text-3xl font-bold text-lz-cta">${keyLargoRates.fullDay.toFixed(2)}</p>
-                </div>
+                ))}
+                <p className="text-sm text-cyan-100/70">
+                  Same direct-booking packages as our pontoon fleet. Plus ${PRICING.securityDeposit.toFixed(0)}{' '}
+                  refundable security deposit.
+                </p>
               </div>
               <button
                 type="button"

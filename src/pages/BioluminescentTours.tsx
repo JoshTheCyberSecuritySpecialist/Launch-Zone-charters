@@ -391,7 +391,7 @@ export default function BioluminescentTours({ onNavigate }: BioluminescentToursP
             darkness, open water, and a full view of the glow from the deck.
           </p>
           <p className="mt-4 text-pretty text-left text-sm leading-relaxed text-slate-400 sm:text-base">
-            Looking for <strong className="font-semibold text-slate-200">pontoon rentals</strong>, half-day or full-day{' '}
+            Looking for <strong className="font-semibold text-slate-200">pontoon rentals</strong>, 4-hour or 6-hour{' '}
             <strong className="font-semibold text-slate-200">boat rental</strong> blocks, or hourly options for your crew?
             Browse our{' '}
             <Link
@@ -454,7 +454,8 @@ export default function BioluminescentTours({ onNavigate }: BioluminescentToursP
               details when you book.
             </li>
             <li>
-              <strong className="font-semibold text-slate-200">Daytime rentals:</strong> hourly, half-day, and full-day
+              <strong className="font-semibold text-slate-200">Daytime rentals:</strong> 4-hour and 6-hour packages
+              (return by 5:00 PM)
               blocks. See fleet pricing and availability on the rentals page.
             </li>
             <li>Bring layers; the lagoon cools after dark even in summer.</li>

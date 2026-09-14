@@ -59,7 +59,10 @@ function run() {
 
   const boat = { hourly_rate: 120, half_day_rate: 400, full_day_rate: 700 };
   assert.strictEqual(computeStaffBookingOriginalPrice(boat, 1, 'captain_charter'), 170);
-  assert.strictEqual(computeStaffBookingOriginalPrice(boat, 4, 'rental'), 400);
+  assert.strictEqual(computeStaffBookingOriginalPrice(boat, 4, 'rental'), 149.99);
+  assert.strictEqual(computeStaffBookingOriginalPrice(boat, 6, 'rental'), 209.99);
+  // Legacy 8h staff quote still falls back to boat full_day_rate (rejected at schedule validation).
+  assert.strictEqual(computeStaffBookingOriginalPrice(boat, 8, 'rental'), 700);
 
   assert.strictEqual(parseStaffDuration(1), 1);
   assert.strictEqual(parseStaffDuration(0.5), 0.5);

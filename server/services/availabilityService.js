@@ -28,10 +28,13 @@ const charterFleetAtomic = require('./charterFleetAtomic');
 const { isBioPrivatePackageId } = require('../config/bioluminescencePackages');
 const { getMaxSimultaneousCharterBoats } = require('../config/charterFleetPriority');
 
-const BUSINESS_TZ = String(process.env.BUSINESS_TIMEZONE || 'America/New_York').trim();
-const DEFAULT_OPEN_HOUR = Number(process.env.AVAILABILITY_OPEN_HOUR || 7);
-const DEFAULT_CLOSE_HOUR = Number(process.env.AVAILABILITY_CLOSE_HOUR || 20);
-const DEFAULT_STEP_MINUTES = Number(process.env.AVAILABILITY_SLOT_MINUTES || 30);
+const rentalPackages = require('../config/rentalPackages');
+
+const BUSINESS_TZ = String(process.env.BUSINESS_TIMEZONE || rentalPackages.BUSINESS_TZ || 'America/New_York').trim();
+/** Rental day window + step come from rentalPackages (authoritative). Env overrides removed so Render cannot silently reopen past 5 PM. */
+const DEFAULT_OPEN_HOUR = rentalPackages.RENTAL_OPEN_HOUR;
+const DEFAULT_CLOSE_HOUR = rentalPackages.RENTAL_CLOSE_HOUR;
+const DEFAULT_STEP_MINUTES = rentalPackages.RENTAL_SLOT_STEP_MINUTES;
 const DEFAULT_RANGE_DAYS = Number(process.env.AVAILABILITY_CALENDAR_DAYS || 60);
 const MIN_LEAD_HOURS = Math.max(0, Number(process.env.BOOKING_MIN_LEAD_HOURS || 2));
 /** Scheduled captain-led window. Catalog durationMinutes is display-only until this is package-driven. */
@@ -462,6 +465,25 @@ async function checkStaffBookingAvailability({
       }
     }
     return result;
+  }
+
+  const durationHours =
+    (new Date(String(endTime)).getTime() - new Date(String(startTime)).getTime()) / (1000 * 60 * 60);
+  const schedule = rentalPackages.validateRentalSchedule({
+    startIso: startTime,
+    endIso: endTime,
+    durationHours,
+    mode: 'staff',
+  });
+  if (!schedule.ok) {
+    return {
+      available: false,
+      reason: 'rental_window',
+      message: schedule.error,
+      conflict: null,
+      capacity: null,
+      location,
+    };
   }
 
   return checkBookingSlotAvailability({
@@ -1815,7 +1837,13 @@ function dayHasAnyFreeSlot(day, intervals, durationHours, openHour, closeHour, s
 
 async function listSlotsForDay(boatId, dateStr, durationHours, openHour, closeHour, stepMinutes) {
   const duration = Number(durationHours) || 4;
+  if (!rentalPackages.isAllowedListingDuration(duration)) {
+    return [];
+  }
   const durMs = duration * 60 * 60 * 1000;
+  const resolvedOpen = Number.isFinite(Number(openHour)) ? Number(openHour) : DEFAULT_OPEN_HOUR;
+  const resolvedClose = Number.isFinite(Number(closeHour)) ? Number(closeHour) : DEFAULT_CLOSE_HOUR;
+  const resolvedStep = Number.isFinite(Number(stepMinutes)) ? Number(stepMinutes) : DEFAULT_STEP_MINUTES;
 
   const day = parseDateOnlyInZone(dateStr, BUSINESS_TZ);
   if (!day) return [];
@@ -1825,7 +1853,7 @@ async function listSlotsForDay(boatId, dateStr, durationHours, openHour, closeHo
   const rangeEndIso = dayStart.plus({ days: 1 }).toUTC().toISO();
 
   const intervals = await loadBlockingIntervals(boatId, rangeStartIso, rangeEndIso);
-  const starts = enumerateStartsForDay(dayStart, openHour, closeHour, duration, stepMinutes);
+  const starts = enumerateStartsForDay(dayStart, resolvedOpen, resolvedClose, duration, resolvedStep);
   const minStartMs = minBookableStartMs();
   const out = [];
 

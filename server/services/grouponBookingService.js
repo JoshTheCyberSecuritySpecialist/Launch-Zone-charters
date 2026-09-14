@@ -3,6 +3,7 @@
  */
 const { DateTime } = require('luxon');
 const availabilityService = require('./availabilityService');
+const rentalPackages = require('../config/rentalPackages');
 const boatCapacityService = require('./boatCapacityService');
 const waiverContent = require('../content/waiverContent');
 const damageFeeAcknowledgment = require('../lib/damageFeeAcknowledgment');
@@ -188,6 +189,19 @@ async function createGrouponBooking(supabase, deps, input) {
   }
 
   try {
+    if (!isCharter) {
+      const schedule = rentalPackages.validateRentalSchedule({
+        startIso: startTime.toISOString(),
+        endIso: endTime.toISOString(),
+        durationHours,
+        mode: 'groupon',
+      });
+      if (!schedule.ok) {
+        const err = new Error(schedule.error || 'Invalid rental time for this voucher.');
+        err.statusCode = schedule.statusCode || 400;
+        throw err;
+      }
+    }
     if (isCharter) {
       if (!availabilityService.isStartTimeAllowed(startTime.toISOString())) {
         const err = new Error('This departure is too soon. Please choose a later time or call us for help.');

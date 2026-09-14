@@ -57,6 +57,7 @@ const { getWeeklyForecast } = require('./services/weeklyForecastService');
 const { getMarineConditions } = require('./services/marineConditionsService');
 const { getCharterWeatherWindow } = require('./services/charterWeatherService');
 const availabilityService = require('./services/availabilityService');
+const rentalPackages = require('./config/rentalPackages');
 const { buildPublicConfirmationSummary, resolvePaidBookingStatus } = require('./lib/bookingLifecycle');
 const { formatReservationNumber, parseReservationNumber, reservationNumberMatches } = require('./lib/reservationNumber');
 const captainCharterAvailability = require('./services/captainCharterAvailability');
@@ -223,9 +224,26 @@ function computeExpectedBookingTotals({
   }
 
   let basePrice = 0;
-  if (rentalType === 'hourly') basePrice = hourly * hours;
-  if (rentalType === 'half_day') basePrice = halfDay;
-  if (rentalType === 'full_day') basePrice = fullDay;
+  const directByDuration = rentalPackages.listActiveDirectRentalPackages().find(
+    (p) => Math.abs(p.durationHours - hours) < 0.01
+  );
+  const directPkg = rentalPackages.resolveDirectRentalPackage({
+    packageId: pricingPackageId,
+    durationHours: hours,
+    rentalType,
+  });
+  if (directPkg.ok) {
+    basePrice = rentalPackages.basePriceUsdForDirectPackage(directPkg.package);
+  } else if (directByDuration) {
+    // Duration matches an active direct package — use policy cents even if rental_type was omitted.
+    basePrice = rentalPackages.basePriceUsdForDirectPackage(directByDuration);
+  } else if (rentalType === 'hourly') {
+    basePrice = hourly * hours;
+  } else if (rentalType === 'half_day') {
+    basePrice = halfDay;
+  } else if (rentalType === 'full_day') {
+    basePrice = fullDay;
+  }
   const totalPrice = roundMoney(basePrice + captainFee + SECURITY_DEPOSIT);
   return {
     mode: 'rental',
@@ -233,6 +251,7 @@ function computeExpectedBookingTotals({
     captainFee: roundMoney(captainFee),
     totalPrice,
     amountDueToday: roundMoney(totalPrice * 0.5),
+    rentalPackage: directPkg.ok ? directPkg.package : directByDuration || null,
   };
 }
 
@@ -2192,9 +2211,7 @@ function parseStaffDuration(value) {
 }
 
 function rentalTypeForHours(hours) {
-  if (Math.abs(Number(hours) - 4) < 0.01) return 'half_day';
-  if (Math.abs(Number(hours) - 8) < 0.01) return 'full_day';
-  return 'hourly';
+  return rentalPackages.rentalTypeForDurationHours(hours, { allowLegacyFullDay: true });
 }
 
 function staffBookingTimes(body) {
@@ -2498,9 +2515,9 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
       sunsetPackage: staffSunsetPackage,
     });
     if (!availability.available) {
-      if (availability.reason === 'captain_window') {
+      if (availability.reason === 'captain_window' || availability.reason === 'rental_window') {
         return res.status(400).json({
-          error: availability.message || 'Invalid charter time.',
+          error: availability.message || 'Invalid rental time.',
           availability: staffAvailabilityConflictPayload(availability),
         });
       }
@@ -2630,6 +2647,10 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
       end_time: times.endIso,
       duration_hours: durationHours,
       rental_type: rentalTypeForHours(durationHours),
+      pricing_package_id:
+        bookingType === 'captain_charter'
+          ? null
+          : rentalPackages.packageIdForDurationHours(durationHours),
       captain_included: captainIncluded,
       captain_fee: captainIncluded ? roundMoney(CAPTAIN_HOURLY * durationHours) : 0,
       base_price: originalPrice,
@@ -3112,7 +3133,7 @@ app.patch('/api/admin/calendar-bookings/:id', async (req, res) => {
 
     const { data: existing, error: existingError } = await supabase
       .from('bookings')
-      .select('id, boat_id, start_time, end_time, status, captain_included')
+      .select('id, boat_id, start_time, end_time, status, captain_included, booking_type')
       .eq('id', id)
       .maybeSingle();
     if (existingError) throw existingError;
@@ -3149,6 +3170,21 @@ app.patch('/api/admin/calendar-bookings/:id', async (req, res) => {
     const scheduleChanged = Boolean(body.boat_id || body.boatId || body.start_time || body.startTime || body.end_time || body.endTime);
     const blocksAfterUpdate = !['cancelled'].includes(String(update.status || existing.status || ''));
     if (scheduleChanged && blocksAfterUpdate) {
+      const isRentalBooking = String(existing.booking_type || '').toLowerCase() !== 'charter';
+      if (isRentalBooking) {
+        const durationHours = roundMoney(
+          (new Date(nextEnd).getTime() - new Date(nextStart).getTime()) / (1000 * 60 * 60)
+        );
+        const schedule = rentalPackages.validateRentalSchedule({
+          startIso: new Date(nextStart).toISOString(),
+          endIso: new Date(nextEnd).toISOString(),
+          durationHours,
+          mode: 'staff',
+        });
+        if (!schedule.ok) {
+          return res.status(schedule.statusCode || 400).json({ error: schedule.error });
+        }
+      }
       await availabilityService.assertBookingSlotAvailable({
         boatId: nextBoatId,
         startTime: nextStart,
@@ -3159,6 +3195,9 @@ app.patch('/api/admin/calendar-bookings/:id', async (req, res) => {
       update.duration_hours = roundMoney((new Date(nextEnd).getTime() - new Date(nextStart).getTime()) / (1000 * 60 * 60));
       update.rental_type = rentalTypeForHours(update.duration_hours);
       update.captain_fee = existing.captain_included ? roundMoney(CAPTAIN_HOURLY * update.duration_hours) : 0;
+      if (isRentalBooking) {
+        update.pricing_package_id = rentalPackages.packageIdForDurationHours(update.duration_hours);
+      }
     }
 
     if (Object.keys(update).length === 0) return res.status(400).json({ error: 'No changes supplied.' });
@@ -6358,11 +6397,15 @@ app.get('/api/availability', async (req, res) => {
     const boatId = String(req.query.boatId || '').trim();
 
     const durationHours = Number(req.query.durationHours || 4);
-    const stepMinutes = Number(
-      req.query.stepMinutes || availabilityService.DEFAULT_STEP_MINUTES
-    );
-    const openHour = Number(req.query.openHour ?? availabilityService.DEFAULT_OPEN_HOUR);
-    const closeHour = Number(req.query.closeHour ?? availabilityService.DEFAULT_CLOSE_HOUR);
+    if (!rentalPackages.isAllowedListingDuration(durationHours)) {
+      return res.status(400).json({
+        error: 'Rental availability supports 4, 6, or 8 hour durations only.',
+      });
+    }
+    // Authoritative rental window — do not trust client open/close/step overrides.
+    const stepMinutes = availabilityService.DEFAULT_STEP_MINUTES;
+    const openHour = availabilityService.DEFAULT_OPEN_HOUR;
+    const closeHour = availabilityService.DEFAULT_CLOSE_HOUR;
 
     let from = String(req.query.from || '').trim();
     let to = String(req.query.to || '').trim();
@@ -6427,11 +6470,14 @@ app.get('/api/availability/times', async (req, res) => {
     }
 
     const durationHours = Number(req.query.durationHours || 4);
-    const stepMinutes = Number(
-      req.query.stepMinutes || availabilityService.DEFAULT_STEP_MINUTES
-    );
-    const openHour = Number(req.query.openHour ?? availabilityService.DEFAULT_OPEN_HOUR);
-    const closeHour = Number(req.query.closeHour ?? availabilityService.DEFAULT_CLOSE_HOUR);
+    if (!rentalPackages.isAllowedListingDuration(durationHours)) {
+      return res.status(400).json({
+        error: 'Rental availability supports 4, 6, or 8 hour durations only.',
+      });
+    }
+    const stepMinutes = availabilityService.DEFAULT_STEP_MINUTES;
+    const openHour = availabilityService.DEFAULT_OPEN_HOUR;
+    const closeHour = availabilityService.DEFAULT_CLOSE_HOUR;
 
     const slots = await availabilityService.listSlotsForDay(
       resolvedBoatId,
@@ -6449,6 +6495,9 @@ app.get('/api/availability/times', async (req, res) => {
       timezone: availabilityService.BUSINESS_TZ,
       minLeadHours: availabilityService.MIN_LEAD_HOURS,
       durationHours,
+      openHour,
+      closeHour,
+      stepMinutes,
       slots,
     });
   } catch (err) {
@@ -7465,7 +7514,7 @@ app.post('/api/create-checkout-session', async (req, res) => {
       isCharterBooking && rocketLaunchPackagePricing.normalizeRocketCharterType(charterType) === 'rocket'
         ? extractRocketLaunchIdFromBooking(booking)
         : null;
-    const rentalType = String(booking.rental_type || '').trim().toLowerCase();
+    let rentalType = String(booking.rental_type || '').trim().toLowerCase();
     const startTime = new Date(String(booking.start_time || ''));
     const endTime = new Date(String(booking.end_time || ''));
     const durationHoursRaw = Number(booking.duration_hours);
@@ -7487,7 +7536,7 @@ app.post('/api/create-checkout-session', async (req, res) => {
     if (!Number.isFinite(durationHours) || durationHours <= 0) {
       return res.status(400).json({ error: 'Invalid duration hours.' });
     }
-    if (bookingMode === 'rental' && !['hourly', 'half_day', 'full_day'].includes(rentalType)) {
+    if (bookingMode === 'rental' && rentalType && !['hourly', 'half_day', 'full_day', 'custom'].includes(rentalType)) {
       return res.status(400).json({ error: 'Invalid rental type.' });
     }
 
@@ -7500,14 +7549,43 @@ app.post('/api/create-checkout-session', async (req, res) => {
       });
     }
 
-    const pricingPackageId = bioPackagePricing.extractPricingPackageId(booking);
+    let pricingPackageId = bioPackagePricing.extractPricingPackageId(booking);
+    if (bookingMode === 'rental') {
+      const pkgResolve = rentalPackages.resolveDirectRentalPackage({
+        packageId: pricingPackageId,
+        durationHours,
+        rentalType: rentalType || null,
+      });
+      if (!pkgResolve.ok) {
+        return res.status(pkgResolve.statusCode || 400).json({ error: pkgResolve.error });
+      }
+      const schedule = rentalPackages.validateRentalSchedule({
+        startIso: startTime.toISOString(),
+        endIso: endTime.toISOString(),
+        durationHours,
+        mode: 'direct',
+      });
+      if (!schedule.ok) {
+        return res.status(schedule.statusCode || 400).json({ error: schedule.error });
+      }
+      rentalType = pkgResolve.package.rentalType;
+      pricingPackageId = pkgResolve.package.id;
+      booking.rental_type = rentalType;
+      booking.pricing_package_id = pricingPackageId;
+      booking.pricingPackageId = pricingPackageId;
+      booking.duration_hours = pkgResolve.package.durationHours;
+    }
+
     const fifthPassengerAddonRequested = bioPackagePricing.extractFifthPassengerAddonFromBooking(booking);
     const bookingSource = String(booking.bookingSource || booking.booking_source || 'website')
       .trim()
       .toLowerCase();
 
     let packageGate = { ok: true };
-    if (pricingPackageId && rocketLaunchPackagePricing.isRocketLaunchPackageId(pricingPackageId)) {
+    const isRentalPackageId = Boolean(rentalPackages.getRentalPackage(pricingPackageId));
+    if (isRentalPackageId) {
+      packageGate = { ok: true };
+    } else if (pricingPackageId && rocketLaunchPackagePricing.isRocketLaunchPackageId(pricingPackageId)) {
       packageGate = rocketLaunchPackagePricing.assertRocketPackageRequestAllowed({
         pricingPackageId,
         charterType,
@@ -7911,7 +7989,10 @@ app.post('/api/create-checkout-session', async (req, res) => {
                 '',
               fifth_passenger_addon: expected.fifthPassengerAddon ? 'true' : 'false',
             }
-          : {}),
+          : {
+              pricing_package_id: expected.rentalPackage?.id || pricingPackageId || '',
+              duration_hours: String(durationHours),
+            }),
       },
     });
 
@@ -8047,7 +8128,12 @@ app.post('/api/create-checkout-session', async (req, res) => {
             )
           : expected.sunsetPackage
             ? sunsetPackagePricing.sunsetPackageBookingFields(expected.sunsetPackage, passengerCount)
-            : {}),
+            : expected.rentalPackage
+              ? {
+                  pricing_package_id: expected.rentalPackage.id,
+                  pricing_package_name: expected.rentalPackage.name,
+                }
+              : {}),
       ...(rocketLaunchId
         ? {
             external_reference: require('./services/rocketLaunchAvailabilityService').formatExternalLaunchRef(

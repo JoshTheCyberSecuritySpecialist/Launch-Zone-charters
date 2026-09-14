@@ -1,11 +1,14 @@
 import { captainFeeForHours } from '../config/pricing';
+import { getRentalPackageByDuration } from './rentalPackages';
 
 export const CAPTAIN_LED_DEFAULT_DURATION_HOURS = 1;
 
 export const RENTAL_DEFAULT_DURATION_PRESET = '4' as const;
 export const CHARTER_DEFAULT_DURATION_PRESET = '1' as const;
 
+/** Staff charter presets still allow flexible hours; rental UI should use RENTAL_STAFF_DURATION_PRESETS. */
 export const STAFF_DURATION_PRESET_HOURS = ['1', '2', '4', '6', '8'] as const;
+export const RENTAL_STAFF_DURATION_PRESETS = ['4', '6'] as const;
 
 export type StaffDurationPreset = (typeof STAFF_DURATION_PRESET_HOURS)[number] | 'custom';
 
@@ -81,6 +84,10 @@ export function computeStaffBookingOriginalPrice(
   bookingType: StaffBookingType
 ): number {
   if (!boat || durationHours <= 0) return 0;
+  if (bookingType !== 'captain_charter') {
+    const pkg = getRentalPackageByDuration(durationHours);
+    if (pkg) return pkg.priceUsd;
+  }
   const hourly = Number(boat.hourly_rate || 0);
   const half = Number(boat.half_day_rate || 0);
   const full = Number(boat.full_day_rate || 0);

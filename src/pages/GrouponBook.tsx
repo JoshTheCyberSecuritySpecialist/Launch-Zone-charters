@@ -327,7 +327,18 @@ export default function GrouponBook() {
                               : 'border-white/5 bg-slate-950/30 text-slate-500'
                         }`}
                       >
-                        {slot.label}
+                        {session.bookingType === 'rental'
+                          ? (() => {
+                              const hours = session.rentalType === 'full_day' ? 8 : 4;
+                              const start = new Date(slot.startIso);
+                              const end = new Date(start.getTime() + hours * 60 * 60 * 1000);
+                              const opts: Intl.DateTimeFormatOptions = {
+                                hour: 'numeric',
+                                minute: '2-digit',
+                              };
+                              return `${start.toLocaleTimeString(undefined, opts)} – ${end.toLocaleTimeString(undefined, opts)}`;
+                            })()
+                          : slot.label}
                       </button>
                     ))}
                   </div>

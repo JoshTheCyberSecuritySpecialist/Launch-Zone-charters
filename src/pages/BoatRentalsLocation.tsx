@@ -11,6 +11,8 @@ import FullPageLoader from '../components/FullPageLoader';
 import { EXPERIENCE_RENTAL } from '../lib/experienceCatalog';
 import SafeImage from '../components/SafeImage';
 import SmartImage from '../components/ui/SmartImage';
+import { PRICING } from '../config/pricing';
+import { RENTAL_MAX_PASSENGERS } from '../lib/rentalPackages';
 
 export type BoatRentalsLocationVariant = 'daytona' | 'titusville';
 
@@ -108,7 +110,7 @@ const COPY: Record<BoatRentalsLocationVariant, LocationCopy> = {
     eyebrow: 'Intracoastal · New Smyrna · Ponce Inlet',
     heroTitle: 'Daytona Beach boat rentals',
     heroSubtitle:
-      'Half-day, full-day, and sunset runs on pontoons and center consoles. Sandbar days, Intracoastal cruising, and launch windows when the schedule cooperates. Pick-up details are confirmed when you book.',
+      '4-hour and 6-hour packages on pontoons and center consoles. Sandbar days, Intracoastal cruising, and launch windows when the schedule cooperates. Pick-up details are confirmed when you book.',
     heroTrustLine: 'Licensed & insured · Local fleet · Same-day when available',
     boatImageAltSuffix: 'pontoon boat rental Daytona Beach New Smyrna Ponce Inlet Intracoastal',
     introTitle: 'Plan your day from Daytona Beach to Ponce Inlet',
@@ -171,7 +173,7 @@ const COPY: Record<BoatRentalsLocationVariant, LocationCopy> = {
         id: 'new-smyrna',
         title: 'New Smyrna Beach & Daytona staging',
         paragraphs: [
-          'Many guests stage from Port Orange or Daytona Beach to maximize time on the water. New Smyrna Beach visitors often combine a half-day rental with beach time; we can help you understand run times so you are not rushing back at sunset.',
+          'Many guests stage from Port Orange or Daytona Beach to maximize time on the water. New Smyrna Beach visitors often combine a 4-hour rental with beach time; we can help you understand run times so you are not rushing back at sunset.',
           'We are licensed and insured, with safety gear and orientation covered before you leave the dock.',
         ],
       },
@@ -794,9 +796,12 @@ export default function BoatRentalsLocation({ onNavigate, variant }: BoatRentals
                       {boat.description ??
                         `${boat.type === 'premium' ? 'Premium' : 'Standard'} pontoon, ideal for groups on the Intracoastal and Space Coast.`}
                     </p>
-                    <p className="mt-4 font-semibold text-slate-200">{boat.capacity} passengers</p>
+                    <p className="mt-4 font-semibold text-slate-200">
+                      Up to {Math.min(boat.capacity, RENTAL_MAX_PASSENGERS)} passengers on direct packages
+                    </p>
                     <p className="mt-2 text-sm text-slate-500">
-                      From ${boat.hourly_rate}/hr · Half day ${boat.half_day_rate} · Full day ${boat.full_day_rate}
+                      4 hours $149.99 · 6 hours $209.99 · plus ${PRICING.securityDeposit.toFixed(0)} security
+                      deposit
                     </p>
                     <button
                       type="button"

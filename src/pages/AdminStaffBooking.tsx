@@ -1262,15 +1262,29 @@ export default function AdminStaffBooking() {
                     }));
                   }}
                 >
-                  <option value="1">1 hr</option>
-                  <option value="2">2 hr</option>
-                  <option value="4">4 hr</option>
-                  <option value="6">6 hr</option>
-                  <option value="8">8 hr</option>
-                  <option value="custom">Custom</option>
+                  {form.bookingType === 'rental' ? (
+                    <>
+                      <option value="4">4 hr — $149.99</option>
+                      <option value="6">6 hr — $209.99</option>
+                    </>
+                  ) : (
+                    <>
+                      <option value="1">1 hr</option>
+                      <option value="2">2 hr</option>
+                      <option value="4">4 hr</option>
+                      <option value="6">6 hr</option>
+                      <option value="8">8 hr</option>
+                      <option value="custom">Custom</option>
+                    </>
+                  )}
                 </select>
               </label>
-              {form.durationPreset === 'custom' ? (
+              {form.bookingType === 'rental' ? (
+                <p className="text-xs text-slate-500 sm:col-span-2">
+                  Rentals must start on the hour from 6:00 AM and return by 5:00 PM (America/New_York).
+                </p>
+              ) : null}
+              {form.bookingType !== 'rental' && form.durationPreset === 'custom' ? (
                 <label className={labelClass}>
                   Custom Hours
                   <input className={inputClass} type="number" min="0.5" step="0.5" value={form.customDuration} onChange={(e) => setForm((p) => ({ ...p, customDuration: e.target.value }))} />

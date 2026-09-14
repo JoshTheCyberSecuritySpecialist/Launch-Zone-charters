@@ -21,6 +21,12 @@ import { logSupabaseError, userFacingSupabaseMessage } from '../lib/supabaseErro
 import { uploadDocumentToDocumentsBucket } from '../lib/storageUpload';
 import { PRICING, captainFeeForHours } from '../config/pricing';
 import {
+  RENTAL_MAX_PASSENGERS,
+  RENTAL_PACKAGE_LIST,
+  formatRentalSlotRangeLabel,
+  getRentalPackageByDuration,
+} from '../lib/rentalPackages';
+import {
   SECURITY_DEPOSIT_CARD_INTRO,
   SECURITY_DEPOSIT_MARKETING_BULLETS,
   SECURITY_DEPOSIT_SECTION_HEADING,
@@ -184,27 +190,8 @@ const SAME_DAY_MIN_NOTICE_HOURS = 2;
 const BIO_NIGHT_CHARTER_TIMES = ['20:00', '21:00', '22:00', '23:00', '00:00', '01:00', '02:00', '03:00', '04:00'];
 const DEFAULT_CHARTER_TIMES = ['17:00', '18:00', '19:00', '20:00', '21:00'];
 
-/** Rental step-1 preset: Morning/Afternoon = half_day 4hr; Full day = full_day 8hr. */
-type RentalDurationPreset = 'morning' | 'afternoon' | 'fullday';
-
-function hourFromSlotIso(iso: string): number {
-  return new Date(iso).getHours();
-}
-
-function pickRentalSlotByPreset(slots: ApiTimeSlot[], preset: RentalDurationPreset): ApiTimeSlot {
-  if (slots.length === 0) {
-    throw new Error('pickRentalSlotByPreset requires at least one slot');
-  }
-  if (preset === 'fullday') {
-    return slots[0];
-  }
-  if (preset === 'morning') {
-    const morning = slots.find((s) => hourFromSlotIso(s.start) < 12);
-    return morning ?? slots[0];
-  }
-  const afternoon = slots.find((s) => hourFromSlotIso(s.start) >= 12);
-  return afternoon ?? slots[slots.length - 1];
-}
+/** Direct rental duration: 4 or 6 hours only (mirrors server rentalPackages). */
+type RentalDurationPreset = 4 | 6;
 
 function ymdInTimezone(timeZone: string): string {
   return new Intl.DateTimeFormat('en-CA', {
@@ -1466,16 +1453,15 @@ export default function BookNow({ onNavigate }: BookNowProps) {
               }
               const still =
                 Boolean(prev.slotStartIso) && slots.some((s) => s.start === prev.slotStartIso);
-              const suggested = pickRentalSlotByPreset(slots, rentalDurationPreset);
-              const chosen =
-                still && prev.slotStartIso
-                  ? slots.find((s) => s.start === prev.slotStartIso) ?? suggested
-                  : suggested;
-              return {
-                ...prev,
-                slotStartIso: chosen.start,
-                time: chosen.startHHMM || prev.time,
-              };
+              if (still && prev.slotStartIso) {
+                const slot = slots.find((s) => s.start === prev.slotStartIso) || slots[0];
+                return {
+                  ...prev,
+                  slotStartIso: slot.start,
+                  time: slot.startHHMM || prev.time,
+                };
+              }
+              return { ...prev, slotStartIso: '', time: prev.time };
             }
             const still =
               Boolean(prev.slotStartIso) && slots.some((s) => s.start === prev.slotStartIso);
@@ -1717,27 +1703,11 @@ export default function BookNow({ onNavigate }: BookNowProps) {
         total: 0,
       };
     }
-    const hr = Number(selectedBoat.hourly_rate);
-    const half = Number(selectedBoat.half_day_rate);
-    const full = Number(selectedBoat.full_day_rate);
     const hours = Number(bookingData.hours) || 0;
-
-    let basePrice = 0;
+    const pkg = getRentalPackageByDuration(hours);
+    const basePrice = pkg ? pkg.priceUsd : 0;
     const captainFee = bookingData.captainIncluded ? captainFeeForHours(hours) : 0;
     const deposit = PRICING.securityDeposit;
-
-    switch (bookingData.rentalType) {
-      case 'hourly':
-        basePrice = hr * hours;
-        break;
-      case 'half_day':
-        basePrice = half;
-        break;
-      case 'full_day':
-        basePrice = full;
-        break;
-    }
-
     const total = Number(basePrice) + Number(captainFee) + Number(deposit);
 
     return {
@@ -1945,17 +1915,39 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     bookingMode,
     charterType: bookingData.charterType,
   });
-  const selectedDateTimeLabel =
-    bookingData.slotStartIso && Number.isFinite(selectedStartDateTime.getTime())
-      ? selectedStartDateTime.toLocaleString(undefined, {
-          month: 'short',
-          day: 'numeric',
-          hour: 'numeric',
-          minute: '2-digit',
-        })
-      : isBioCharter && isNextMorningNightCharterStart(bookingData.charterType, bookingData.time)
-        ? `${bookingData.date} night · ${timeLabelFromHHMM(bookingData.time)} next morning`
-        : `${bookingData.date || '-'} · ${timeLabelFromHHMM(bookingData.time)}`;
+  const selectedDateTimeLabel = (() => {
+    if (bookingMode === 'rental' && bookingData.slotStartIso && Number.isFinite(selectedStartDateTime.getTime())) {
+      const end = new Date(
+        selectedStartDateTime.getTime() + (Number(bookingData.hours) || 0) * 60 * 60 * 1000
+      );
+      const datePart = selectedStartDateTime.toLocaleDateString(undefined, {
+        month: 'short',
+        day: 'numeric',
+      });
+      const startPart = selectedStartDateTime.toLocaleTimeString(undefined, {
+        hour: 'numeric',
+        minute: '2-digit',
+      });
+      const endPart = end.toLocaleTimeString(undefined, {
+        hour: 'numeric',
+        minute: '2-digit',
+      });
+      return `${datePart} · ${startPart} – ${endPart}`;
+    }
+    if (bookingData.slotStartIso && Number.isFinite(selectedStartDateTime.getTime())) {
+      return selectedStartDateTime.toLocaleString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+      });
+    }
+    if (isBioCharter && isNextMorningNightCharterStart(bookingData.charterType, bookingData.time)) {
+      return `${bookingData.date} night · ${timeLabelFromHHMM(bookingData.time)} next morning`;
+    }
+    return `${bookingData.date || '-'} · ${timeLabelFromHHMM(bookingData.time)}`;
+  })();
+  const selectedRentalPackage = getRentalPackageByDuration(Number(bookingData.hours) || 0);
 
   /** Dark-theme fields — `.lz-input-on-dark` in index.css sets value/placeholder/autofill/time contrast */
   const fieldClass =
@@ -2266,7 +2258,9 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                   ? Math.min(CHARTER_MAX_PASSENGERS, Math.max(CHARTER_MIN_PASSENGERS, Number(bookingData.passengerCount) || 1))
                   : 1,
               pricingPackageId:
-                isBioPackageFlow && bioPackageId
+                bookingMode === 'rental' && selectedRentalPackage
+                  ? selectedRentalPackage.id
+                  : isBioPackageFlow && bioPackageId
                   ? bioPackageId
                   : isRocketPackageFlow && rocketPackageId
                     ? rocketPackageId
@@ -2918,21 +2912,21 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                             </p>
                             <div className="mt-4 flex items-center gap-2 text-sm text-slate-300">
                               <Users className="h-4 w-4 shrink-0" aria-hidden />
-                              <span>Up to {boat.capacity} passengers</span>
+                              <span>
+                                Up to {Math.min(boat.capacity, RENTAL_MAX_PASSENGERS)} passengers on
+                                direct packages
+                              </span>
                             </div>
                             <div className="mt-4 space-y-1.5 text-sm">
-                              <div className="flex justify-between text-slate-400">
-                                <span>Hourly</span>
-                                <span className="font-semibold text-slate-200">${boat.hourly_rate}/hr</span>
-                              </div>
-                              <div className="flex justify-between text-slate-400">
-                                <span>Half day</span>
-                                <span className="font-semibold text-slate-200">${boat.half_day_rate}</span>
-                              </div>
-                              <div className="flex justify-between text-slate-400">
-                                <span>Full day</span>
-                                <span className="font-semibold text-slate-200">${boat.full_day_rate}</span>
-                              </div>
+                              {RENTAL_PACKAGE_LIST.map((pkg) => (
+                                <div key={pkg.id} className="flex justify-between text-slate-400">
+                                  <span>{pkg.durationHours} hours</span>
+                                  <span className="font-semibold text-slate-200">${pkg.priceUsd.toFixed(2)}</span>
+                                </div>
+                              ))}
+                              <p className="pt-1 text-xs text-slate-500">
+                                Plus ${PRICING.securityDeposit.toFixed(0)} refundable security deposit
+                              </p>
                             </div>
                           </div>
                         </article>
@@ -3518,58 +3512,34 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                         <label className="mb-3 block text-xs font-semibold uppercase tracking-wide text-slate-400">
                           Choose your rental duration
                         </label>
+                        <p className="mb-3 text-sm text-slate-400">
+                          Departures run 6:00 AM–5:00 PM. Your boat must be returned by 5:00 PM.
+                        </p>
                         <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:gap-4">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setRentalDurationPreset('morning');
-                              setBookingData((prev) => ({
-                                ...prev,
-                                rentalType: 'half_day',
-                                hours: 4,
-                                slotStartIso: '',
-                              }));
-                            }}
-                            className={`min-h-[48px] flex-1 rounded-xl border px-4 py-3 text-center text-sm font-semibold transition sm:min-w-[11rem] ${
-                              rentalDurationPreset === 'morning' ? bookingChoiceActive : bookingChoiceIdle
-                            }`}
-                          >
-                            Morning (4 hours)
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setRentalDurationPreset('afternoon');
-                              setBookingData((prev) => ({
-                                ...prev,
-                                rentalType: 'half_day',
-                                hours: 4,
-                                slotStartIso: '',
-                              }));
-                            }}
-                            className={`min-h-[48px] flex-1 rounded-xl border px-4 py-3 text-center text-sm font-semibold transition sm:min-w-[11rem] ${
-                              rentalDurationPreset === 'afternoon' ? bookingChoiceActive : bookingChoiceIdle
-                            }`}
-                          >
-                            Afternoon (4 hours)
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setRentalDurationPreset('fullday');
-                              setBookingData((prev) => ({
-                                ...prev,
-                                rentalType: 'full_day',
-                                hours: 8,
-                                slotStartIso: '',
-                              }));
-                            }}
-                            className={`min-h-[48px] flex-1 rounded-xl border px-4 py-3 text-center text-sm font-semibold transition sm:min-w-[11rem] ${
-                              rentalDurationPreset === 'fullday' ? bookingChoiceActive : bookingChoiceIdle
-                            }`}
-                          >
-                            Full Day (8 hours)
-                          </button>
+                          {RENTAL_PACKAGE_LIST.map((pkg) => {
+                            const preset = pkg.durationHours;
+                            const active = rentalDurationPreset === preset;
+                            return (
+                              <button
+                                key={pkg.id}
+                                type="button"
+                                onClick={() => {
+                                  setRentalDurationPreset(preset);
+                                  setBookingData((prev) => ({
+                                    ...prev,
+                                    rentalType: pkg.rentalType,
+                                    hours: pkg.durationHours,
+                                    slotStartIso: '',
+                                  }));
+                                }}
+                                className={`min-h-[48px] flex-1 rounded-xl border px-4 py-3 text-center text-sm font-semibold transition sm:min-w-[11rem] ${
+                                  active ? bookingChoiceActive : bookingChoiceIdle
+                                }`}
+                              >
+                                {pkg.label}
+                              </button>
+                            );
+                          })}
                         </div>
                       </div>
 
@@ -3655,7 +3625,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
 
                       <div>
                         <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-400">
-                          Select a start time
+                          Select start and return time
                         </label>
                         {!apiAvailEnabled && (
                           <input
@@ -3677,15 +3647,11 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                               const recommended =
                                 timeSlots.length > 2 && i === Math.floor(timeSlots.length / 2);
                               const active = bookingData.slotStartIso === s.start;
-                              const slotHour = hourFromSlotIso(s.start);
-                              const presetSuggested =
-                                rentalDurationPreset === 'morning'
-                                  ? slotHour < 12
-                                  : rentalDurationPreset === 'afternoon'
-                                    ? slotHour >= 12
-                                    : rentalDurationPreset === 'fullday'
-                                      ? i === 0
-                                      : false;
+                              const rangeLabel = formatRentalSlotRangeLabel(
+                                s.start,
+                                Number(bookingData.hours) || 4,
+                                s.label
+                              );
                               return (
                                 <button
                                   key={s.start}
@@ -3697,18 +3663,16 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                                       time: s.startHHMM ?? bookingData.time,
                                     })
                                   }
-                                  className={`min-h-[48px] min-w-[5.5rem] rounded-xl border px-4 py-3 text-sm font-semibold transition ${
+                                  className={`min-h-[48px] min-w-[9.5rem] rounded-xl border px-4 py-3 text-sm font-semibold transition ${
                                     active
                                       ? bookingSlotChipActive
-                                      : presetSuggested && rentalDurationPreset
+                                      : recommended
                                         ? `${bookingSlotChipRecommended} border`
-                                        : recommended
-                                          ? `${bookingSlotChipRecommended} border`
-                                          : `border ${bookingChoiceIdle}`
+                                        : `border ${bookingChoiceIdle}`
                                   }`}
                                 >
-                                  {s.label}
-                                  {recommended && !active && !presetSuggested && (
+                                  {rangeLabel}
+                                  {recommended && !active && (
                                     <span className="ml-1 text-[10px] font-normal text-cyan-300/90">
                                       Popular
                                     </span>
@@ -3718,6 +3682,17 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                             })}
                           </div>
                         )}
+                        {apiAvailEnabled &&
+                          !availTimesLoading &&
+                          !timesManualFallback &&
+                          timeSlots.length === 0 &&
+                          Boolean(bookingData.date) &&
+                          rentalDurationPreset !== null && (
+                            <p className="mt-2 text-sm text-amber-200">
+                              No open start times for this date and duration that return by 5:00 PM. Try another
+                              day or the other package length.
+                            </p>
+                          )}
                         {isBookingToday && (
                           <p className="mt-2 text-xs text-slate-400">
                             Same-day bookings require at least {sameDayMinLeadHours} hours notice.
@@ -3726,11 +3701,13 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                         {apiAvailEnabled && !availTimesLoading && timesManualFallback && (
                           <>
                             <p className="mb-2 text-xs text-amber-200/90">
-                              Live times unavailable — enter a start time; checkout confirms availability.
+                              Live times unavailable — enter a start time on the hour (return by 5:00 PM);
+                              checkout confirms availability.
                             </p>
                             <input
                               type="time"
                               required
+                              step={3600}
                               value={bookingData.time}
                               onChange={(e) =>
                                 setBookingData({ ...bookingData, time: e.target.value, slotStartIso: '' })
@@ -3739,17 +3716,6 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                             />
                           </>
                         )}
-                        {apiAvailEnabled &&
-                          !availTimesLoading &&
-                          !timesManualFallback &&
-                          timeSlots.length === 0 &&
-                          bookingData.date && (
-                            <p className="text-sm text-amber-200">
-                              {isBookingToday
-                                ? 'No more booking times are available today. Please choose another date.'
-                                : 'No open start times that day for this duration. Try another date.'}
-                            </p>
-                          )}
                       </div>
                     </div>
                   </>
@@ -4230,6 +4196,12 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                         <span className="font-semibold">{selectedBoat?.name}</span>
                       </div>
                     )}
+                    {bookingMode === 'rental' && selectedRentalPackage && (
+                      <div className="flex justify-between">
+                        <span>Package:</span>
+                        <span className="font-semibold text-right">{selectedRentalPackage.name}</span>
+                      </div>
+                    )}
                     {bookingMode === 'charter' && (
                       <div className="flex justify-between text-slate-300">
                         <span>Experience:</span>
@@ -4237,7 +4209,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                       </div>
                     )}
                     <div className="flex justify-between">
-                      <span>Date & Time:</span>
+                      <span>{bookingMode === 'rental' ? 'Date & schedule:' : 'Date & Time:'}</span>
                       <span className="font-semibold text-right">
                         {selectedDateTimeLabel}
                       </span>
@@ -4250,6 +4222,14 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                         {bookingMode === 'charter' ? charterDurationLabel : `${bookingData.hours} hours`}
                       </span>
                     </div>
+                    {bookingMode === 'rental' && (
+                      <div className="flex justify-between">
+                        <span>Passenger capacity:</span>
+                        <span className="font-semibold">
+                          Up to {RENTAL_MAX_PASSENGERS} guests
+                        </span>
+                      </div>
+                    )}
                     <div className="my-3 border-t border-white/10"></div>
                     {bookingMode === 'charter' ? (
                       isBioPackageFlow && selectedBioPackage ? (
@@ -4315,21 +4295,30 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                     ) : (
                       <>
                         <div className="flex justify-between">
-                          <span>Base rental:</span>
+                          <span>Base rental price:</span>
                           <span>${pricing.basePrice.toFixed(2)}</span>
                         </div>
+                        <p className="text-xs text-slate-500">
+                          Base rental only — deposit and add-ons are listed separately below.
+                        </p>
                       </>
                     )}
                     {bookingMode === 'rental' && pricing.captainFee > 0 && (
                       <div className="flex justify-between">
-                        <span>Captain Fee:</span>
+                        <span>Captain fee:</span>
                         <span>${pricing.captainFee.toFixed(2)}</span>
                       </div>
                     )}
                     {bookingMode === 'rental' && (
                       <div className="flex justify-between">
-                        <span>Security Deposit:</span>
+                        <span>Security deposit (refundable):</span>
                         <span>${pricing.deposit.toFixed(2)}</span>
+                      </div>
+                    )}
+                    {bookingMode === 'rental' && (
+                      <div className="flex justify-between font-semibold text-slate-200">
+                        <span>Reservation total:</span>
+                        <span>${pricing.total.toFixed(2)}</span>
                       </div>
                     )}
                     {!isBioPackageFlow && !isRocketPackageFlow && !isSunsetPackageFlow ? (

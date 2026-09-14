@@ -12,6 +12,7 @@
     "setup:captains-log": "node scripts/ensure-captains-log-venv.js",
     "test:lead-time": "node tests/bookingLeadTime.test.js",
     "test:booking-datetime-range": "node tests/bookingDateTimeRange.test.js",
+    "test:rental-packages": "node tests/rentalPackages.test.js && node tests/staffBookingDuration.test.js",
     "test:staff-booking-duration": "node tests/staffBookingDuration.test.js",
     "test:staff-booking-idempotency": "node --test tests/staffBookingIdempotency.test.js",
     "test:admin-login-redirect": "node tests/adminLoginRedirect.test.js",

@@ -1,5 +1,7 @@
 /** Keep in sync with src/lib/staffBookingDuration.ts (tested here). */
 
+const rentalPackages = require('../config/rentalPackages');
+
 const CAPTAIN_LED_DEFAULT_DURATION_HOURS = 1;
 const RENTAL_DEFAULT_DURATION_PRESET = '4';
 const CHARTER_DEFAULT_DURATION_PRESET = '1';
@@ -56,6 +58,12 @@ function applyStaffDurationPresetChange(nextPreset) {
 function computeStaffBookingOriginalPrice(boat, durationHours, bookingType) {
   const CAPTAIN_HOURLY = 50;
   if (!boat || durationHours <= 0) return 0;
+  if (bookingType !== 'captain_charter') {
+    const direct = rentalPackages.resolveDirectRentalPackage({ durationHours });
+    if (direct.ok) {
+      return rentalPackages.basePriceUsdForDirectPackage(direct.package);
+    }
+  }
   const hourly = Number(boat.hourly_rate || 0);
   const half = Number(boat.half_day_rate || 0);
   const full = Number(boat.full_day_rate || 0);

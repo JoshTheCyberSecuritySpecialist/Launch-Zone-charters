@@ -147,7 +147,7 @@ export default function CaptainsLog({ onNavigate }: CaptainsLogProps) {
     }
     if (!isLive()) return;
     setLoading(false);
-  }, [env.apiUrl, env.apiUrlConfigured]);
+  }, []);
 
   useEffect(() => {
     let live = true;

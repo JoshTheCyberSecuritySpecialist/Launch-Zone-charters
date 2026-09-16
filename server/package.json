@@ -15,6 +15,7 @@
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "luxon": "^3.7.2",
+    "multer": "^2.2.0",
     "node-cron": "^3.0.3",
     "node-fetch": "^2.7.0",
     "resend": "^4.0.1",

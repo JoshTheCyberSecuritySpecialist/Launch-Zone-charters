@@ -68,8 +68,89 @@ const SAME_DAY_MIN_NOTICE_HOURS = 2;
 /** Rental step-1 preset: Morning/Afternoon = half_day 4hr; Full day = full_day 8hr. */
 type RentalDurationPreset = 'morning' | 'afternoon' | 'fullday';
 
+function partsForDateOnly(date: string): { year: number; month: number; day: number } | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(date || '').trim());
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return null;
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  const check = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+  if (
+    check.getUTCFullYear() !== year ||
+    check.getUTCMonth() !== month - 1 ||
+    check.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  return { year, month, day };
+}
+
+function partsForTimeOnly(time: string): { hour: number; minute: number } | null {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(String(time || '').trim());
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+  return { hour, minute };
+}
+
+function timeZoneOffsetMs(instant: Date, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(instant);
+  const get = (type: Intl.DateTimeFormatPartTypes) => Number(parts.find((p) => p.type === type)?.value);
+  const asUtc = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second'));
+  return asUtc - instant.getTime();
+}
+
+function dateTimeInZoneToDate(date: string, time: string, timeZone: string): Date | null {
+  const d = partsForDateOnly(date);
+  const t = partsForTimeOnly(time);
+  if (!d || !t) return null;
+
+  const wallClockAsUtc = Date.UTC(d.year, d.month - 1, d.day, t.hour, t.minute, 0, 0);
+  let utcMs = wallClockAsUtc - timeZoneOffsetMs(new Date(wallClockAsUtc), timeZone);
+  // Re-resolve once so DST boundaries use the offset that applies to the final instant.
+  utcMs = wallClockAsUtc - timeZoneOffsetMs(new Date(utcMs), timeZone);
+  const resolved = new Date(utcMs);
+  return Number.isFinite(resolved.getTime()) ? resolved : null;
+}
+
+function weekdayAndMonthFromDateOnly(date: string): { weekday: number; month: number } {
+  const parts = partsForDateOnly(date);
+  if (!parts) return { weekday: NaN, month: NaN };
+  const noonUtc = new Date(Date.UTC(parts.year, parts.month - 1, parts.day, 12, 0, 0));
+  return { weekday: noonUtc.getUTCDay(), month: parts.month };
+}
+
+function bookingStartDateTime(date: string, time: string, slotStartIso: string): Date | null {
+  const slot = slotStartIso.trim();
+  if (slot) {
+    const parsedSlot = new Date(slot);
+    return Number.isFinite(parsedSlot.getTime()) ? parsedSlot : null;
+  }
+  return dateTimeInZoneToDate(date, time, BUSINESS_TIMEZONE);
+}
+
 function hourFromSlotIso(iso: string): number {
-  return new Date(iso).getHours();
+  const instant = new Date(iso);
+  if (!Number.isFinite(instant.getTime())) return NaN;
+  const formatted = new Intl.DateTimeFormat('en-US', {
+    timeZone: BUSINESS_TIMEZONE,
+    hour: '2-digit',
+    hour12: false,
+  }).format(instant);
+  return Number.parseInt(formatted, 10);
 }
 
 function pickRentalSlotByPreset(slots: ApiTimeSlot[], preset: RentalDurationPreset): ApiTimeSlot {
@@ -137,6 +218,8 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     email: '',
     phone: '',
     specialRequests: '',
+    /** Optional Groupon/voucher code; validated + discounted server-side only. */
+    grouponCode: '',
     /** When set, start_time at checkout uses this ISO instant (server availability slot). */
     slotStartIso: '',
   });
@@ -162,6 +245,11 @@ export default function BookNow({ onNavigate }: BookNowProps) {
   const [processing, setProcessing] = useState(false);
   /** Inline message when checkout session fails (replaces alert-only feedback). */
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
+  /** Inline Groupon preview result (server-priced; not binding until checkout). */
+  const [grouponCheck, setGrouponCheck] = useState<{
+    state: 'idle' | 'checking' | 'valid' | 'error';
+    message: string;
+  }>({ state: 'idle', message: '' });
   const [prefillNotice, setPrefillNotice] = useState<string | null>(null);
   const [availabilityByDate, setAvailabilityByDate] = useState<
     Map<string, CalendarDayAvailability>
@@ -195,13 +283,13 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     return `/insurance-required?${params.toString()}`;
   }, [selectedBoat?.id, bookingIdFromUrl]);
 
-  const normalizeToken = (value: string): string =>
+  const normalizeToken = useCallback((value: string): string =>
     String(value || '')
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '_')
-      .replace(/^_+|_+$/g, '');
+      .replace(/^_+|_+$/g, ''), []);
 
-  const resolveBoatFromParam = (boatParam: string, boatsList: Boat[]): Boat | null => {
+  const resolveBoatFromParam = useCallback((boatParam: string, boatsList: Boat[]): Boat | null => {
     if (!boatParam || boatsList.length === 0) return null;
     const token = normalizeToken(boatParam);
     const byId = boatsList.find((b) => String(b.id).toLowerCase() === boatParam.toLowerCase());
@@ -223,7 +311,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
       return nameToken.includes(token) || token.includes(nameToken);
     });
     return genericMatch || null;
-  };
+  }, [normalizeToken]);
 
   const handleLicenseUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -370,7 +458,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     window.requestAnimationFrame(() => {
       bookingFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
-  }, [boats, searchParams]);
+  }, [boats, resolveBoatFromParam, searchParams]);
 
   useEffect(() => {
     if (location.hash !== '#availability-calendar') return;
@@ -438,7 +526,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     } finally {
       setBoatsLoading(false);
     }
-  }, [env.apiUrl, env.apiUrlConfigured]);
+  }, []);
 
   useEffect(() => {
     void loadBoats();
@@ -527,7 +615,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
         if (!ac.signal.aborted) setAvailCalendarLoading(false);
       });
     return () => ac.abort();
-  }, [selectedBoat?.id, durationHoursForAvailability, env.apiUrl, env.apiUrlConfigured]);
+  }, [selectedBoat?.id, durationHoursForAvailability]);
 
   useEffect(() => {
     const cached = calendarIntelCacheRef.current;
@@ -669,8 +757,6 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     selectedBoat?.id,
     bookingData.date,
     durationHoursForAvailability,
-    env.apiUrl,
-    env.apiUrlConfigured,
     bookingMode,
     rentalDurationPreset,
   ]);
@@ -761,9 +847,8 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     date: string;
     experience: string;
   }) {
-    const d = new Date(date).getDay();
-    const month = new Date(date).getMonth() + 1;
-    const isWeekend = d === 5 || d === 6 || d === 0;
+    const { weekday, month } = weekdayAndMonthFromDateOnly(date);
+    const isWeekend = weekday === 5 || weekday === 6 || weekday === 0;
 
     const exp = experience.toLowerCase();
     const isRocketLaunch = exp.includes('rocket');
@@ -980,6 +1065,79 @@ export default function BookNow({ onNavigate }: BookNowProps) {
   const bookingSecondaryCta =
     'lz-btn-secondary min-h-[48px] w-full justify-center px-5 py-3.5 text-sm font-semibold uppercase tracking-[0.1em]';
 
+  const handleApplyGroupon = async () => {
+    const code = bookingData.grouponCode.trim();
+    if (!code) {
+      setGrouponCheck({ state: 'error', message: 'Enter a code first.' });
+      return;
+    }
+    if (!env.apiUrlConfigured || !env.apiUrl) {
+      setGrouponCheck({ state: 'error', message: 'Voucher checks are unavailable right now.' });
+      return;
+    }
+    if (!selectedBoat?.id || !bookingData.date) {
+      setGrouponCheck({ state: 'error', message: 'Pick your boat, date, and time first.' });
+      return;
+    }
+    setGrouponCheck({ state: 'checking', message: '' });
+    try {
+      const startDateTime = bookingStartDateTime(bookingData.date, bookingData.time, bookingData.slotStartIso);
+      if (!startDateTime) {
+        setGrouponCheck({ state: 'error', message: 'Pick a valid date and time first.' });
+        return;
+      }
+      const res = await fetch(`${env.apiUrl}/api/validate-groupon`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          grouponCode: code,
+          booking: {
+            boat_id: selectedBoat.id,
+            bookingMode,
+            charterType:
+              bookingMode === 'charter'
+                ? bookingData.charterType === 'night_bio'
+                  ? 'bio'
+                  : bookingData.charterType === 'sunset_cruise'
+                    ? 'sunset'
+                    : 'rocket'
+                : null,
+            charterVariant: bookingMode === 'charter' ? bookingData.charterVariant : null,
+            rental_type: bookingData.rentalType,
+            duration_hours: bookingData.hours,
+            captain_included: bookingMode === 'charter' ? true : bookingData.captainIncluded,
+            start_time: startDateTime.toISOString(),
+            passengerCount:
+              bookingMode === 'charter'
+                ? bookingData.charterVariant === 'shared'
+                  ? Math.min(BIO_SHARED_MAX_GUESTS, Math.max(1, Number(bookingData.passengerCount) || 1))
+                  : Math.min(6, Math.max(1, Number(bookingData.passengerCount) || 1))
+                : 1,
+          },
+        }),
+      });
+      const payload = (await res.json().catch(() => ({}))) as {
+        valid?: boolean;
+        discountAmount?: number;
+        amountAfter?: number;
+        coversFull?: boolean;
+        error?: string;
+      };
+      if (!res.ok || !payload.valid) {
+        setGrouponCheck({ state: 'error', message: payload.error || 'That voucher code is not valid.' });
+        return;
+      }
+      const message = payload.coversFull
+        ? 'Reservation code applied — it covers your deposit. No card needed at checkout.'
+        : `Reservation code applied — $${Number(payload.discountAmount || 0).toFixed(2)} off. You'll pay $${Number(
+            payload.amountAfter || 0
+          ).toFixed(2)} today.`;
+      setGrouponCheck({ state: 'valid', message });
+    } catch {
+      setGrouponCheck({ state: 'error', message: 'Could not check the code. Please try again.' });
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -1033,16 +1191,23 @@ export default function BookNow({ onNavigate }: BookNowProps) {
         checkoutOutcome = 'aborted_no_api_url';
         return;
       }
-      const startDateTime = bookingData.slotStartIso.trim()
-        ? new Date(bookingData.slotStartIso.trim())
-        : new Date(`${bookingData.date}T${bookingData.time}`);
+      const startDateTime = bookingStartDateTime(bookingData.date, bookingData.time, bookingData.slotStartIso);
+      if (!startDateTime) {
+        setCheckoutError('Please choose a valid trip date and start time.');
+        setProcessing(false);
+        checkoutOutcome = 'aborted_invalid_start_time';
+        return;
+      }
       const endDateTime = new Date(
         startDateTime.getTime() + bookingData.hours * 60 * 60 * 1000
       );
       const apiBase = env.apiUrl;
       const depositAmount = amountDueToday;
       const depositCents = Math.round(depositAmount * 100);
-      if (!Number.isFinite(depositAmount) || depositCents < 50) {
+      const grouponCode = bookingData.grouponCode.trim();
+      // A voucher may legitimately drop the amount due below Stripe's minimum
+      // (or to $0); when a code is entered, let the server decide the path.
+      if (!Number.isFinite(depositAmount) || (depositCents < 50 && !grouponCode)) {
         throw new Error(
           'Checkout amount is too small for online checkout (minimum about $0.50). Please adjust your booking or call 803-542-1761.'
         );
@@ -1115,6 +1280,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
               termsAccepted,
               damageFeeAcknowledged,
             },
+            grouponCode,
           }),
         });
       } catch (err) {
@@ -2369,6 +2535,44 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                       className={fieldClass}
                       placeholder="Any special requests or needs we should know about..."
                     />
+                  </div>
+                  <div>
+                    <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-400">
+                      Reservation Code
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={bookingData.grouponCode}
+                        onChange={(e) => {
+                          setBookingData({ ...bookingData, grouponCode: e.target.value });
+                          if (grouponCheck.state !== 'idle') {
+                            setGrouponCheck({ state: 'idle', message: '' });
+                          }
+                        }}
+                        className={`${fieldClass} flex-1`}
+                        placeholder="Reservation code"
+                        autoComplete="off"
+                        autoCapitalize="characters"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => void handleApplyGroupon()}
+                        disabled={grouponCheck.state === 'checking' || !bookingData.grouponCode.trim()}
+                        className={`${bookingSecondaryCta} w-auto shrink-0 px-4`}
+                      >
+                        {grouponCheck.state === 'checking' ? 'Checking…' : 'Apply'}
+                      </button>
+                    </div>
+                    {grouponCheck.state === 'valid' ? (
+                      <p className="mt-1 text-xs font-semibold text-emerald-300">{grouponCheck.message}</p>
+                    ) : grouponCheck.state === 'error' ? (
+                      <p className="mt-1 text-xs font-semibold text-red-300">{grouponCheck.message}</p>
+                    ) : (
+                      <p className="mt-1 text-xs text-slate-400">
+                        Have a reservation code? Enter it here.
+                      </p>
+                    )}
                   </div>
                 </div>
 

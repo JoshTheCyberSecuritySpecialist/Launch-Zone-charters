@@ -21,6 +21,7 @@ const ROUTES = {
   verify: '/verify',
   bioluminescentTours: '/bioluminescent-tours',
   insuranceRequired: '/insurance-required',
+  tripChecklist: '/trip-checklist',
 } as const;
 
 /** Deep links: charter flow with preset experience (matches BookNow searchParams). */
@@ -60,6 +61,7 @@ const PAGE_TO_PATH: Record<string, string> = {
   verify: ROUTES.verify,
   'bioluminescent-tours': ROUTES.bioluminescentTours,
   'insurance-required': ROUTES.insuranceRequired,
+  'trip-checklist': ROUTES.tripChecklist,
 };
 
 const PATH_TO_PAGE: Record<string, string> = Object.fromEntries(
@@ -76,6 +78,7 @@ export function pageKeyFromPath(pathname: string): string {
   if (path === ROUTES.verify) return 'verify';
   if (path.startsWith('/log/')) return 'log-article';
   if (path === '/insurance-required') return 'insurance-required';
+  if (path === ROUTES.tripChecklist) return 'trip-checklist';
   if (path === '/admin/boats') return 'admin';
   if (path === '/boats' || path === '/boat-rentals-daytona-beach') return 'fleet-daytona';
   return PATH_TO_PAGE[path] ?? 'home';

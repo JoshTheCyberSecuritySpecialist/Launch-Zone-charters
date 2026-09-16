@@ -153,6 +153,13 @@ export default function InsuranceRequired({ onNavigate }: InsuranceRequiredProps
     `/verify?bookingId=${encodeURIComponent(bookingId)}`
   );
 
+  const tripChecklistHref = bookingId
+    ? `/trip-checklist?bookingId=${encodeURIComponent(bookingId)}${
+        customerEmail ? `&email=${encodeURIComponent(customerEmail)}` : ''
+      }`
+    : '/trip-checklist';
+  const goTripChecklist = () => navigate(tripChecklistHref);
+
   const handleCompleteLater = wrapSyncClick('insurance_required_complete_later', () => {
     if (bookingId) {
       goConfirmation();
@@ -248,6 +255,16 @@ export default function InsuranceRequired({ onNavigate }: InsuranceRequiredProps
         ) : null}
       </div>
 
+      <div className="mt-6 flex justify-center">
+        <button
+          type="button"
+          onClick={goTripChecklist}
+          className="lz-btn-primary inline-flex w-full max-w-sm items-center justify-center text-sm !normal-case !tracking-wide"
+        >
+          Open Trip Checklist
+        </button>
+      </div>
+
       <div className="mx-auto mt-8 max-w-sm rounded-2xl border border-slate-200/90 bg-white p-5 shadow-[0_12px_40px_rgba(0,0,0,0.25)] md:p-7">
         <div className="flex justify-center">
           <img
@@ -335,6 +352,16 @@ export default function InsuranceRequired({ onNavigate }: InsuranceRequiredProps
           </button>
         </div>
       ) : null}
+
+      <div className="mt-6 flex justify-center border-t border-white/10 pt-6">
+        <button
+          type="button"
+          onClick={goTripChecklist}
+          className="lz-btn-primary inline-flex w-full max-w-sm items-center justify-center text-sm !normal-case !tracking-wide"
+        >
+          Open Trip Checklist
+        </button>
+      </div>
     </div>
   );
 }

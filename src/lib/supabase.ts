@@ -37,6 +37,10 @@ type BookingsRow = {
   duration_hours: number;
   rental_type: 'hourly' | 'half_day' | 'full_day' | 'custom';
   captain_included: boolean;
+  /** Boater safety card override: null=auto (required when captain_included is false), true/false=admin forced. */
+  boater_safety_required: boolean | null;
+  /** Trip Readiness override: null=auto-compute, true=force ready, false=force hold. */
+  ready_for_departure_override?: boolean | null;
   captain_fee: number;
   base_price: number;
   peak_surcharge: number;
@@ -85,6 +89,10 @@ export type UserVerificationsRow = {
   booking_id: string;
   buoy_status: 'pending' | 'verified' | 'rejected';
   buoy_proof_url: string | null;
+  id_document_url: string | null;
+  id_document_status: 'pending' | 'submitted' | 'verified' | 'rejected';
+  boater_card_url: string | null;
+  boater_card_status: 'pending' | 'submitted' | 'verified' | 'rejected';
   created_at: string;
   updated_at: string;
 };
@@ -224,8 +232,9 @@ export type Database = {
       };
       user_verifications: {
         Row: UserVerificationsRow;
-        Insert: Omit<UserVerificationsRow, 'id' | 'created_at' | 'updated_at'>;
-        Update: Partial<Omit<UserVerificationsRow, 'id' | 'created_at' | 'updated_at'>>;
+        Insert: Pick<UserVerificationsRow, 'booking_id'> &
+          Partial<Omit<UserVerificationsRow, 'id' | 'created_at' | 'booking_id'>>;
+        Update: Partial<Omit<UserVerificationsRow, 'id' | 'created_at'>>;
         Relationships: [
           {
             foreignKeyName: 'user_verifications_booking_id_fkey';

@@ -241,6 +241,18 @@ export default function BookingSuccess({ onNavigate }: BookingSuccessProps) {
         </div>
       </div>
 
+      <button
+        type="button"
+        onClick={() =>
+          navigate(
+            bookingId ? `/trip-checklist?bookingId=${encodeURIComponent(bookingId)}` : '/trip-checklist'
+          )
+        }
+        className="lz-btn-primary mt-6 w-full justify-center text-sm !normal-case !tracking-wide"
+      >
+        View Your Trip Checklist
+      </button>
+
       {showInsuranceNudge ? (
         <div className="mt-8 rounded-[var(--lz-radius)] border border-white/15 bg-white p-4 md:p-5">
           <div className="flex justify-center">

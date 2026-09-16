@@ -188,7 +188,8 @@ function siteOrigin(): string {
   return DEFAULT_SITE_ORIGIN;
 }
 
-export default function BioluminescentTours(_props: BioluminescentToursProps) {
+export default function BioluminescentTours({ onNavigate }: BioluminescentToursProps) {
+  void onNavigate;
   const navigate = useNavigate();
   const [glowLoading, setGlowLoading] = useState(false);
   const [glowResult, setGlowResult] = useState<GlowCheckResponse | null>(null);

@@ -14,6 +14,7 @@
  */
 
 const fetch = require('node-fetch');
+const { DateTime } = require('luxon');
 
 /** Port Orange / Daytona Beach + Titusville / Space Coast */
 const LOCATION_CONFIGS = {
@@ -46,6 +47,7 @@ const openMeteoPartialByLocation = new Map();
 const FETCH_TIMEOUT_MS = 6500;
 
 const OPEN_METEO_RETRY_AFTER_MS = 2000;
+const BUSINESS_TZ = 'America/New_York';
 
 function getOpenMeteoStalePartial(locationKey, field) {
   const row = openMeteoPartialByLocation.get(locationKey);
@@ -196,15 +198,24 @@ function mToFt(m) {
   return Number(m) * 3.28084;
 }
 
-function closestHourlyIndex(times) {
+function parseProviderHourlyMillis(value, zone = BUSINESS_TZ) {
+  const raw = String(value || '').trim();
+  if (!raw) return NaN;
+  const hasExplicitZone = /(?:Z|[+-]\d{2}:?\d{2})$/.test(raw);
+  const dt = hasExplicitZone
+    ? DateTime.fromISO(raw, { setZone: true })
+    : DateTime.fromISO(raw, { zone });
+  return dt.isValid ? dt.toUTC().toMillis() : NaN;
+}
+
+function closestHourlyIndex(times, nowMs = Date.now(), zone = BUSINESS_TZ) {
   if (!Array.isArray(times) || times.length === 0) return 0;
-  const now = Date.now();
   let best = 0;
   let bestDiff = Infinity;
   for (let i = 0; i < times.length; i++) {
-    const t = new Date(times[i]).getTime();
+    const t = parseProviderHourlyMillis(times[i], zone);
     if (Number.isNaN(t)) continue;
-    const d = Math.abs(t - now);
+    const d = Math.abs(t - nowMs);
     if (d < bestDiff) {
       bestDiff = d;
       best = i;
@@ -519,8 +530,9 @@ async function getMarineConditions(options = {}) {
   let shortForecast = first ? `${first.name || ''}: ${first.shortForecast || ''}`.trim() : '';
 
   const hourlyT = marineJson?.hourly?.time;
-  const waveM = hourlyT ? marineJson?.hourly?.wave_height?.[closestHourlyIndex(hourlyT)] : null;
-  const sstC = hourlyT ? marineJson?.hourly?.sea_surface_temperature?.[closestHourlyIndex(hourlyT)] : null;
+  const marineIndex = hourlyT ? closestHourlyIndex(hourlyT) : 0;
+  const waveM = hourlyT ? marineJson?.hourly?.wave_height?.[marineIndex] : null;
+  const sstC = hourlyT ? marineJson?.hourly?.sea_surface_temperature?.[marineIndex] : null;
 
   const wTimes = windJson?.hourly?.time;
   const wi = wTimes ? closestHourlyIndex(wTimes) : 0;
@@ -646,4 +658,6 @@ async function getMarineConditions(options = {}) {
 module.exports = {
   getMarineConditions,
   LOCATION_CONFIGS,
+  parseProviderHourlyMillis,
+  closestHourlyIndex,
 };

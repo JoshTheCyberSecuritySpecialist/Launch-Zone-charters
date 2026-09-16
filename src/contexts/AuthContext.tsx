@@ -105,7 +105,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       authDebug({ phase: 'admin', match: 'none', userId: u.id, email: u.email });
       return false;
     },
-    [env.apiUrl, env.apiUrlConfigured]
+    []
   );
 
   const applySession = useCallback(

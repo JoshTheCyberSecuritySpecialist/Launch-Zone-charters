@@ -367,6 +367,25 @@ function signalValue(label: 'wind' | 'water' | 'storm' | 'visibility', entry: Ma
   return 'CLEAR';
 }
 
+const CONDITION_LOCATIONS: ReadonlyArray<{
+  key: MarineLocationKey;
+  heading: string;
+  subtitle: string;
+}> = [
+  {
+    key: 'daytona',
+    heading: 'Port Orange / Daytona Beach',
+    subtitle:
+      'Based on current nearshore model and NWS forecast for Port Orange / Daytona Beach, FL.',
+  },
+  {
+    key: 'titusville',
+    heading: 'Titusville / Space Coast (Indian River Lagoon)',
+    subtitle:
+      'Based on current nearshore model and NWS forecast for Titusville / Space Coast, FL.',
+  },
+];
+
 export default function Conditions({ onNavigate }: ConditionsProps) {
   const [loadingByLocation, setLoadingByLocation] = useState<Record<MarineLocationKey, boolean>>({
     daytona: true,
@@ -380,25 +399,6 @@ export default function Conditions({ onNavigate }: ConditionsProps) {
     daytona: null,
     titusville: null,
   });
-
-  const CONDITION_LOCATIONS: ReadonlyArray<{
-    key: MarineLocationKey;
-    heading: string;
-    subtitle: string;
-  }> = [
-    {
-      key: 'daytona',
-      heading: 'Port Orange / Daytona Beach',
-      subtitle:
-        'Based on current nearshore model and NWS forecast for Port Orange / Daytona Beach, FL.',
-    },
-    {
-      key: 'titusville',
-      heading: 'Titusville / Space Coast (Indian River Lagoon)',
-      subtitle:
-        'Based on current nearshore model and NWS forecast for Titusville / Space Coast, FL.',
-    },
-  ];
 
   const loadLocation = useCallback(async (locationKey: MarineLocationKey) => {
     setLoadingByLocation((prev) => ({ ...prev, [locationKey]: true }));

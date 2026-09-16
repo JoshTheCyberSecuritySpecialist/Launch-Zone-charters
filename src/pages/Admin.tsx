@@ -32,6 +32,7 @@ import {
 import {
   clearIncidentsByBookingIdCache,
   getAdminAlerts,
+  getAdminGrouponCodes,
   getAdminSubscribers,
   getIncidentsByBookingId,
 } from '../lib/adminApi';
@@ -78,6 +79,21 @@ type AdminAlertRow = {
 type AdminSubscriberRow = {
   email: string;
   phone: string | null;
+  created_at: string;
+};
+
+type AdminGrouponRow = {
+  id: string;
+  code: string;
+  status: string;
+  discount_type: string;
+  discount_amount: number | null;
+  applies_to: string | null;
+  max_uses: number | null;
+  used_count: number | null;
+  expires_at: string | null;
+  redeemed_booking_id: string | null;
+  redeemed_at: string | null;
   created_at: string;
 };
 
@@ -128,6 +144,8 @@ type AdminBookingRow = {
   waivers?: { id: string }[] | null;
   license_status?: DocStatus | string | null;
   insurance_status?: DocStatus | string | null;
+  captain_included?: boolean | null;
+  boater_safety_required?: boolean | null;
   customers?: {
     full_name?: string;
     email?: string;
@@ -136,6 +154,50 @@ type AdminBookingRow = {
   } | null;
   boats?: { name?: string } | null;
   user_verifications?: UserVerificationsRow | UserVerificationsRow[] | null;
+};
+
+type AdminBookingDocument = {
+  id: string;
+  document_type: 'buoy_insurance_proof' | 'government_id' | 'boater_safety_card' | string;
+  status: 'uploaded' | 'approved' | 'rejected' | string;
+  rejection_note: string | null;
+  uploaded_at: string;
+  approved_at: string | null;
+};
+
+type AdminBookingWaiver = {
+  id: string;
+  typed_name: string;
+  agreed_terms: boolean;
+  agreed_safety: boolean;
+  signed_at: string;
+};
+
+const TRIP_DOC_LABELS: Record<string, string> = {
+  buoy_insurance_proof: 'Buoy insurance proof',
+  government_id: 'Government ID',
+  boater_safety_card: 'Boater safety card',
+};
+
+type TripReadinessReq = { status: string; verified: boolean };
+
+type TripReadinessRow = {
+  id: string;
+  status: string;
+  startTime: string | null;
+  customerName: string | null;
+  customerEmail: string | null;
+  boatName: string | null;
+  balanceDue: number;
+  totalPrice: number;
+  depositPaid: boolean;
+  waiverSigned: boolean;
+  insurance: TripReadinessReq;
+  idDocument: TripReadinessReq;
+  boaterCard: TripReadinessReq & { required: boolean };
+  autoReady: boolean;
+  readyForDeparture: boolean;
+  readyOverride: boolean | null;
 };
 
 function buoyVerificationRow(
@@ -161,6 +223,21 @@ function insuranceComplianceEmojiLabel(status: string | null | undefined): { emo
   if (s === 'rejected') return { emoji: '🔴', text: 'Rejected' };
   if (s === 'submitted') return { emoji: '🟠', text: 'Submitted' };
   return { emoji: '🟡', text: 'Pending' };
+}
+
+/** Small status pill for a single Trip Readiness requirement. */
+function ReadinessPill({ req }: { req: TripReadinessReq }) {
+  const s = req.verified ? 'approved' : String(req.status || 'pending');
+  const cls =
+    s === 'approved'
+      ? 'bg-green-100 text-green-800'
+      : s === 'rejected'
+        ? 'bg-red-100 text-red-800'
+        : s === 'uploaded' || s === 'submitted'
+          ? 'bg-amber-100 text-amber-800'
+          : 'bg-slate-100 text-slate-600';
+  const label = s === 'approved' ? 'Verified' : s === 'uploaded' ? 'Uploaded' : s.charAt(0).toUpperCase() + s.slice(1);
+  return <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${cls}`}>{label}</span>;
 }
 
 export default function Admin({ onNavigate }: AdminProps) {
@@ -220,9 +297,32 @@ export default function Admin({ onNavigate }: AdminProps) {
   const [subscribers, setSubscribers] = useState<AdminSubscriberRow[]>([]);
   const [subscribersLoading, setSubscribersLoading] = useState(false);
   const [subscribersError, setSubscribersError] = useState<string | null>(null);
+  const [grouponCodes, setGrouponCodes] = useState<AdminGrouponRow[]>([]);
+  const [grouponLoading, setGrouponLoading] = useState(false);
+  const [grouponError, setGrouponError] = useState<string | null>(null);
+  const [grouponSaving, setGrouponSaving] = useState(false);
+  const [grouponForm, setGrouponForm] = useState({
+    code: '',
+    discount_type: 'fixed',
+    discount_amount: '',
+    applies_to: 'bio_tour',
+    max_uses: '1',
+    expires_at: '',
+  });
   const [runningAlerts, setRunningAlerts] = useState(false);
   const [incidentCounts, setIncidentCounts] = useState<Record<string, number>>({});
   const [selectedIncidentBookingId, setSelectedIncidentBookingId] = useState<string>('');
+  const [docsBookingId, setDocsBookingId] = useState<string>('');
+  const [docsData, setDocsData] = useState<{
+    documents: AdminBookingDocument[];
+    waivers: AdminBookingWaiver[];
+  } | null>(null);
+  const [docsLoading, setDocsLoading] = useState(false);
+  const [docsBusy, setDocsBusy] = useState(false);
+  const [readiness, setReadiness] = useState<TripReadinessRow[]>([]);
+  const [readinessLoading, setReadinessLoading] = useState(false);
+  const [readinessSearch, setReadinessSearch] = useState('');
+  const [readinessBusyId, setReadinessBusyId] = useState<string>('');
   const [bookingIncidents, setBookingIncidents] = useState<IncidentRow[]>([]);
   const [incidentsLoading, setIncidentsLoading] = useState(false);
   const [incidentDescription, setIncidentDescription] = useState('');
@@ -550,6 +650,141 @@ export default function Admin({ onNavigate }: AdminProps) {
     }
   }, [isAdmin]);
 
+  const loadGrouponCodes = useCallback(async () => {
+    if (!isAdmin) return;
+    if (!env.apiUrlConfigured || !env.apiUrl) {
+      setGrouponError('API server URL is not configured (set VITE_API_URL).');
+      setGrouponCodes([]);
+      setGrouponLoading(false);
+      return;
+    }
+    setGrouponLoading(true);
+    setGrouponError(null);
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      if (!token) {
+        setGrouponError('Admin session unavailable.');
+        setGrouponCodes([]);
+        return;
+      }
+
+      const payload = (await getAdminGrouponCodes(token, { skipCache: true })) as
+        | AdminGrouponRow[]
+        | { error?: string };
+      setGrouponCodes(Array.isArray(payload) ? payload : []);
+    } catch (err) {
+      console.error('[admin-groupon]', err);
+      setGrouponError('Could not load Groupon codes.');
+      setGrouponCodes([]);
+    } finally {
+      setGrouponLoading(false);
+    }
+  }, [isAdmin]);
+
+  const handleCreateGrouponCode = useCallback(async () => {
+    if (!isAdmin || grouponSaving) return;
+    if (!env.apiUrlConfigured || !env.apiUrl) {
+      setNotice({ variant: 'error', text: 'API server URL is not configured (set VITE_API_URL).' });
+      return;
+    }
+    const code = grouponForm.code.trim();
+    if (!code) {
+      setNotice({ variant: 'error', text: 'Enter a code to add.' });
+      return;
+    }
+    setGrouponSaving(true);
+    setNotice(null);
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      if (!token) {
+        setNotice({ variant: 'error', text: 'Admin session unavailable.' });
+        return;
+      }
+
+      const res = await fetch(`${env.apiUrl}/api/admin/groupon-codes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          code,
+          discount_type: grouponForm.discount_type,
+          discount_amount: Number(grouponForm.discount_amount || 0),
+          applies_to: grouponForm.applies_to.trim() || 'bio_tour',
+          max_uses: Number(grouponForm.max_uses || 1),
+          expires_at: grouponForm.expires_at || null,
+        }),
+      });
+      const payload = (await res.json().catch(() => ({}))) as {
+        success?: boolean;
+        code?: string;
+        error?: string;
+      };
+      if (!res.ok || !payload.success) {
+        setNotice({ variant: 'error', text: payload.error || 'Could not save the code.' });
+        return;
+      }
+      setNotice({ variant: 'success', text: `Saved code ${payload.code}.` });
+      setGrouponForm({
+        code: '',
+        discount_type: 'fixed',
+        discount_amount: '',
+        applies_to: 'bio_tour',
+        max_uses: '1',
+        expires_at: '',
+      });
+      await loadGrouponCodes();
+    } catch (err) {
+      console.error('[admin-groupon-create]', err);
+      setNotice({ variant: 'error', text: 'Could not save the code.' });
+    } finally {
+      setGrouponSaving(false);
+    }
+  }, [isAdmin, grouponSaving, grouponForm, loadGrouponCodes]);
+
+  const handleToggleGrouponStatus = useCallback(
+    async (id: string, currentStatus: string) => {
+      if (!isAdmin) return;
+      if (!env.apiUrlConfigured || !env.apiUrl) {
+        setNotice({ variant: 'error', text: 'API server URL is not configured (set VITE_API_URL).' });
+        return;
+      }
+      const nextStatus = currentStatus === 'active' ? 'disabled' : 'active';
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        const token = session?.access_token;
+        if (!token) {
+          setNotice({ variant: 'error', text: 'Admin session unavailable.' });
+          return;
+        }
+
+        const res = await fetch(`${env.apiUrl}/api/admin/groupon-codes/${encodeURIComponent(id)}/status`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ status: nextStatus }),
+        });
+        const payload = (await res.json().catch(() => ({}))) as { success?: boolean; error?: string };
+        if (!res.ok || !payload.success) {
+          setNotice({ variant: 'error', text: payload.error || 'Could not update the code.' });
+          return;
+        }
+        setGrouponCodes((prev) =>
+          prev.map((g) => (g.id === id ? { ...g, status: nextStatus } : g))
+        );
+      } catch (err) {
+        console.error('[admin-groupon-status]', err);
+        setNotice({ variant: 'error', text: 'Could not update the code.' });
+      }
+    },
+    [isAdmin]
+  );
+
   const handleRunAlerts = useCallback(async () => {
     if (!isAdmin || runningAlerts) return;
     if (!env.apiUrlConfigured || !env.apiUrl) {
@@ -619,6 +854,11 @@ export default function Admin({ onNavigate }: AdminProps) {
     void loadSubscribers();
   }, [isAdmin, loadSubscribers]);
 
+  useEffect(() => {
+    if (!isAdmin) return;
+    void loadGrouponCodes();
+  }, [isAdmin, loadGrouponCodes]);
+
   const getAdminToken = useCallback(async (): Promise<string | null> => {
     const {
       data: { session },
@@ -650,6 +890,116 @@ export default function Admin({ onNavigate }: AdminProps) {
     },
     [getAdminToken]
   );
+
+  const loadTripDocs = useCallback(
+    async (bookingId: string) => {
+      setDocsLoading(true);
+      try {
+        const payload = await apiRequest(
+          `/api/admin/booking-documents?bookingId=${encodeURIComponent(bookingId)}`
+        );
+        setDocsData({
+          documents: (payload.documents as AdminBookingDocument[]) || [],
+          waivers: (payload.waivers as AdminBookingWaiver[]) || [],
+        });
+      } catch (err) {
+        setNotice({ variant: 'error', text: err instanceof Error ? err.message : 'Could not load documents.' });
+        setDocsData({ documents: [], waivers: [] });
+      } finally {
+        setDocsLoading(false);
+      }
+    },
+    [apiRequest]
+  );
+
+  const openTripDocs = useCallback(
+    (bookingId: string) => {
+      setDocsBookingId(bookingId);
+      setDocsData(null);
+      void loadTripDocs(bookingId);
+    },
+    [loadTripDocs]
+  );
+
+  const viewTripDoc = useCallback(
+    async (id: string) => {
+      try {
+        const payload = await apiRequest(`/api/admin/booking-document/${encodeURIComponent(id)}/signed-url`);
+        const url = payload.url as string | undefined;
+        if (url) window.open(url, '_blank', 'noopener');
+      } catch (err) {
+        setNotice({ variant: 'error', text: err instanceof Error ? err.message : 'Could not open document.' });
+      }
+    },
+    [apiRequest]
+  );
+
+  const setTripDocStatus = useCallback(
+    async (id: string, status: 'approved' | 'rejected') => {
+      let rejectionNote: string | undefined;
+      if (status === 'rejected') {
+        rejectionNote = window.prompt('Rejection note (optional — shown to the customer):') || undefined;
+      }
+      setDocsBusy(true);
+      try {
+        await apiRequest(`/api/admin/booking-document/${encodeURIComponent(id)}/status`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status, rejectionNote }),
+        });
+        if (docsBookingId) await loadTripDocs(docsBookingId);
+      } catch (err) {
+        setNotice({ variant: 'error', text: err instanceof Error ? err.message : 'Could not update document.' });
+      } finally {
+        setDocsBusy(false);
+      }
+    },
+    [apiRequest, docsBookingId, loadTripDocs]
+  );
+
+  const loadTripReadiness = useCallback(
+    async (search: string) => {
+      setReadinessLoading(true);
+      try {
+        const qs = search.trim() ? `?search=${encodeURIComponent(search.trim())}` : '';
+        const payload = await apiRequest(`/api/admin/trip-readiness${qs}`);
+        setReadiness((payload.bookings as TripReadinessRow[]) || []);
+      } catch (err) {
+        setNotice({ variant: 'error', text: err instanceof Error ? err.message : 'Could not load trip readiness.' });
+        setReadiness([]);
+      } finally {
+        setReadinessLoading(false);
+      }
+    },
+    [apiRequest]
+  );
+
+  const setBookingTripFlags = useCallback(
+    async (
+      id: string,
+      flags: { boaterSafetyRequired?: boolean | null; readyOverride?: boolean | null }
+    ) => {
+      setReadinessBusyId(id);
+      try {
+        await apiRequest(`/api/admin/booking/${encodeURIComponent(id)}/trip-flags`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(flags),
+        });
+        await loadTripReadiness(readinessSearch);
+      } catch (err) {
+        setNotice({ variant: 'error', text: err instanceof Error ? err.message : 'Could not update booking.' });
+      } finally {
+        setReadinessBusyId('');
+      }
+    },
+    [apiRequest, loadTripReadiness, readinessSearch]
+  );
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    void loadTripReadiness('');
+  }, [isAdmin, loadTripReadiness]);
 
   const fetchIncidentsForBooking = useCallback(
     async (bookingId: string, options?: { force?: boolean }): Promise<IncidentRow[]> => {
@@ -733,7 +1083,7 @@ export default function Admin({ onNavigate }: AdminProps) {
         try {
           const list = await fetchIncidentsForBooking(booking.id);
           nextCounts[booking.id] = list.length;
-        } catch (_err) {
+        } catch {
           nextCounts[booking.id] = 0;
         }
       }
@@ -767,7 +1117,7 @@ export default function Admin({ onNavigate }: AdminProps) {
       }
 
       if (incidentFile) {
-        const safeName = incidentFile.name.replace(/[^\w.\-]+/g, '-');
+        const safeName = incidentFile.name.replace(/[^\w.-]+/g, '-');
         const filePath = `incidents/${created.id}/${Date.now()}-${safeName}`;
         const { error: uploadErr } = await supabase.storage.from('incident-photos').upload(filePath, incidentFile, {
           upsert: false,
@@ -1074,6 +1424,19 @@ export default function Admin({ onNavigate }: AdminProps) {
       .eq('booking_id', bookingId);
 
     logSupabaseError('Admin.handleBuoyStatusUpdate', error);
+    if (!error) void loadBookings();
+  };
+
+  const handleVerificationDocUpdate = async (
+    bookingId: string,
+    field: 'id_document_status' | 'boater_card_status',
+    value: DocStatus
+  ) => {
+    const stamp = new Date().toISOString();
+    const { error } = await supabase
+      .from('user_verifications')
+      .upsert({ booking_id: bookingId, [field]: value, updated_at: stamp }, { onConflict: 'booking_id' });
+    logSupabaseError('Admin.handleVerificationDocUpdate', error);
     if (!error) void loadBookings();
   };
 
@@ -1707,6 +2070,348 @@ export default function Admin({ onNavigate }: AdminProps) {
           <div className="border-b border-slate-100 px-4 py-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
+                <h2 className="text-lg font-bold text-slate-900">Booking Documents / Trip Readiness</h2>
+                <p className="text-xs text-slate-500">
+                  Review pre-trip requirements per booking. Use{' '}
+                  <span className="font-semibold">Review docs</span> to view, approve or reject uploaded
+                  files (private — signed links only). Override the boater card requirement or force a
+                  Ready / Hold status here.
+                </p>
+              </div>
+              <form
+                className="flex flex-wrap items-center gap-2"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void loadTripReadiness(readinessSearch);
+                }}
+              >
+                <input
+                  type="text"
+                  value={readinessSearch}
+                  onChange={(e) => setReadinessSearch(e.target.value)}
+                  placeholder="Search name or email…"
+                  className="w-56 rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900"
+                />
+                <button
+                  type="submit"
+                  disabled={readinessLoading}
+                  className="rounded-lg bg-slate-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {readinessLoading ? 'Searching…' : 'Search'}
+                </button>
+              </form>
+            </div>
+          </div>
+          <div className="max-h-[32rem] overflow-y-auto">
+            {readinessLoading ? (
+              <p className="px-4 py-6 text-sm text-slate-500">Loading bookings…</p>
+            ) : readiness.length === 0 ? (
+              <p className="px-4 py-6 text-sm text-slate-500">No bookings found.</p>
+            ) : (
+              <table className="w-full text-left text-sm">
+                <thead className="sticky top-0 bg-slate-50 text-xs font-semibold uppercase text-slate-600">
+                  <tr>
+                    <th className="px-4 py-2">Customer</th>
+                    <th className="px-4 py-2">Deposit</th>
+                    <th className="px-4 py-2">Waiver</th>
+                    <th className="px-4 py-2">Buoy proof</th>
+                    <th className="px-4 py-2">Gov ID</th>
+                    <th className="px-4 py-2">Boater card</th>
+                    <th className="px-4 py-2">Ready</th>
+                    <th className="px-4 py-2">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {readiness.map((row) => {
+                    const busy = readinessBusyId === row.id;
+                    return (
+                      <tr key={row.id} className="align-top hover:bg-slate-50">
+                        <td className="px-4 py-3">
+                          <p className="font-semibold text-slate-900">{row.customerName || 'Unknown'}</p>
+                          <p className="break-all text-xs text-slate-500">{row.customerEmail || '—'}</p>
+                          <p className="text-xs text-slate-400">
+                            {row.boatName || 'Boat TBD'}
+                            {row.startTime ? ` · ${new Date(row.startTime).toLocaleDateString()}` : ''}
+                          </p>
+                        </td>
+                        <td className="px-4 py-3">
+                          <span
+                            className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+                              row.depositPaid ? 'bg-green-100 text-green-800' : 'bg-slate-100 text-slate-600'
+                            }`}
+                          >
+                            {row.depositPaid ? 'Paid' : 'Unpaid'}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3">
+                          <span
+                            className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+                              row.waiverSigned ? 'bg-green-100 text-green-800' : 'bg-slate-100 text-slate-600'
+                            }`}
+                          >
+                            {row.waiverSigned ? 'Signed' : 'Unsigned'}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3">
+                          <ReadinessPill req={row.insurance} />
+                        </td>
+                        <td className="px-4 py-3">
+                          <ReadinessPill req={row.idDocument} />
+                        </td>
+                        <td className="px-4 py-3">
+                          {row.boaterCard.required ? (
+                            <ReadinessPill req={row.boaterCard} />
+                          ) : (
+                            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-500">
+                              Not required
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          <span
+                            className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+                              row.readyForDeparture
+                                ? 'bg-green-100 text-green-800'
+                                : 'bg-amber-100 text-amber-800'
+                            }`}
+                          >
+                            {row.readyForDeparture ? 'Ready' : 'Not ready'}
+                          </span>
+                          {row.readyOverride !== null ? (
+                            <p className="mt-1 text-[11px] font-semibold text-cyan-700">
+                              {row.readyOverride ? 'Forced ready' : 'On hold'}
+                            </p>
+                          ) : null}
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={() => openTripDocs(row.id)}
+                              className="rounded border border-cyan-300 bg-cyan-50 px-2.5 py-1 text-xs font-semibold text-cyan-800 hover:bg-cyan-100"
+                            >
+                              Review docs
+                            </button>
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() =>
+                                void setBookingTripFlags(row.id, {
+                                  boaterSafetyRequired: row.boaterCard.required ? false : true,
+                                })
+                              }
+                              className="rounded border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+                            >
+                              {row.boaterCard.required ? 'Boater N/A' : 'Require boater'}
+                            </button>
+                            {row.readyOverride === true ? (
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() => void setBookingTripFlags(row.id, { readyOverride: null })}
+                                className="rounded border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+                              >
+                                Clear override
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() => void setBookingTripFlags(row.id, { readyOverride: true })}
+                                className="rounded bg-green-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-green-700 disabled:opacity-40"
+                              >
+                                Mark Ready
+                              </button>
+                            )}
+                            {row.readyOverride === false ? (
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() => void setBookingTripFlags(row.id, { readyOverride: null })}
+                                className="rounded border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+                              >
+                                Release hold
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() => void setBookingTripFlags(row.id, { readyOverride: false })}
+                                className="rounded border border-red-300 bg-red-50 px-2.5 py-1 text-xs font-semibold text-red-700 hover:bg-red-100 disabled:opacity-40"
+                              >
+                                Hold
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+
+        <div className="mb-8 overflow-hidden rounded-xl border border-slate-200 bg-white shadow">
+          <div className="border-b border-slate-100 px-4 py-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-bold text-slate-900">Groupon &amp; Voucher Codes</h2>
+                <p className="text-xs text-slate-500">
+                  Add a single code below, or bulk-import with{' '}
+                  <code className="rounded bg-slate-100 px-1 py-0.5 text-[11px]">
+                    node server/scripts/import-groupon-codes.js codes.csv
+                  </code>
+                  . Discounts are validated and applied server-side only.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void loadGrouponCodes()}
+                disabled={grouponLoading}
+                className="rounded-lg bg-slate-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {grouponLoading ? 'Refreshing…' : 'Refresh'}
+              </button>
+            </div>
+          </div>
+          <div className="border-b border-slate-100 bg-slate-50 px-4 py-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-6">
+              <input
+                type="text"
+                value={grouponForm.code}
+                onChange={(e) => setGrouponForm((p) => ({ ...p, code: e.target.value }))}
+                placeholder="CODE"
+                autoCapitalize="characters"
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm uppercase text-slate-900"
+              />
+              <select
+                value={grouponForm.discount_type}
+                onChange={(e) => setGrouponForm((p) => ({ ...p, discount_type: e.target.value }))}
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900"
+              >
+                <option value="fixed">Fixed ($)</option>
+                <option value="percent">Percent (%)</option>
+              </select>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={grouponForm.discount_amount}
+                onChange={(e) => setGrouponForm((p) => ({ ...p, discount_amount: e.target.value }))}
+                placeholder="Amount"
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900"
+              />
+              <input
+                type="text"
+                value={grouponForm.applies_to}
+                onChange={(e) => setGrouponForm((p) => ({ ...p, applies_to: e.target.value }))}
+                placeholder="applies_to (e.g. bio_tour)"
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900"
+              />
+              <input
+                type="date"
+                value={grouponForm.expires_at}
+                onChange={(e) => setGrouponForm((p) => ({ ...p, expires_at: e.target.value }))}
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900"
+              />
+              <button
+                type="button"
+                onClick={() => void handleCreateGrouponCode()}
+                disabled={grouponSaving}
+                className="rounded-lg bg-cyan-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-cyan-600 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {grouponSaving ? 'Saving…' : 'Add code'}
+              </button>
+            </div>
+          </div>
+          <div className="max-h-80 overflow-y-auto">
+            {grouponLoading ? (
+              <p className="px-4 py-6 text-sm text-slate-500">Loading codes…</p>
+            ) : grouponError ? (
+              <p className="px-4 py-6 text-sm text-red-600">{grouponError}</p>
+            ) : grouponCodes.length === 0 ? (
+              <p className="px-4 py-6 text-sm text-slate-500">No Groupon codes yet.</p>
+            ) : (
+              <table className="w-full text-left text-sm">
+                <thead className="sticky top-0 bg-slate-50 text-xs font-semibold uppercase text-slate-600">
+                  <tr>
+                    <th className="px-4 py-2">Code</th>
+                    <th className="px-4 py-2">Discount</th>
+                    <th className="px-4 py-2">Applies to</th>
+                    <th className="px-4 py-2">Uses</th>
+                    <th className="px-4 py-2">Expires</th>
+                    <th className="px-4 py-2">Status</th>
+                    <th className="px-4 py-2">Redeemed booking</th>
+                    <th className="px-4 py-2">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {grouponCodes.map((g) => (
+                    <tr key={g.id} className="hover:bg-slate-50">
+                      <td className="whitespace-nowrap px-4 py-2 font-mono font-semibold text-slate-900">
+                        {g.code}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-2 text-slate-700">
+                        {g.discount_type === 'percent'
+                          ? `${Number(g.discount_amount || 0)}%`
+                          : `$${Number(g.discount_amount || 0).toFixed(2)}`}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-2 text-slate-700">{g.applies_to || '—'}</td>
+                      <td className="whitespace-nowrap px-4 py-2 text-slate-700">
+                        {Number(g.used_count || 0)} / {Number(g.max_uses || 1)}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-2 text-slate-600">
+                        {g.expires_at
+                          ? new Date(g.expires_at).toLocaleDateString(undefined, { dateStyle: 'medium' })
+                          : 'Never'}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-2">
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+                            g.status === 'active'
+                              ? 'bg-emerald-100 text-emerald-700'
+                              : g.status === 'redeemed'
+                                ? 'bg-slate-200 text-slate-600'
+                                : 'bg-amber-100 text-amber-700'
+                          }`}
+                        >
+                          {g.status}
+                        </span>
+                      </td>
+                      <td className="max-w-[220px] break-all px-4 py-2 text-xs text-slate-600">
+                        {g.redeemed_booking_id ? (
+                          <span className="font-mono">{g.redeemed_booking_id}</span>
+                        ) : (
+                          '—'
+                        )}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-2">
+                        {g.status === 'redeemed' ? (
+                          <span className="text-xs text-slate-400">—</span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => void handleToggleGrouponStatus(g.id, g.status)}
+                            className="rounded-lg border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-100"
+                          >
+                            {g.status === 'active' ? 'Disable' : 'Activate'}
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+
+        <div className="mb-8 overflow-hidden rounded-xl border border-slate-200 bg-white shadow">
+          <div className="border-b border-slate-100 px-4 py-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
                 <h2 className="text-lg font-bold text-slate-900">Recent Alert Activity</h2>
                 <p className="text-xs text-slate-500">Latest triggered alert events (max 20).</p>
               </div>
@@ -1987,6 +2692,23 @@ export default function Admin({ onNavigate }: AdminProps) {
                   const insuranceProofHref =
                     insuranceDocHref || buoy?.buoy_proof_url?.trim() || '';
                   const insuranceEmojiStatus = insuranceComplianceEmojiLabel(booking.insurance_status);
+                  const boaterRequired =
+                    booking.boater_safety_required === true
+                      ? true
+                      : booking.boater_safety_required === false
+                        ? false
+                        : booking.captain_included === false;
+                  const depositPaidFlag = ['deposit_paid', 'paid'].includes(payStatus);
+                  const waiverDone =
+                    booking.waiver_signed === true ||
+                    (Array.isArray(booking.waivers) && booking.waivers.length > 0);
+                  const insuranceDone =
+                    buoy?.buoy_status === 'verified' || booking.insurance_status === 'verified';
+                  const idDone =
+                    buoy?.id_document_status === 'verified' || booking.license_status === 'verified';
+                  const boaterDone = !boaterRequired || buoy?.boater_card_status === 'verified';
+                  const readyForDeparture =
+                    depositPaidFlag && waiverDone && insuranceDone && idDone && boaterDone;
                   return (
                   <tr
                     key={booking.id}
@@ -2011,6 +2733,16 @@ export default function Admin({ onNavigate }: AdminProps) {
                         )}`}
                       >
                         {booking.status.replace(/_/g, ' ')}
+                      </span>
+                      <span
+                        className={`mt-1 inline-flex w-fit items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                          readyForDeparture
+                            ? 'bg-green-100 text-green-700'
+                            : 'bg-amber-100 text-amber-800'
+                        }`}
+                        title="All pre-trip requirements verified"
+                      >
+                        {readyForDeparture ? '✅ Ready for departure' : '⏳ Prep incomplete'}
                       </span>
                     </td>
                     <td className="px-6 py-4 text-sm text-slate-800">
@@ -2136,6 +2868,76 @@ export default function Admin({ onNavigate }: AdminProps) {
                             Reject
                           </button>
                         </div>
+                        <div className="mt-1 flex flex-col gap-0.5" aria-label="Government ID review">
+                          <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                            Government ID
+                          </span>
+                          {buoy?.id_document_url || booking.license_url ? (
+                            <a
+                              href={(buoy?.id_document_url || booking.license_url) as string}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex w-fit items-center gap-1 text-xs font-semibold text-amber-700 hover:text-amber-800"
+                            >
+                              <ExternalLink className="h-3 w-3 shrink-0" /> View ID
+                            </a>
+                          ) : (
+                            <span className="text-xs text-slate-500">No upload</span>
+                          )}
+                          <select
+                            value={(buoy?.id_document_status as DocStatus) || 'pending'}
+                            onChange={(e) =>
+                              handleVerificationDocUpdate(
+                                booking.id,
+                                'id_document_status',
+                                e.target.value as DocStatus
+                              )
+                            }
+                            className="max-w-[9rem] rounded border border-slate-300 bg-white px-2 py-1 text-xs"
+                            aria-label="Government ID status"
+                          >
+                            <option value="pending">Pending</option>
+                            <option value="submitted">Submitted</option>
+                            <option value="verified">Verified</option>
+                            <option value="rejected">Rejected</option>
+                          </select>
+                        </div>
+                        {boaterRequired ? (
+                          <div className="mt-1 flex flex-col gap-0.5" aria-label="Boater safety card review">
+                            <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                              Boater card
+                            </span>
+                            {buoy?.boater_card_url ? (
+                              <a
+                                href={buoy.boater_card_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex w-fit items-center gap-1 text-xs font-semibold text-amber-700 hover:text-amber-800"
+                              >
+                                <ExternalLink className="h-3 w-3 shrink-0" /> View card
+                              </a>
+                            ) : (
+                              <span className="text-xs text-slate-500">No upload</span>
+                            )}
+                            <select
+                              value={(buoy?.boater_card_status as DocStatus) || 'pending'}
+                              onChange={(e) =>
+                                handleVerificationDocUpdate(
+                                  booking.id,
+                                  'boater_card_status',
+                                  e.target.value as DocStatus
+                                )
+                              }
+                              className="max-w-[9rem] rounded border border-slate-300 bg-white px-2 py-1 text-xs"
+                              aria-label="Boater safety card status"
+                            >
+                              <option value="pending">Pending</option>
+                              <option value="submitted">Submitted</option>
+                              <option value="verified">Verified</option>
+                              <option value="rejected">Rejected</option>
+                            </select>
+                          </div>
+                        ) : null}
                       </div>
                     </td>
                     <td className="px-6 py-4">
@@ -2215,6 +3017,14 @@ export default function Admin({ onNavigate }: AdminProps) {
                           className="rounded bg-green-600 px-3 py-1 text-sm font-semibold text-white transition-colors hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-40"
                         >
                           Approve
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => openTripDocs(booking.id)}
+                          className="rounded border border-cyan-300 bg-cyan-50 px-3 py-1 text-sm font-semibold text-cyan-800 transition-colors hover:bg-cyan-100"
+                          title="Review signed waiver and uploaded documents (private)"
+                        >
+                          Trip Docs
                         </button>
                         <button
                           type="button"
@@ -2690,6 +3500,118 @@ export default function Admin({ onNavigate }: AdminProps) {
           </div>
         </div>
       </div>
+
+      {docsBookingId ? (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="max-h-[85vh] w-full max-w-lg overflow-auto rounded-xl bg-white p-6 shadow-2xl">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-bold text-slate-900">Trip documents</h3>
+              <button
+                type="button"
+                onClick={() => {
+                  setDocsBookingId('');
+                  setDocsData(null);
+                }}
+                className="rounded px-2 py-1 text-sm font-semibold text-slate-500 hover:bg-slate-100"
+              >
+                Close
+              </button>
+            </div>
+            <p className="mt-1 break-all font-mono text-xs text-slate-500">{docsBookingId}</p>
+
+            {docsLoading ? (
+              <p className="mt-6 text-sm text-slate-600">Loading…</p>
+            ) : docsData ? (
+              <div className="mt-4 space-y-5">
+                <section>
+                  <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Signed waiver
+                  </h4>
+                  {docsData.waivers.length > 0 ? (
+                    <div className="mt-1 rounded border border-slate-200 bg-slate-50 p-3 text-sm text-slate-800">
+                      <p className="font-semibold">{docsData.waivers[0].typed_name}</p>
+                      <p className="text-xs text-slate-500">
+                        Signed {new Date(docsData.waivers[0].signed_at).toLocaleString()}
+                      </p>
+                      <p className="text-xs text-slate-500">
+                        Terms: {docsData.waivers[0].agreed_terms ? 'yes' : 'no'} · Safety:{' '}
+                        {docsData.waivers[0].agreed_safety ? 'yes' : 'no'}
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="mt-1 text-sm text-slate-500">No waiver signed yet.</p>
+                  )}
+                </section>
+
+                <section>
+                  <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Uploaded documents
+                  </h4>
+                  {docsData.documents.length > 0 ? (
+                    <ul className="mt-1 space-y-2">
+                      {docsData.documents.map((doc) => (
+                        <li key={doc.id} className="rounded border border-slate-200 p-3">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-sm font-semibold text-slate-900">
+                              {TRIP_DOC_LABELS[doc.document_type] || doc.document_type}
+                            </span>
+                            <span
+                              className={`rounded-full px-2 py-0.5 text-xs font-semibold ${docStatusBadgeClass(
+                                doc.status
+                              )}`}
+                            >
+                              {doc.status}
+                            </span>
+                          </div>
+                          <p className="mt-1 text-xs text-slate-500">
+                            Uploaded {new Date(doc.uploaded_at).toLocaleString()}
+                          </p>
+                          {doc.rejection_note ? (
+                            <p className="mt-1 text-xs text-red-600">Note: {doc.rejection_note}</p>
+                          ) : null}
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={() => void viewTripDoc(doc.id)}
+                              className="rounded bg-slate-800 px-3 py-1 text-xs font-semibold text-white hover:bg-slate-700"
+                            >
+                              View
+                            </button>
+                            <button
+                              type="button"
+                              disabled={docsBusy}
+                              onClick={() => void setTripDocStatus(doc.id, 'approved')}
+                              className="rounded bg-green-600 px-3 py-1 text-xs font-semibold text-white hover:bg-green-700 disabled:opacity-40"
+                            >
+                              Approve
+                            </button>
+                            <button
+                              type="button"
+                              disabled={docsBusy}
+                              onClick={() => void setTripDocStatus(doc.id, 'rejected')}
+                              className="rounded bg-red-600 px-3 py-1 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-40"
+                            >
+                              Reject
+                            </button>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="mt-1 text-sm text-slate-500">No documents uploaded yet.</p>
+                  )}
+                </section>
+              </div>
+            ) : (
+              <p className="mt-6 text-sm text-slate-600">No data.</p>
+            )}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

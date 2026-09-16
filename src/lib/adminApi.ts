@@ -12,6 +12,13 @@ export function getAdminSubscribers(token: string) {
   return apiGet('/api/admin/subscribers', { headers: authHeaders(token) });
 }
 
+export function getAdminGrouponCodes(token: string, options?: { skipCache?: boolean }) {
+  return apiGet('/api/admin/groupon-codes', {
+    headers: authHeaders(token),
+    skipCache: options?.skipCache,
+  });
+}
+
 export function getIncidentsByBookingId(bookingId: string, token: string, options?: { skipCache?: boolean }) {
   if (!bookingId) throw new Error('getIncidentsByBookingId requires a booking id');
   return apiGet(`/api/incidents/${encodeURIComponent(bookingId)}`, {

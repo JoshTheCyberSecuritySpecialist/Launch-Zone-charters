@@ -81,7 +81,6 @@ export function buildBookingInsertPayload(
   const raw: Record<string, unknown> = { ...source };
 
   if (import.meta.env.DEV) {
-    // eslint-disable-next-line no-console -- intentional integration debug
     console.log('📦 RAW BOOKING OBJECT:', raw);
   }
 
@@ -120,7 +119,6 @@ export function buildBookingInsertPayload(
   }) as BookingInsertPayloadCompat;
 
   if (import.meta.env.DEV) {
-    // eslint-disable-next-line no-console -- intentional integration debug
     console.log('✅ CLEAN BOOKING OBJECT:', clean);
   }
 

@@ -213,7 +213,7 @@ export default function LogArticle({ onNavigate }: LogArticleProps) {
       setArticle(resolved);
     }
     setLoading(false);
-  }, [slug, env.apiUrl, env.apiUrlConfigured]);
+  }, [slug]);
 
   useEffect(() => {
     let live = true;

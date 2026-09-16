@@ -68,14 +68,15 @@ function run() {
   const nine = slot('2026-07-10T21:00', { used: 0, remaining: 5, max: 5 });
   const ten = slot('2026-07-10T22:00', { used: 0, remaining: 5, max: 5 });
 
-  // 1–2: empty night opens earliest only
+  // Completely open night: no partial fill → expose every open start (no false scarcity)
   let target = selectFillForwardTarget([eight, nine, ten]);
-  assert.strictEqual(target.start, eight.start);
+  assert.strictEqual(target, null);
   let filtered = applyBioSharedFillForward([eight, nine, ten]);
-  assert.strictEqual(filtered.length, 1);
+  assert.strictEqual(filtered.length, 3);
   assert.strictEqual(filtered[0].start, eight.start);
+  assert.strictEqual(filtered[2].start, ten.start);
 
-  // 1: 2-person shared leaves 3 seats; later hours hidden
+  // Partial departure open: later empty hours stay hidden until this one fills
   const eightPartial = slot('2026-07-10T20:00', { used: 2, remaining: 3, max: 5 });
   filtered = applyBioSharedFillForward([eightPartial, nine, ten]);
   assert.strictEqual(filtered.length, 1);
@@ -98,10 +99,12 @@ function run() {
   assert.strictEqual(cap.available, true);
   assert.strictEqual(cap.capacity.remaining, 0);
 
-  // 4: next hour opens at 5 reserved
+  // 4: next hour opens when earlier departure is gone (empty remaining night shows all)
   const eightFullGone = [nine, ten];
   filtered = applyBioSharedFillForward(eightFullGone);
+  assert.strictEqual(filtered.length, 2);
   assert.strictEqual(filtered[0].start, nine.start);
+  assert.strictEqual(filtered[1].start, ten.start);
 
   // 5: expired / canceled holds release capacity
   assert.strictEqual(

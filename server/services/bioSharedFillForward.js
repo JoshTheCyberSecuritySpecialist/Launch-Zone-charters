@@ -58,9 +58,9 @@ function operatingAnchorKey(slot) {
 }
 
 /**
- * Among eligible shared slots for one operating night, return the single fill target.
- * Prefer the earliest departure that already has passengers on any fleet boat and can
- * still accept this party; otherwise the earliest empty eligible time.
+ * Among eligible shared slots for one operating night, return the single fill target
+ * when a departure is already partially filled. On a completely open night, returns null
+ * so callers can surface every open start time.
  */
 function selectFillForwardTarget(eligibleSlots) {
   const sorted = (eligibleSlots || [])
@@ -74,12 +74,19 @@ function selectFillForwardTarget(eligibleSlots) {
     return fleetUsed > 0 && remaining > 0;
   });
   if (partialOpen.length > 0) return partialOpen[0];
-  return sorted[0];
+  return null;
+}
+
+function openEligibleSlots(eligibleSlots) {
+  return (eligibleSlots || [])
+    .filter((slot) => Number.isFinite(slotStartMs(slot)) && slotRemainingGuests(slot) > 0)
+    .sort((a, b) => slotStartMs(a) - slotStartMs(b));
 }
 
 /**
  * Apply fill-forward independently per operating night (anchor day).
- * @returns {object[]} at most one slot per operating night
+ * - Partial departure open → only that fill target (one departure at a time).
+ * - Completely open night → all eligible open starts (no false scarcity).
  */
 function applyBioSharedFillForward(eligibleSlots) {
   const groups = new Map();
@@ -91,17 +98,25 @@ function applyBioSharedFillForward(eligibleSlots) {
   const out = [];
   for (const group of groups.values()) {
     const target = selectFillForwardTarget(group);
-    if (target) out.push(target);
+    if (target) {
+      out.push(target);
+      continue;
+    }
+    out.push(...openEligibleSlots(group));
   }
   return out.sort((a, b) => slotStartMs(a) - slotStartMs(b));
 }
 
 function isRequestedStartFillForwardTarget(eligibleSlots, requestedStartIso) {
-  const target = selectFillForwardTarget(eligibleSlots);
-  if (!target) return false;
   const requestedMs = new Date(String(requestedStartIso || '')).getTime();
-  const targetMs = slotStartMs(target);
-  return Number.isFinite(requestedMs) && Number.isFinite(targetMs) && requestedMs === targetMs;
+  if (!Number.isFinite(requestedMs)) return false;
+
+  const target = selectFillForwardTarget(eligibleSlots);
+  if (target) {
+    return slotStartMs(target) === requestedMs;
+  }
+
+  return openEligibleSlots(eligibleSlots).some((slot) => slotStartMs(slot) === requestedMs);
 }
 
 module.exports = {
@@ -116,4 +131,5 @@ module.exports = {
   slotRemainingGuests,
   slotStartMs,
   slotUsedGuests,
+  openEligibleSlots,
 };

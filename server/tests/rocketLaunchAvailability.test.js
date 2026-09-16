@@ -135,7 +135,10 @@ async function run() {
 
   const bioHours = new Set(bioStarts.map((dt) => dt.hour));
   const rocketHours = new Set(rocketStarts.map((dt) => dt.hour));
-  assert.ok(bioHours.has(0) && bioHours.has(4), 'bio includes after-midnight charter hours');
+  assert.ok(
+    bioHours.has(20) && bioHours.has(23) && !bioHours.has(0) && !bioHours.has(4),
+    'bio evening enumerate is 8–11 PM; after-midnight is appended by listCharterSlotsForDay'
+  );
   assert.ok(!rocketHours.has(0) && !rocketHours.has(3), 'rocket legacy enumerate is not bio night-only');
   assert.ok(rocketHours.has(17), 'rocket legacy enumerate still allows daytime hours');
 

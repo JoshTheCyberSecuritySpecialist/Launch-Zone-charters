@@ -140,15 +140,16 @@ export default function CharterTimeForecast() {
         .then((res) => (res.ok ? res.json() : Promise.reject(new Error('times'))))
         .then((data: { slots?: AvailabilitySlot[] }) => (Array.isArray(data.slots) ? data.slots : []));
     };
-    const nextDay = DateTime.fromISO(date, { zone: BUSINESS_TZ }).plus({ days: 1 }).toFormat('yyyy-MM-dd');
-    const load =
-      experience === 'bio' ? Promise.all([fetchDay(date), fetchDay(nextDay)]) : fetchDay(date).then((daySlots) => [daySlots, [] as AvailabilitySlot[]]);
+    const load = fetchDay(date);
     load
-      .then(([todaySlots, tomorrowSlots]) => {
-        const nextSlots = [...todaySlots];
-        for (const slot of tomorrowSlots) {
-          const hour = Number(String(slot.startHHMM || '').slice(0, 2));
-          if (Number.isFinite(hour) && hour >= 0 && hour <= 4) nextSlots.push(slot);
+      .then((todaySlots) => {
+        const seen = new Set<string>();
+        const nextSlots: AvailabilitySlot[] = [];
+        for (const slot of todaySlots) {
+          const key = String(slot.start || '').trim();
+          if (!key || seen.has(key)) continue;
+          seen.add(key);
+          nextSlots.push(slot);
         }
         setSlots(nextSlots);
         if (nextSlots.length) {

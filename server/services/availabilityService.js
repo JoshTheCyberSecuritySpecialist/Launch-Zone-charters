@@ -1004,9 +1004,15 @@ function enumerateCharterStartsForDay(day, charterType) {
   const hours = charterStartHoursForType(charterType);
   const candidates = [];
   const dow = day.weekday;
+  const type = normalizeCharterType(charterType);
 
   for (const hour of hours) {
-    if (hour >= 0 && hour <= CAPTAIN_NIGHT_END_HOUR) {
+    const isAfterMidnightHour = hour >= 0 && hour <= CAPTAIN_NIGHT_END_HOUR;
+    if (isAfterMidnightHour) {
+      // Bio after-midnight starts belong to the selected evening's *next* calendar day.
+      // listCharterSlotsForDay appends those explicitly — do not also emit midnight-at-start-of-day
+      // here (that is the previous operating night and pollutes open bio dates).
+      if (type === 'bio') continue;
       const prevDow = day.minus({ days: 1 }).weekday;
       if (!CAPTAIN_NIGHT_WEEKDAYS.has(prevDow)) continue;
       candidates.push(day.set({ hour, minute: 0, second: 0, millisecond: 0 }));
@@ -1017,7 +1023,7 @@ function enumerateCharterStartsForDay(day, charterType) {
     }
   }
 
-  if (normalizeCharterType(charterType) === 'sunset' && CAPTAIN_NIGHT_WEEKDAYS.has(dow)) {
+  if (type === 'sunset' && CAPTAIN_NIGHT_WEEKDAYS.has(dow)) {
     candidates.push(day.set({ hour: 18, minute: 30, second: 0, millisecond: 0 }));
     candidates.sort((a, b) => a.toMillis() - b.toMillis());
   }

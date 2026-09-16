@@ -255,13 +255,6 @@ function charterTypeForApi(charterType: CharterType): string {
   return 'rocket';
 }
 
-function addDaysToYmd(ymd: string, days: number): string {
-  const parsed = parseYmd(ymd);
-  if (!parsed) return ymd;
-  const d = new Date(parsed.year, parsed.month - 1, parsed.day + days);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
-
 interface Boat {
   id: string;
   name: string;
@@ -1522,25 +1515,13 @@ export default function BookNow({ onNavigate }: BookNowProps) {
         .then((r) => (r.ok ? r.json() : Promise.reject(new Error('charter times'))))
         .then((data: { slots?: ApiTimeSlot[] }) => normalizeApiTimeSlots(data.slots));
     };
-    const nextDate = addDaysToYmd(bookingData.date, 1);
-    const load =
-      bookingData.charterType === 'night_bio'
-        ? Promise.all([fetchDay(bookingData.date), fetchDay(nextDate)])
-        : fetchDay(bookingData.date).then((slots) => [slots, [] as ApiTimeSlot[]]);
+    const load = fetchDay(bookingData.date);
 
     load
-      .then(([todaySlots, tomorrowSlots]) => {
+      .then((slots) => {
         const seen = new Set<string>();
         const merged: ApiTimeSlot[] = [];
-        for (const slot of todaySlots) {
-          const key = String(slot.start || '').trim();
-          if (!key || seen.has(key)) continue;
-          seen.add(key);
-          merged.push(slot);
-        }
-        for (const slot of tomorrowSlots) {
-          const hour = Number(String(slot.startHHMM || '').slice(0, 2));
-          if (!(Number.isFinite(hour) && hour >= 0 && hour <= 4)) continue;
+        for (const slot of slots) {
           const key = String(slot.start || '').trim();
           if (!key || seen.has(key)) continue;
           seen.add(key);
@@ -2534,7 +2515,13 @@ export default function BookNow({ onNavigate }: BookNowProps) {
 
   const charterTimesFromApi =
     bookingMode === 'charter' && apiAvailEnabled && !availTimesLoading && !timesManualFallback;
-  const availableCharterTimes = new Set(timeSlots.map((slot) => slot.startHHMM));
+  const availableCharterTimes = new Set(
+    timeSlots.map((slot) => slot.startHHMM).filter((hhmm): hhmm is string => Boolean(hhmm))
+  );
+  /** Must match the chips actually rendered (BIO_NIGHT / sunset options ∩ API HHMMs). */
+  const visibleCharterStartCount = isRocketCharter
+    ? timeSlots.length
+    : charterTimeOptions.filter((time) => availableCharterTimes.has(time)).length;
   const selectedRocketDepartureLabel = (() => {
     if (!isRocketPackageFlow) return null;
     const slot =
@@ -2547,9 +2534,9 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     bookingMode === 'charter' &&
     bookingData.date &&
     apiAvailEnabled &&
-    timeSlots.length > 0 &&
-    timeSlots.length <= 4
-      ? `Only ${timeSlots.length} start time${timeSlots.length === 1 ? '' : 's'} left this day`
+    visibleCharterStartCount > 0 &&
+    visibleCharterStartCount <= 4
+      ? `Only ${visibleCharterStartCount} start time${visibleCharterStartCount === 1 ? '' : 's'} left this day`
       : bookingMode === 'charter' &&
           bookingData.charterType === 'night_bio' &&
           bookingData.date &&

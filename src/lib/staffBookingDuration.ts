@@ -73,6 +73,8 @@ export function applyStaffDurationPresetChange(
 }
 
 type BoatRates = {
+  id?: string | null;
+  name?: string | null;
   hourly_rate?: number | string | null;
   half_day_rate?: number | string | null;
   full_day_rate?: number | string | null;
@@ -85,7 +87,7 @@ export function computeStaffBookingOriginalPrice(
 ): number {
   if (!boat || durationHours <= 0) return 0;
   if (bookingType !== 'captain_charter') {
-    const pkg = getRentalPackageByDuration(durationHours);
+    const pkg = getRentalPackageByDuration(durationHours, boat);
     if (pkg) return pkg.priceUsd;
   }
   const hourly = Number(boat.hourly_rate || 0);

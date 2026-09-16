@@ -1,6 +1,9 @@
 /**
  * Presentation + client validation mirror of server/config/rentalPackages.js.
  * Stripe amounts are enforced on the server — never trust browser-supplied prices.
+ *
+ * Pontoon and Key Largo center console share 4h/6h structure; prices differ by
+ * stable boat UUID (see DEFAULT_*_BOAT_IDS).
  */
 
 export const RENTAL_BUSINESS_TZ = 'America/New_York';
@@ -10,6 +13,11 @@ export const RENTAL_SLOT_STEP_MINUTES = 60;
 export const RENTAL_MAX_PASSENGERS = 6;
 
 export type RentalPackageId = 'rental_4hr' | 'rental_6hr';
+export type RentalFleet = 'pontoon' | 'center_console';
+
+/** Production boat UUIDs — keep in sync with server/config/rentalPackages.js */
+export const RENTAL_PONTOON_BOAT_IDS = ['a68bdf6b-be8d-48ad-971a-ac1854eb45da'] as const;
+export const RENTAL_CENTER_CONSOLE_BOAT_IDS = ['8847383e-0f4a-4b82-b3dd-e7c0133e3a97'] as const;
 
 export type RentalPackageDisplay = {
   id: RentalPackageId;
@@ -20,29 +28,78 @@ export type RentalPackageDisplay = {
   rentalType: 'half_day' | 'hourly';
   maxPassengers: number;
   label: string;
+  fleet: RentalFleet;
 };
 
+const FLEET_PRICE_CENTS: Record<RentalFleet, Record<4 | 6, number>> = {
+  pontoon: { 4: 14999, 6: 20999 },
+  center_console: { 4: 29999, 6: 44999 },
+};
+
+const FLEET_LABEL: Record<RentalFleet, string> = {
+  pontoon: 'Pontoon',
+  center_console: 'Center Console',
+};
+
+const PACKAGE_DEFS: Array<{
+  id: RentalPackageId;
+  durationHours: 4 | 6;
+  rentalType: 'half_day' | 'hourly';
+}> = [
+  { id: 'rental_4hr', durationHours: 4, rentalType: 'half_day' },
+  { id: 'rental_6hr', durationHours: 6, rentalType: 'hourly' },
+];
+
+function packageForFleet(
+  def: (typeof PACKAGE_DEFS)[number],
+  fleet: RentalFleet
+): RentalPackageDisplay {
+  const priceCents = FLEET_PRICE_CENTS[fleet][def.durationHours];
+  const priceUsd = priceCents / 100;
+  const labelName = FLEET_LABEL[fleet];
+  return {
+    id: def.id,
+    name: `${def.durationHours}-Hour ${labelName} Rental`,
+    durationHours: def.durationHours,
+    priceCents,
+    priceUsd,
+    rentalType: def.rentalType,
+    maxPassengers: RENTAL_MAX_PASSENGERS,
+    label: `${def.durationHours} Hours — $${priceUsd.toFixed(2)}`,
+    fleet,
+  };
+}
+
+export function resolveRentalFleet(boat?: {
+  id?: string | null;
+  name?: string | null;
+} | null): RentalFleet {
+  const id = String(boat?.id || '')
+    .trim()
+    .toLowerCase();
+  if (id && RENTAL_CENTER_CONSOLE_BOAT_IDS.some((x) => x.toLowerCase() === id)) {
+    return 'center_console';
+  }
+  if (id && RENTAL_PONTOON_BOAT_IDS.some((x) => x.toLowerCase() === id)) {
+    return 'pontoon';
+  }
+  const name = String(boat?.name || '').toLowerCase();
+  if (/key\s*largo|center\s*console/.test(name)) return 'center_console';
+  return 'pontoon';
+}
+
+export function listRentalPackagesForBoat(boat?: {
+  id?: string | null;
+  name?: string | null;
+} | null): RentalPackageDisplay[] {
+  const fleet = resolveRentalFleet(boat);
+  return PACKAGE_DEFS.map((def) => packageForFleet(def, fleet));
+}
+
+/** Default pontoon package list (Pricing pontoon card, legacy imports). */
 export const RENTAL_PACKAGES: Record<RentalPackageId, RentalPackageDisplay> = {
-  rental_4hr: {
-    id: 'rental_4hr',
-    name: '4-Hour Pontoon Rental',
-    durationHours: 4,
-    priceCents: 14999,
-    priceUsd: 149.99,
-    rentalType: 'half_day',
-    maxPassengers: RENTAL_MAX_PASSENGERS,
-    label: '4 Hours — $149.99',
-  },
-  rental_6hr: {
-    id: 'rental_6hr',
-    name: '6-Hour Pontoon Rental',
-    durationHours: 6,
-    priceCents: 20999,
-    priceUsd: 209.99,
-    rentalType: 'hourly',
-    maxPassengers: RENTAL_MAX_PASSENGERS,
-    label: '6 Hours — $209.99',
-  },
+  rental_4hr: packageForFleet(PACKAGE_DEFS[0], 'pontoon'),
+  rental_6hr: packageForFleet(PACKAGE_DEFS[1], 'pontoon'),
 };
 
 export const RENTAL_PACKAGE_LIST: readonly RentalPackageDisplay[] = [
@@ -50,15 +107,27 @@ export const RENTAL_PACKAGE_LIST: readonly RentalPackageDisplay[] = [
   RENTAL_PACKAGES.rental_6hr,
 ];
 
-export function getRentalPackage(packageId: string | null | undefined): RentalPackageDisplay | null {
+export const CENTER_CONSOLE_RENTAL_PACKAGE_LIST: readonly RentalPackageDisplay[] =
+  listRentalPackagesForBoat({ id: RENTAL_CENTER_CONSOLE_BOAT_IDS[0] });
+
+export function getRentalPackage(
+  packageId: string | null | undefined,
+  boat?: { id?: string | null; name?: string | null } | null
+): RentalPackageDisplay | null {
   const id = String(packageId || '').trim();
-  if (id === 'rental_4hr' || id === 'rental_6hr') return RENTAL_PACKAGES[id];
-  return null;
+  if (id !== 'rental_4hr' && id !== 'rental_6hr') return null;
+  const fleet = resolveRentalFleet(boat);
+  const def = PACKAGE_DEFS.find((p) => p.id === id);
+  return def ? packageForFleet(def, fleet) : null;
 }
 
-export function getRentalPackageByDuration(hours: number): RentalPackageDisplay | null {
-  if (Math.abs(hours - 4) < 0.01) return RENTAL_PACKAGES.rental_4hr;
-  if (Math.abs(hours - 6) < 0.01) return RENTAL_PACKAGES.rental_6hr;
+export function getRentalPackageByDuration(
+  hours: number,
+  boat?: { id?: string | null; name?: string | null } | null
+): RentalPackageDisplay | null {
+  const fleet = resolveRentalFleet(boat);
+  if (Math.abs(hours - 4) < 0.01) return packageForFleet(PACKAGE_DEFS[0], fleet);
+  if (Math.abs(hours - 6) < 0.01) return packageForFleet(PACKAGE_DEFS[1], fleet);
   return null;
 }
 

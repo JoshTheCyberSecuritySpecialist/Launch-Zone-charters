@@ -9,12 +9,20 @@ const {
   RENTAL_MAX_PASSENGERS,
   RENTAL_PACKAGE_IDS,
   RENTAL_PACKAGES,
+  RENTAL_FLEET,
+  DEFAULT_PONTOON_BOAT_IDS,
+  DEFAULT_CENTER_CONSOLE_BOAT_IDS,
+  resolveRentalFleet,
   resolveDirectRentalPackage,
   validateRentalSchedule,
   listValidStartHoursForDuration,
+  listActiveDirectRentalPackages,
   basePriceUsdForDirectPackage,
   rentalTypeForDurationHours,
 } = require('../config/rentalPackages');
+
+const PONTOON_ID = DEFAULT_PONTOON_BOAT_IDS[0];
+const KEY_LARGO_ID = DEFAULT_CENTER_CONSOLE_BOAT_IDS[0];
 
 function isoLocal(date, hour, minute = 0) {
   // America/New_York offset approximated as -04:00 (EDT) for fixed assertions.
@@ -38,6 +46,54 @@ function run() {
   assert.strictEqual(basePriceUsdForDirectPackage(six), 209.99);
   assert.strictEqual(four.rentalType, 'half_day');
   assert.strictEqual(six.rentalType, 'hourly');
+  assert.strictEqual(four.fleet, RENTAL_FLEET.PONTOON);
+
+  assert.strictEqual(resolveRentalFleet({ boatId: PONTOON_ID }), RENTAL_FLEET.PONTOON);
+  assert.strictEqual(resolveRentalFleet({ boatId: KEY_LARGO_ID }), RENTAL_FLEET.CENTER_CONSOLE);
+
+  const pontoon4 = resolveDirectRentalPackage({
+    durationHours: 4,
+    rentalType: 'half_day',
+    boatId: PONTOON_ID,
+  });
+  assert.strictEqual(pontoon4.ok, true);
+  assert.strictEqual(pontoon4.package.priceCents, 14999);
+  assert.strictEqual(pontoon4.package.id, 'rental_4hr');
+
+  const pontoon6 = resolveDirectRentalPackage({
+    durationHours: 6,
+    rentalType: 'hourly',
+    boatId: PONTOON_ID,
+  });
+  assert.strictEqual(pontoon6.ok, true);
+  assert.strictEqual(pontoon6.package.priceCents, 20999);
+
+  const keyLargo4 = resolveDirectRentalPackage({
+    durationHours: 4,
+    rentalType: 'half_day',
+    boatId: KEY_LARGO_ID,
+  });
+  assert.strictEqual(keyLargo4.ok, true);
+  assert.strictEqual(keyLargo4.package.priceCents, 29999);
+  assert.strictEqual(keyLargo4.package.fleet, RENTAL_FLEET.CENTER_CONSOLE);
+  assert.strictEqual(basePriceUsdForDirectPackage(keyLargo4.package), 299.99);
+
+  const keyLargo6 = resolveDirectRentalPackage({
+    durationHours: 6,
+    rentalType: 'hourly',
+    boatId: KEY_LARGO_ID,
+  });
+  assert.strictEqual(keyLargo6.ok, true);
+  assert.strictEqual(keyLargo6.package.priceCents, 44999);
+  assert.strictEqual(basePriceUsdForDirectPackage(keyLargo6.package), 449.99);
+
+  const ccList = listActiveDirectRentalPackages({ boatId: KEY_LARGO_ID });
+  assert.strictEqual(ccList.find((p) => p.durationHours === 4).priceCents, 29999);
+  assert.strictEqual(ccList.find((p) => p.durationHours === 6).priceCents, 44999);
+
+  const pontoonList = listActiveDirectRentalPackages({ boatId: PONTOON_ID });
+  assert.strictEqual(pontoonList.find((p) => p.durationHours === 4).priceCents, 14999);
+  assert.strictEqual(pontoonList.find((p) => p.durationHours === 6).priceCents, 20999);
 
   assert.strictEqual(rentalTypeForDurationHours(4), 'half_day');
   assert.strictEqual(rentalTypeForDurationHours(6), 'hourly');
@@ -46,6 +102,7 @@ function run() {
   const ok4 = resolveDirectRentalPackage({ durationHours: 4, rentalType: 'half_day' });
   assert.strictEqual(ok4.ok, true);
   assert.strictEqual(ok4.package.id, 'rental_4hr');
+  assert.strictEqual(ok4.package.priceCents, 14999);
 
   const ok6 = resolveDirectRentalPackage({ durationHours: 6, rentalType: 'hourly' });
   assert.strictEqual(ok6.ok, true);

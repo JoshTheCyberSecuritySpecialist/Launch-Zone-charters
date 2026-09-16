@@ -59,7 +59,11 @@ function computeStaffBookingOriginalPrice(boat, durationHours, bookingType) {
   const CAPTAIN_HOURLY = 50;
   if (!boat || durationHours <= 0) return 0;
   if (bookingType !== 'captain_charter') {
-    const direct = rentalPackages.resolveDirectRentalPackage({ durationHours });
+    const direct = rentalPackages.resolveDirectRentalPackage({
+      durationHours,
+      boatId: boat.id || boat.boat_id || null,
+      boatName: boat.name || null,
+    });
     if (direct.ok) {
       return rentalPackages.basePriceUsdForDirectPackage(direct.package);
     }

@@ -12,7 +12,11 @@ import { EXPERIENCE_RENTAL } from '../lib/experienceCatalog';
 import SafeImage from '../components/SafeImage';
 import SmartImage from '../components/ui/SmartImage';
 import { PRICING } from '../config/pricing';
-import { RENTAL_MAX_PASSENGERS } from '../lib/rentalPackages';
+import {
+  RENTAL_MAX_PASSENGERS,
+  listRentalPackagesForBoat,
+  formatRentalMoney,
+} from '../lib/rentalPackages';
 
 export type BoatRentalsLocationVariant = 'daytona' | 'titusville';
 
@@ -800,8 +804,10 @@ export default function BoatRentalsLocation({ onNavigate, variant }: BoatRentals
                       Up to {Math.min(boat.capacity, RENTAL_MAX_PASSENGERS)} passengers on direct packages
                     </p>
                     <p className="mt-2 text-sm text-slate-500">
-                      4 hours $149.99 · 6 hours $209.99 · plus ${PRICING.securityDeposit.toFixed(0)} security
-                      deposit
+                      {listRentalPackagesForBoat(boat)
+                        .map((pkg) => `${pkg.durationHours} hours ${formatRentalMoney(pkg.priceUsd)}`)
+                        .join(' · ')}{' '}
+                      · plus ${PRICING.securityDeposit.toFixed(0)} security deposit
                     </p>
                     <button
                       type="button"

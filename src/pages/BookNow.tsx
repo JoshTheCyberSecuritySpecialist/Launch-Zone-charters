@@ -22,9 +22,9 @@ import { uploadDocumentToDocumentsBucket } from '../lib/storageUpload';
 import { PRICING, captainFeeForHours } from '../config/pricing';
 import {
   RENTAL_MAX_PASSENGERS,
-  RENTAL_PACKAGE_LIST,
   formatRentalSlotRangeLabel,
   getRentalPackageByDuration,
+  listRentalPackagesForBoat,
 } from '../lib/rentalPackages';
 import {
   SECURITY_DEPOSIT_CARD_INTRO,
@@ -1685,7 +1685,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
       };
     }
     const hours = Number(bookingData.hours) || 0;
-    const pkg = getRentalPackageByDuration(hours);
+    const pkg = getRentalPackageByDuration(hours, selectedBoat);
     const basePrice = pkg ? pkg.priceUsd : 0;
     const captainFee = bookingData.captainIncluded ? captainFeeForHours(hours) : 0;
     const deposit = PRICING.securityDeposit;
@@ -1928,7 +1928,14 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     }
     return `${bookingData.date || '-'} · ${timeLabelFromHHMM(bookingData.time)}`;
   })();
-  const selectedRentalPackage = getRentalPackageByDuration(Number(bookingData.hours) || 0);
+  const selectedRentalPackage = getRentalPackageByDuration(
+    Number(bookingData.hours) || 0,
+    selectedBoat
+  );
+  const rentalPackagesForSelectedBoat = useMemo(
+    () => listRentalPackagesForBoat(selectedBoat),
+    [selectedBoat?.id, selectedBoat?.name]
+  );
 
   /** Dark-theme fields — `.lz-input-on-dark` in index.css sets value/placeholder/autofill/time contrast */
   const fieldClass =
@@ -2905,7 +2912,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                               </span>
                             </div>
                             <div className="mt-4 space-y-1.5 text-sm">
-                              {RENTAL_PACKAGE_LIST.map((pkg) => (
+                              {listRentalPackagesForBoat(boat).map((pkg) => (
                                 <div key={pkg.id} className="flex justify-between text-slate-400">
                                   <span>{pkg.durationHours} hours</span>
                                   <span className="font-semibold text-slate-200">${pkg.priceUsd.toFixed(2)}</span>
@@ -3503,7 +3510,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                           Departures run 6:00 AM–5:00 PM. Your boat must be returned by 5:00 PM.
                         </p>
                         <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:gap-4">
-                          {RENTAL_PACKAGE_LIST.map((pkg) => {
+                          {rentalPackagesForSelectedBoat.map((pkg) => {
                             const preset = pkg.durationHours;
                             const active = rentalDurationPreset === preset;
                             return (

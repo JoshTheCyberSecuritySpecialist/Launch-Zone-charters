@@ -21,6 +21,7 @@ import {
   durationHoursFromStaffForm,
   staffDurationFieldsFromHours,
 } from '../lib/staffBookingDuration';
+import { listRentalPackagesForBoat } from '../lib/rentalPackages';
 import {
   CAPTAIN_NIGHT_SCHEDULE_NOTE,
   previewCaptainCharterWindow,
@@ -1264,8 +1265,11 @@ export default function AdminStaffBooking() {
                 >
                   {form.bookingType === 'rental' ? (
                     <>
-                      <option value="4">4 hr — $149.99</option>
-                      <option value="6">6 hr — $209.99</option>
+                      {listRentalPackagesForBoat(selectedBoat).map((pkg) => (
+                        <option key={pkg.id} value={String(pkg.durationHours)}>
+                          {pkg.durationHours} hr — ${pkg.priceUsd.toFixed(2)}
+                        </option>
+                      ))}
                     </>
                   ) : (
                     <>

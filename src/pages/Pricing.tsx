@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import { Check, Info, Plus } from 'lucide-react';
 import SmartImage from '../components/ui/SmartImage';
 import { PRICING } from '../config/pricing';
-import { RENTAL_PACKAGE_LIST, RENTAL_MAX_PASSENGERS } from '../lib/rentalPackages';
+import { RENTAL_PACKAGE_LIST, CENTER_CONSOLE_RENTAL_PACKAGE_LIST, RENTAL_MAX_PASSENGERS } from '../lib/rentalPackages';
 import {
   SECURITY_DEPOSIT_CARD_INTRO,
   SECURITY_DEPOSIT_MARKETING_BULLETS,
@@ -306,11 +306,11 @@ export default function Pricing({ onNavigate }: PricingProps) {
                 Ideal for cruising, fishing, and sandbar trips. Easy to handle and perfect for small groups.
               </div>
               <div className="space-y-5">
-                {RENTAL_PACKAGE_LIST.map((pkg, idx) => (
+                {CENTER_CONSOLE_RENTAL_PACKAGE_LIST.map((pkg, idx) => (
                   <div
                     key={pkg.id}
                     className={`flex items-end justify-between ${
-                      idx < RENTAL_PACKAGE_LIST.length - 1 ? 'border-b border-white/10 pb-4' : ''
+                      idx < CENTER_CONSOLE_RENTAL_PACKAGE_LIST.length - 1 ? 'border-b border-white/10 pb-4' : ''
                     }`}
                   >
                     <div>
@@ -323,8 +323,7 @@ export default function Pricing({ onNavigate }: PricingProps) {
                   </div>
                 ))}
                 <p className="text-sm text-cyan-100/70">
-                  Same direct-booking packages as our pontoon fleet. Plus ${PRICING.securityDeposit.toFixed(0)}{' '}
-                  refundable security deposit.
+                  Plus ${PRICING.securityDeposit.toFixed(0)} refundable security deposit.
                 </p>
               </div>
               <button

@@ -224,13 +224,17 @@ function computeExpectedBookingTotals({
   }
 
   let basePrice = 0;
-  const directByDuration = rentalPackages.listActiveDirectRentalPackages().find(
-    (p) => Math.abs(p.durationHours - hours) < 0.01
-  );
+  const boatId = boat?.id || null;
+  const boatName = boat?.name || null;
+  const directByDuration = rentalPackages
+    .listActiveDirectRentalPackages({ boatId, boatName })
+    .find((p) => Math.abs(p.durationHours - hours) < 0.01);
   const directPkg = rentalPackages.resolveDirectRentalPackage({
     packageId: pricingPackageId,
     durationHours: hours,
     rentalType,
+    boatId,
+    boatName,
   });
   if (directPkg.ok) {
     basePrice = rentalPackages.basePriceUsdForDirectPackage(directPkg.package);
@@ -7555,6 +7559,7 @@ app.post('/api/create-checkout-session', async (req, res) => {
         packageId: pricingPackageId,
         durationHours,
         rentalType: rentalType || null,
+        boatId: booking.boat_id || booking.boatId || null,
       });
       if (!pkgResolve.ok) {
         return res.status(pkgResolve.statusCode || 400).json({ error: pkgResolve.error });

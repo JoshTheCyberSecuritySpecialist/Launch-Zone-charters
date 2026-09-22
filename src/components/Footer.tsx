@@ -11,7 +11,7 @@ const footerMiniLinks = [
   { label: 'View Experiences', path: 'experiences' as const },
   { label: 'Bioluminescence Tours', path: 'bioluminescent-tours' as const },
   { label: 'Rocket Launch Charters', path: 'launches' as const },
-  { label: 'Sunset & Wildlife', path: 'sunset-wildlife' as const },
+  { label: 'Dolphin & Wildlife', path: 'sunset-wildlife' as const },
   { label: 'Daytona Rentals', path: 'fleet-daytona' as const },
   { label: 'Titusville Rentals', path: 'fleet-titusville' as const },
   { label: 'Rental Pricing', path: 'pricing' as const },
@@ -102,7 +102,7 @@ export default function Footer({ onNavigate }: FooterProps) {
                   onClick={wrapNavigateClick('footer', 'sunset-wildlife', onNavigate)}
                   className="transition-colors hover:text-amber-400"
                 >
-                  Sunset and Wildlife Cruise
+                  Dolphin & Wildlife Tour
                 </button>
               </li>
             </ul>

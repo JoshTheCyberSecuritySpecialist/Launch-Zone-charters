@@ -19,7 +19,10 @@ import {
   type DirectExperienceCard,
 } from '../lib/directDealsCatalog';
 import { isDirectRocketPackagePricingEnabled } from '../lib/rocketLaunchPackages';
-import { isDirectSunsetPackagePricingEnabled } from '../lib/sunsetPackages';
+import {
+  isDirectSunsetPackagePricingEnabled,
+  SUNSET_TOUR_PAGE,
+} from '../lib/sunsetPackages';
 
 interface DirectDealsProps {
   onNavigate: (page: string) => void;
@@ -30,16 +33,19 @@ const EXPERIENCE_COPY = {
     title: 'Bioluminescence Night Tour',
     heading: 'Choose your bio package',
     note: BIO_PACKAGE_PRICING_DISCLAIMER,
+    extraNote: null as string | null,
   },
   rocket: {
     title: 'Rocket Launch Experience',
     heading: 'Choose your rocket launch package',
     note: 'Guest packages — not boats. Launch Zone assigns your vessel based on availability.',
+    extraNote: null as string | null,
   },
   sunset: {
-    title: 'Sunset & Wildlife Cruise',
-    heading: 'Choose your sunset package',
-    note: 'Shared and private cruise options. Sunset Solo can only join an already-paid shared departure.',
+    title: SUNSET_TOUR_PAGE.title,
+    heading: SUNSET_TOUR_PAGE.supportingText,
+    note: SUNSET_TOUR_PAGE.wildlifeNotice,
+    extraNote: SUNSET_TOUR_PAGE.directBookingMessage,
   },
 } as const;
 
@@ -159,6 +165,11 @@ export default function DirectDeals({ onNavigate }: DirectDealsProps) {
             <p className="mx-auto mt-3 max-w-2xl text-sm leading-relaxed text-slate-400 md:text-base">
               {copy.note}
             </p>
+            {copy.extraNote ? (
+              <p className="mx-auto mt-3 max-w-2xl text-sm font-medium leading-relaxed text-cyan-100/90 md:text-base">
+                {copy.extraNote}
+              </p>
+            ) : null}
           </div>
         </section>
 
@@ -199,7 +210,7 @@ export default function DirectDeals({ onNavigate }: DirectDealsProps) {
         <title>Book Direct | Launch Zone Charters</title>
         <meta
           name="description"
-          content="Choose a Launch Zone Charters experience: bioluminescence night tour, rocket launch charter, or sunset and wildlife cruise."
+          content="Choose a Launch Zone Charters experience: bioluminescence night tour, rocket launch charter, or dolphin and wildlife tour."
         />
         <link rel="canonical" href="https://launchzonecharters.com/booking/direct" />
       </Helmet>

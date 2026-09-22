@@ -74,17 +74,17 @@ export const EXPERIENCE_ROCKET: CaptainLedExperience = {
 export const EXPERIENCE_SUNSET: CaptainLedExperience = {
   id: 'sunset',
   kind: 'captain-led',
-  publicName: 'Sunset and Wildlife Cruise',
-  shortLabel: 'Sunset and Wildlife Cruise',
+  publicName: 'Dolphin & Wildlife Tour',
+  shortLabel: 'Dolphin & Wildlife Tour',
   marketingUrl: '/experiences#sunset-wildlife',
   bookingUrl: '/booking?bookingMode=charter&charterType=sunset',
   locationLabel: 'Titusville · Indian River Lagoon',
   icon: '🌅',
-  bookCta: 'Book Sunset and Wildlife Cruise',
-  exploreCta: 'Explore Sunset and Wildlife Cruises',
-  tagline: 'Relaxed captain-led cruise; dolphins and other wildlife may be seen but are never guaranteed.',
-  wildlifeDisclaimer:
-    'Dolphins and other wildlife may be seen but are never guaranteed.',
+  bookCta: 'Book Dolphin & Wildlife Tour',
+  exploreCta: 'Explore Dolphin & Wildlife Tours',
+  tagline:
+    'Two-hour captain-led Space Coast tour; wildlife sightings are common but never guaranteed.',
+  wildlifeDisclaimer: 'Wildlife sightings are common but are never guaranteed.',
 };
 
 export const EXPERIENCE_RENTAL: RentalExperience = {
@@ -123,7 +123,7 @@ export function bookingPageTitleFromSearchParams(params: URLSearchParams): strin
       return 'Book Your Rocket Launch Charter';
     }
     if (charterType === 'sunset' || charterType === 'sunset_cruise') {
-      return 'Book Your Sunset and Wildlife Cruise';
+      return 'Book Your Dolphin & Wildlife Tour';
     }
   }
   if (mode === 'rental') {

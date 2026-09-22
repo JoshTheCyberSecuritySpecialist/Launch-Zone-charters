@@ -1,7 +1,7 @@
 /**
- * Catalog duration for captain-led packages (display + future variable-length SKUs).
- * Availability, overlap, and Stripe still use CHARTER_DURATION_HOURS / durationHours: 1
- * until variable-duration scheduling is enabled.
+ * Catalog duration for captain-led packages (display + variable-length SKUs).
+ * Prefer package.durationMinutes via resolvePackageDurationMinutes / resolveCharterDurationHours.
+ * Default scheduled window remains 1 hour when no package duration is supplied.
  */
 
 const DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES = 60;
@@ -14,6 +14,21 @@ function normalizeCharterDurationMinutes(value) {
 
 function resolvePackageDurationMinutes(pkg) {
   return normalizeCharterDurationMinutes(pkg && pkg.durationMinutes);
+}
+
+function resolveCharterDurationHours(pkgOrMinutes) {
+  if (pkgOrMinutes && typeof pkgOrMinutes === 'object') {
+    return Math.round((resolvePackageDurationMinutes(pkgOrMinutes) / 60) * 100) / 100;
+  }
+  const minutes = normalizeCharterDurationMinutes(pkgOrMinutes);
+  return Math.round((minutes / 60) * 100) / 100;
+}
+
+function charterEndIsoFromStart(startIso, durationHours) {
+  const startMs = new Date(String(startIso || '')).getTime();
+  const hours = Number(durationHours);
+  if (!Number.isFinite(startMs) || !Number.isFinite(hours) || hours <= 0) return null;
+  return new Date(startMs + hours * 60 * 60 * 1000).toISOString();
 }
 
 /** 60 → "1 Hour", 90 → "1.5 Hours", 120 → "2 Hours" */
@@ -36,4 +51,6 @@ module.exports = {
   formatCharterDurationTourLabel,
   normalizeCharterDurationMinutes,
   resolvePackageDurationMinutes,
+  resolveCharterDurationHours,
+  charterEndIsoFromStart,
 };

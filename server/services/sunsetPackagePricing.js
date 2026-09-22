@@ -3,6 +3,7 @@ const {
   getSunsetPackage,
   isDirectSunsetPackagePricingEnabled,
   isSunsetPackageId,
+  sunsetPackageDurationHours,
   sunsetPackageSavingsCents,
 } = require('../config/sunsetPackages');
 const { extractPricingPackageId } = require('./bioluminescencePackagePricing');
@@ -40,7 +41,7 @@ function validateDirectSunsetPackageCheckout({
   if (!packageId) {
     return {
       ok: false,
-      error: 'Select a Sunset & Wildlife package to continue.',
+      error: 'Select a Dolphin & Wildlife Tour package to continue.',
     };
   }
 
@@ -103,7 +104,7 @@ function sunsetPackageExpectedTotals(pkg, passengerCount) {
     basePrice: totalPrice,
     ticketPrice,
     guestCount: guests,
-    durationHours: 1,
+    durationHours: sunsetPackageDurationHours(pkg),
     totalPrice,
     amountDueToday: totalPrice,
     sunsetPackage: pkg,
@@ -158,11 +159,11 @@ function sunsetPackageBookingFields(pkg, passengerCount) {
 }
 
 function stripeLineItemNameForSunsetPackage(pkg) {
-  if (pkg.id === 'sunset_solo') return 'Sunset Solo Seat — 1 Guest';
-  if (pkg.id === 'sunset_two') return 'Sunset for Two — 2 Guests';
-  if (pkg.id === 'sunset_three') return 'Sunset for Three — 3 Guests';
-  if (pkg.id === 'sunset_family') return 'Sunset Family Charter — Up to 5 Guests';
-  return 'Private Sunset Charter — Up to 5 Guests';
+  if (pkg.id === 'sunset_solo') return 'Dolphin & Wildlife Solo Seat — 1 Guest';
+  if (pkg.id === 'sunset_two') return 'Dolphin & Wildlife Tour for Two — 2 Guests';
+  if (pkg.id === 'sunset_three') return 'Dolphin & Wildlife Tour for Three — 3 Guests';
+  if (pkg.id === 'sunset_family') return 'Private Dolphin & Wildlife Tour for Four — Up to 4 Guests';
+  return 'Private Dolphin & Wildlife Tour — Up to 5 Guests';
 }
 
 function assertSunsetPackageRequestAllowed({ pricingPackageId, charterType, bookingMode }) {
@@ -183,7 +184,7 @@ function assertSunsetPackageRequestAllowed({ pricingPackageId, charterType, book
       ok: false,
       statusCode: 400,
       code: 'sunset_package_invalid_context',
-      error: 'Sunset package pricing applies only to Sunset & Wildlife cruises.',
+      error: 'Sunset package pricing applies only to Dolphin & Wildlife Tours.',
     };
   }
   if (!isDirectSunsetPackagePricingEnabled()) {
@@ -192,7 +193,7 @@ function assertSunsetPackageRequestAllowed({ pricingPackageId, charterType, book
       statusCode: 503,
       code: 'sunset_package_pricing_unavailable',
       error:
-        'Direct sunset package booking is temporarily unavailable. Please call 803-542-1761 or refresh the page to continue.',
+        'Direct Dolphin & Wildlife Tour package booking is temporarily unavailable. Please call 803-542-1761 or refresh the page to continue.',
     };
   }
   return { ok: true };
@@ -216,7 +217,7 @@ function resolveStaffSunsetCharterPackage({ body, passengerCount }) {
       statusCode: 503,
       code: 'sunset_package_pricing_unavailable',
       error:
-        'Direct sunset package booking is temporarily unavailable on the server. Disable package selection or enable server package pricing.',
+        'Direct Dolphin & Wildlife Tour package booking is temporarily unavailable on the server. Disable package selection or enable server package pricing.',
     };
   }
   const charterTypeRaw = String(body?.charter_type || body?.charterType || '')

@@ -4,6 +4,7 @@ import {
   SUNSET_PACKAGE_DISPLAY,
   SUNSET_PRIVATE_CHARTER_DESCRIPTION,
   SUNSET_SOLO_JOIN_DISCLOSURE,
+  SUNSET_TOUR_PAGE,
   SUNSET_TWO_OPENER_DISCLOSURE,
   SUNSET_WILDLIFE_DISCLAIMER,
   type SunsetPackageDisplay,
@@ -13,24 +14,41 @@ import {
 type Props = {
   selectedPackageId?: SunsetPackageId | null;
   onSelect: (packageId: SunsetPackageId) => void;
+  /** When false, omit page intro (parent already shows heading/notices). Default true. */
+  showIntro?: boolean;
 };
 
 function formatUsd(amount: number): string {
   return Number.isInteger(amount) ? `$${amount}` : `$${amount.toFixed(2)}`;
 }
 
+function guestLine(pkg: SunsetPackageDisplay): string {
+  if (pkg.seating === 'private') {
+    return `Up to ${pkg.maxGuests ?? 5} guests · Private boat`;
+  }
+  if (pkg.guestCount === 1) return '1 guest · Shared tour';
+  return `${pkg.guestCount} guests · Shared tour`;
+}
+
+function departureRoleLabel(pkg: SunsetPackageDisplay): string {
+  if (pkg.seating === 'private') return 'Private — no other guests join';
+  if (pkg.id === 'sunset_solo' || !pkg.canOpenSharedDeparture) {
+    return 'Joins an existing paid shared departure';
+  }
+  return 'Opens a shared departure';
+}
+
 function SharedDisclosure({ pkg }: { pkg: SunsetPackageDisplay }) {
+  const isSolo = pkg.id === 'sunset_solo' || !pkg.canOpenSharedDeparture;
   return (
     <div
       className="mt-4 rounded-xl border border-amber-400/30 bg-amber-950/25 p-3 text-sm leading-relaxed text-amber-50/95"
       role="note"
     >
       <p className="text-xs font-bold uppercase tracking-wide text-amber-200/95">
-        {pkg.id === 'sunset_solo' ? 'Join-only shared seat' : 'Shared sunset departure'}
+        {isSolo ? 'Join-only shared seat' : 'Opens shared departure'}
       </p>
-      <p className="mt-2">
-        {pkg.id === 'sunset_solo' ? SUNSET_SOLO_JOIN_DISCLOSURE : SUNSET_TWO_OPENER_DISCLOSURE}
-      </p>
+      <p className="mt-2">{isSolo ? SUNSET_SOLO_JOIN_DISCLOSURE : SUNSET_TWO_OPENER_DISCLOSURE}</p>
     </div>
   );
 }
@@ -45,6 +63,7 @@ function PackageCard({
   onSelect: (id: SunsetPackageId) => void;
 }) {
   const isPrivate = pkg.seating === 'private';
+  const maxGuests = pkg.maxGuests ?? pkg.guestCount;
 
   return (
     <article
@@ -62,20 +81,22 @@ function PackageCard({
           </span>
         ) : null}
       </div>
-      <p className="mt-1 text-sm text-slate-400">
-        {isPrivate
-          ? `Up to ${pkg.maxGuests ?? 5} guests · Private`
-          : pkg.guestCount === 1
-            ? '1 Person · Shared'
-            : `${pkg.guestCount} People · Shared`}
-      </p>
+      <p className="mt-1 text-sm text-slate-400">{guestLine(pkg)}</p>
       <PackageDurationLine durationMinutes={pkg.durationMinutes} />
+      <p className="mt-2 text-xs font-semibold uppercase tracking-wide text-cyan-200/80">
+        {departureRoleLabel(pkg)}
+      </p>
       <div className="mt-4">
         <p className="text-3xl font-bold text-white md:text-4xl">{formatUsd(pkg.directPriceUsd)}</p>
+        <p className="mt-1 text-xs font-medium uppercase tracking-wide text-slate-400">
+          {isPrivate ? 'Flat rate total' : 'Total'}
+        </p>
         {!isPrivate ? (
           <p className="mt-1 text-sm text-cyan-100/85">{formatUsd(pkg.perGuestUsd)} per person</p>
         ) : (
-          <p className="mt-1 text-sm text-cyan-100/85">Flat rate · private boat</p>
+          <p className="mt-1 text-sm text-cyan-100/85">
+            Same price for 1–{maxGuests} guests · private boat
+          </p>
         )}
       </div>
       {isPrivate ? (
@@ -85,8 +106,8 @@ function PackageCard({
       )}
       <ul className="mt-4 space-y-2 text-sm text-slate-300">
         {pkg.included.map((line) => (
-          <li key={line} className="flex items-center gap-2">
-            <Check className="h-4 w-4 shrink-0 text-cyan-300" aria-hidden />
+          <li key={line} className="flex items-start gap-2">
+            <Check className="mt-0.5 h-4 w-4 shrink-0 text-cyan-300" aria-hidden />
             <span>{line}</span>
           </li>
         ))}
@@ -104,10 +125,24 @@ function PackageCard({
   );
 }
 
-export default function SunsetPackageCards({ selectedPackageId, onSelect }: Props) {
+export default function SunsetPackageCards({
+  selectedPackageId,
+  onSelect,
+  showIntro = true,
+}: Props) {
   return (
     <div className="space-y-4">
-      <p className="text-sm leading-relaxed text-slate-400">{SUNSET_WILDLIFE_DISCLAIMER}</p>
+      {showIntro ? (
+        <div className="space-y-3">
+          <p
+            className="rounded-xl border border-cyan-400/20 bg-cyan-950/20 px-4 py-3 text-sm leading-relaxed text-cyan-50"
+            role="note"
+          >
+            {SUNSET_TOUR_PAGE.directBookingMessage}
+          </p>
+          <p className="text-sm leading-relaxed text-slate-400">{SUNSET_WILDLIFE_DISCLAIMER}</p>
+        </div>
+      ) : null}
       <div className="grid gap-4 sm:gap-5 md:grid-cols-2">
         {SUNSET_PACKAGE_DISPLAY.map((pkg) => (
           <PackageCard

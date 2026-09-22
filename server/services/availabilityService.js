@@ -27,6 +27,7 @@ const charterFleetAllocation = require('./charterFleetAllocation');
 const charterFleetAtomic = require('./charterFleetAtomic');
 const { isBioPrivatePackageId } = require('../config/bioluminescencePackages');
 const { getMaxSimultaneousCharterBoats } = require('../config/charterFleetPriority');
+const { resolvePackageDurationMinutes } = require('../lib/charterDuration');
 
 const rentalPackages = require('../config/rentalPackages');
 
@@ -37,7 +38,7 @@ const DEFAULT_CLOSE_HOUR = rentalPackages.RENTAL_CLOSE_HOUR;
 const DEFAULT_STEP_MINUTES = rentalPackages.RENTAL_SLOT_STEP_MINUTES;
 const DEFAULT_RANGE_DAYS = Number(process.env.AVAILABILITY_CALENDAR_DAYS || 60);
 const MIN_LEAD_HOURS = Math.max(0, Number(process.env.BOOKING_MIN_LEAD_HOURS || 2));
-/** Scheduled captain-led window. Catalog durationMinutes is display-only until this is package-driven. */
+/** Scheduled captain-led window when no package duration is provided. */
 const CHARTER_DURATION_HOURS = 1;
 const CHARTER_END_TOO_LATE_MESSAGE = 'Bookings must finish by 4:00 AM.';
 const BIO_CHARTER_START_HOURS = new Set([20, 21, 22, 23, 0, 1, 2, 3, 4]);
@@ -53,6 +54,16 @@ const SLOT_TOO_SOON_USER_MESSAGE =
   'This departure is too soon. Please choose a later time or call us for help.';
 const DEPARTURE_FULL_MESSAGE =
   'This departure is now full. Please select another available time.';
+
+function resolveCharterSlotDurationHours(options = {}) {
+  const pkg = options.sunsetPackage || options.bioPackage || options.rocketPackage || null;
+  if (pkg && pkg.durationMinutes != null) {
+    return resolvePackageDurationMinutes(pkg) / 60;
+  }
+  const explicit = Number(options.durationHours);
+  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+  return CHARTER_DURATION_HOURS;
+}
 
 const BLOCKING_BOOKING_STATUSES = new Set([
   'hold',
@@ -1529,7 +1540,7 @@ async function listCharterSlotsForDay(dateStr, charterType, options = {}) {
     return listRocketLaunchCharterSlotsForDay(dateStr, options);
   }
 
-  const duration = CHARTER_DURATION_HOURS;
+  const duration = resolveCharterSlotDurationHours(options);
   const durMs = duration * 60 * 60 * 1000;
   const rangeStartIso = day.startOf('day').toUTC().toISO();
   const rangeEndDay =
@@ -1987,6 +1998,7 @@ module.exports = {
   listCharterDatesAvailability,
   listCharterSlotsForDay,
   listClosestAvailableCharterSlots,
+  resolveCharterSlotDurationHours,
   validateCharterSlotWindow,
   parseDateOnlyInZone,
   enumerateCharterStartsForDay,

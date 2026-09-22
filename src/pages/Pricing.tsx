@@ -126,7 +126,8 @@ export default function Pricing({ onNavigate }: PricingProps) {
             Captain-Led Experiences
           </h2>
           <p className="mx-auto mb-8 max-w-2xl text-center text-sm text-slate-400 md:text-base">
-            Rocket launch and sunset charters use per-guest ticket pricing. Bioluminescence uses fixed packages below.
+            Bioluminescence and Dolphin &amp; Wildlife tours use fixed packages. Rocket launch still uses per-guest
+            ticket pricing where shown.
           </p>
           <div className="grid gap-6 md:grid-cols-2">
             <article className="lz-card-glass border border-white/10 p-6 md:p-8">
@@ -181,16 +182,16 @@ export default function Pricing({ onNavigate }: PricingProps) {
               </div>
             </article>
             <article className="lz-card-glass border border-white/10 p-6 md:p-8">
-              <h3 className="text-xl font-bold text-white">Rocket launch &amp; sunset charters</h3>
-              <p className="mt-2 text-sm text-slate-400">Per-guest ticket pricing · captain and fuel included</p>
+              <h3 className="text-xl font-bold text-white">Rocket launch &amp; dolphin wildlife tours</h3>
+              <p className="mt-2 text-sm text-slate-400">Captain and fuel included · two-hour wildlife packages from $39</p>
               <ul className="mt-4 space-y-3 text-sm text-slate-200">
                 <li className="flex justify-between border-b border-white/10 pb-3">
                   <span>Rocket launch charter</span>
                   <span className="font-bold text-lz-cta">$85 / guest</span>
                 </li>
                 <li className="flex justify-between pb-1">
-                  <span>Sunset &amp; wildlife cruise</span>
-                  <span className="font-bold text-lz-cta">$75 / guest</span>
+                  <span>Dolphin &amp; Wildlife Tour</span>
+                  <span className="font-bold text-lz-cta">From $39</span>
                 </li>
               </ul>
               <div className="mt-6 flex flex-col gap-2">
@@ -201,10 +202,10 @@ export default function Pricing({ onNavigate }: PricingProps) {
                   Book rocket charter
                 </Link>
                 <Link
-                  to="/booking?bookingMode=charter&charterType=sunset"
+                  to="/booking/direct?experience=sunset"
                   className="lz-btn-secondary justify-center text-center text-sm"
                 >
-                  Book sunset cruise
+                  Book Dolphin &amp; Wildlife Tour
                 </Link>
               </div>
             </article>

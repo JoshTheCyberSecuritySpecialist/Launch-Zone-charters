@@ -101,6 +101,8 @@ import {
   SUNSET_SOLO_JOIN_DISCLOSURE,
   SUNSET_TWO_OPENER_DISCLOSURE,
   SUNSET_PRIVATE_CHARTER_DESCRIPTION,
+  SUNSET_PACKAGE_DURATION_MINUTES,
+  SUNSET_TOUR_PAGE,
   SUNSET_WILDLIFE_DISCLAIMER,
   type SunsetPackageId,
 } from '../lib/sunsetPackages';
@@ -1622,7 +1624,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
   const CHARTER_EXPERIENCE_LABEL: Record<CharterType, string> = {
     rocket_launch: 'Rocket launch charter',
     night_bio: 'Bioluminescence night charter',
-    sunset_cruise: 'Sunset and Wildlife Cruise',
+    sunset_cruise: 'Dolphin & Wildlife Tour',
   };
 
   const CHARTER_INCLUSIONS_LINE = 'Captain & fuel included · No security deposit';
@@ -1652,7 +1654,7 @@ export default function BookNow({ onNavigate }: BookNowProps) {
       : bookingData.charterType === 'night_bio'
         ? 'Bioluminescence Tour'
         : bookingData.charterType === 'sunset_cruise'
-          ? 'Sunset and Wildlife Cruise'
+          ? 'Dolphin & Wildlife Tour'
           : 'Charter';
 
   function calendarCellsFor(monthStart: Date) {
@@ -2161,7 +2163,15 @@ export default function BookNow({ onNavigate }: BookNowProps) {
         throw new Error('Choose a valid date and start time.');
       }
       const endDateTime = new Date(
-        startDateTime.getTime() + (bookingMode === 'charter' ? 1 : bookingData.hours) * 60 * 60 * 1000
+        startDateTime.getTime() +
+          (bookingMode === 'charter'
+            ? (selectedDirectPackage
+                ? resolvePackageDurationMinutes(selectedDirectPackage) / 60
+                : 1)
+            : bookingData.hours) *
+            60 *
+            60 *
+            1000
       );
       const apiBase = env.apiUrl;
       const depositAmount = amountDueToday;
@@ -2192,7 +2202,12 @@ export default function BookNow({ onNavigate }: BookNowProps) {
               boatName: bookingMode === 'charter' ? null : selectedBoat?.name,
               start_time: startDateTime.toISOString(),
               end_time: endDateTime.toISOString(),
-              duration_hours: bookingMode === 'charter' ? 1 : bookingData.hours,
+              duration_hours:
+                bookingMode === 'charter'
+                  ? selectedDirectPackage
+                    ? resolvePackageDurationMinutes(selectedDirectPackage) / 60
+                    : 1
+                  : bookingData.hours,
               rental_type: bookingData.rentalType,
               captain_included: bookingMode === 'charter' ? true : bookingData.captainIncluded,
               captain_fee: bookingMode === 'charter' ? 0 : pricing.captainFee,
@@ -2758,9 +2773,10 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                     <span className="text-2xl" aria-hidden>
                       🌅
                     </span>
-                    <p className="mt-3 text-lg font-bold text-white">Sunset Cruise</p>
+                    <p className="mt-3 text-lg font-bold text-white">Dolphin & Wildlife Tour</p>
                     <p className="mt-2 text-sm text-slate-400">
-                      Golden hour on the water · {formatCharterDurationLabel()}
+                      Space Coast wildlife · {formatCharterDurationLabel(SUNSET_PACKAGE_DURATION_MINUTES)} · shared or
+                      private
                     </p>
                   </button>
                   <button
@@ -3398,14 +3414,17 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                       ) : isSunsetPackageFlow ? (
                         <div className="space-y-4">
                           <div>
-                            <h3 className={bookingSectionTitle}>Choose your sunset package</h3>
-                            <p className="mt-2 text-sm text-slate-300">
-                              Guest packages — not boats. Launch Zone assigns your vessel based on availability.
+                            <h3 className={bookingSectionTitle}>{SUNSET_TOUR_PAGE.chooseHeading}</h3>
+                            <p className="mt-2 text-sm text-slate-300">{SUNSET_TOUR_PAGE.supportingText}</p>
+                            <p className="mt-2 text-sm text-slate-300">{SUNSET_TOUR_PAGE.vesselNote}</p>
+                            <p className="mt-2 text-sm font-medium text-cyan-100/90">
+                              {SUNSET_TOUR_PAGE.directBookingMessage}
                             </p>
                             <p className="mt-2 text-sm text-slate-400">{SUNSET_WILDLIFE_DISCLAIMER}</p>
                           </div>
                           {!selectedSunsetPackage ? (
                             <SunsetPackageCards
+                              showIntro={false}
                               selectedPackageId={sunsetPackageId}
                               onSelect={handleSelectSunsetPackage}
                             />
@@ -3418,8 +3437,9 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                               <p className="mt-1 text-sm text-slate-300">
                                 ${selectedSunsetPackage.directPriceUsd.toFixed(2)} total
                                 {selectedSunsetPackage.seating === 'private'
-                                  ? ` · up to ${selectedSunsetPackage.maxGuests ?? 5} guests · private charter`
-                                  : ` · ${selectedSunsetPackage.guestCount} guest${selectedSunsetPackage.guestCount === 1 ? '' : 's'}`}
+                                  ? ` · up to ${selectedSunsetPackage.maxGuests ?? 5} guests · private boat`
+                                  : ` · ${selectedSunsetPackage.guestCount} guest${selectedSunsetPackage.guestCount === 1 ? '' : 's'} · shared`}
+                                {` · ${formatCharterDurationLabel(selectedSunsetPackage.durationMinutes)}`}
                               </p>
                               {selectedSunsetPackage.id === 'sunset_solo' ? (
                                 <p className="mt-3 text-sm leading-relaxed text-amber-100/90">

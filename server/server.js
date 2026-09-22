@@ -58,6 +58,7 @@ const { getMarineConditions } = require('./services/marineConditionsService');
 const { getCharterWeatherWindow } = require('./services/charterWeatherService');
 const availabilityService = require('./services/availabilityService');
 const rentalPackages = require('./config/rentalPackages');
+const { charterEndIsoFromStart } = require('./lib/charterDuration');
 const { buildPublicConfirmationSummary, resolvePaidBookingStatus } = require('./lib/bookingLifecycle');
 const { formatReservationNumber, parseReservationNumber, reservationNumberMatches } = require('./lib/reservationNumber');
 const captainCharterAvailability = require('./services/captainCharterAvailability');
@@ -110,6 +111,13 @@ function roundMoney(v) {
   const n = Number(v);
   if (!Number.isFinite(n)) return 0;
   return Math.round(n * 100) / 100;
+}
+
+/** Authoritative captain-led duration from package totals (bio/rocket 1h, sunset packages 2h). */
+function resolveAuthoritativeCharterDurationHours(expected) {
+  const fromExpected = Number(expected?.durationHours);
+  if (Number.isFinite(fromExpected) && fromExpected > 0) return fromExpected;
+  return 1;
 }
 
 function firstForwardedIp(value) {
@@ -1347,6 +1355,12 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
     bookingMode === 'rental' ? roundMoney(expected.captainFee || 0) : Number(booking.captain_fee || 0);
   const basePriceStored = roundMoney(expected.basePrice != null ? expected.basePrice : Number(booking.base_price || 0));
 
+  const charterDurationHours = isCharterBooking ? resolveAuthoritativeCharterDurationHours(expected) : null;
+  const charterEndIso = isCharterBooking
+    ? charterEndIsoFromStart(booking.start_time, charterDurationHours) ||
+      new Date(new Date(String(booking.start_time)).getTime() + 60 * 60 * 1000).toISOString()
+    : booking.end_time;
+
   const charterInsertFields = isCharterBooking
     ? await availabilityService.prepareCharterBookingInsertFields({
         charterType,
@@ -1355,9 +1369,7 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
         rocketPackage: expected.rocketPackage || null,
         sunsetPackage: expected.sunsetPackage || null,
         startTime: booking.start_time,
-        endTime: isCharterBooking
-          ? new Date(new Date(String(booking.start_time)).getTime() + 60 * 60 * 1000).toISOString()
-          : booking.end_time,
+        endTime: charterEndIso,
         passengerCount,
         excludeBookingId: holdRow?.id || null,
         preferredBoatId: holdRow?.boat_id || null,
@@ -1403,10 +1415,8 @@ async function finalizeBookingFromSession(sessionId, options = {}) {
     guest_count: isCharterBooking ? passengerCount : 1,
     total_amount: expected.totalPrice,
     start_time: booking.start_time,
-    end_time: isCharterBooking
-      ? new Date(new Date(String(booking.start_time)).getTime() + 60 * 60 * 1000).toISOString()
-      : booking.end_time,
-    duration_hours: isCharterBooking ? 1 : Number(booking.duration_hours || 0),
+    end_time: isCharterBooking ? charterEndIso : booking.end_time,
+    duration_hours: isCharterBooking ? charterDurationHours : Number(booking.duration_hours || 0),
     rental_type: booking.rental_type,
     captain_included: Boolean(booking.captain_included),
     captain_fee: captainFeeStored,
@@ -2489,12 +2499,24 @@ app.post('/api/admin/staff-bookings', async (req, res) => {
       if (!validation.valid) return res.status(400).json({ error: validation.error });
       passengerCount = validation.count;
     }
-    const durationHours = parseStaffDuration(body.duration_hours ?? body.durationHours);
-    const times = staffBookingTimes(body);
+    let durationHours = parseStaffDuration(body.duration_hours ?? body.durationHours);
+    let times = staffBookingTimes(body);
 
     if (!customerName) return res.status(400).json({ error: 'Customer name is required.' });
     if (!boatId) return res.status(400).json({ error: 'Boat is required.' });
     if (!times || durationHours == null) return res.status(400).json({ error: 'Date, start time, and duration are required.' });
+
+    if (bookingType === 'captain_charter' && staffSunsetPackage) {
+      const pkgHours = require('./config/sunsetPackages').sunsetPackageDurationHours(staffSunsetPackage);
+      if (Math.abs(durationHours - pkgHours) > 0.01) {
+        durationHours = pkgHours;
+        const startMs = new Date(times.startIso).getTime();
+        times = {
+          ...times,
+          endIso: new Date(startMs + pkgHours * 60 * 60 * 1000).toISOString(),
+        };
+      }
+    }
 
     const staffLaunchId =
       bookingType === 'captain_charter' && staffCharterType === 'rocket'
@@ -6633,7 +6655,7 @@ app.get('/api/availability/charter/times', async (req, res) => {
       date,
       charterType,
       timezone: availabilityService.BUSINESS_TZ,
-      durationHours: 1,
+      durationHours: availabilityService.resolveCharterSlotDurationHours(availabilityOptions),
       minLeadHours: availabilityService.MIN_LEAD_HOURS,
       packageId:
         availabilityOptions.rocketPackage?.id ||
@@ -7745,6 +7767,19 @@ app.post('/api/create-checkout-session', async (req, res) => {
     expected = promoApplied.expected;
     const promoFields = promoApplied.promo;
 
+    let authoritativeEndTime = endTime;
+    let authoritativeDurationHours = durationHours;
+    if (isCharterBooking) {
+      authoritativeDurationHours = resolveAuthoritativeCharterDurationHours(expected);
+      const endIso = charterEndIsoFromStart(startTime.toISOString(), authoritativeDurationHours);
+      if (!endIso) {
+        return res.status(400).json({ error: 'Invalid charter duration.' });
+      }
+      authoritativeEndTime = new Date(endIso);
+      booking.end_time = endIso;
+      booking.duration_hours = authoritativeDurationHours;
+    }
+
     const sharedRocketAck = Boolean(
       legal?.sharedCharterMinimumAcknowledged ?? booking?.sharedCharterMinimumAcknowledged
     );
@@ -7849,7 +7884,7 @@ app.post('/api/create-checkout-session', async (req, res) => {
         }
         await availabilityService.assertUnifiedCharterSlotAvailable({
           startTime: startTime.toISOString(),
-          endTime: endTime.toISOString(),
+          endTime: authoritativeEndTime.toISOString(),
           charterType,
           charterVariant: expected.charterVariant || charterVariant,
           bioPackage: expected.bioPackage || null,
@@ -7979,13 +8014,13 @@ app.post('/api/create-checkout-session', async (req, res) => {
         booking_type: bookingMode || 'rental',
         boat_id: isCharterBooking ? '' : String(booking.boat_id || ''),
         start_time: startTime.toISOString(),
-        end_time: endTime.toISOString(),
+        end_time: authoritativeEndTime.toISOString(),
         customer_email: String(customer.email || '').trim().toLowerCase(),
         ...(isCharterBooking
           ? {
               guest_count: String(passengerCount),
               experience: charterType || '',
-              duration_minutes: String(Math.max(1, Math.round(durationHours * 60))),
+              duration_minutes: String(Math.max(1, Math.round(authoritativeDurationHours * 60))),
               charter_seating: String(expected.charterVariant || charterVariant || ''),
               pricing_package_id:
                 expected.bioPackage?.id ||
@@ -7997,7 +8032,7 @@ app.post('/api/create-checkout-session', async (req, res) => {
             }
           : {
               pricing_package_id: expected.rentalPackage?.id || pricingPackageId || '',
-              duration_hours: String(durationHours),
+              duration_hours: String(authoritativeDurationHours),
             }),
       },
     });
@@ -8042,7 +8077,7 @@ app.post('/api/create-checkout-session', async (req, res) => {
           sunsetPackage: expected.sunsetPackage || null,
           startTime: authoritativeBooking.start_time,
           endTime: isCharterBooking
-            ? new Date(new Date(String(authoritativeBooking.start_time)).getTime() + 60 * 60 * 1000).toISOString()
+            ? authoritativeEndTime.toISOString()
             : authoritativeBooking.end_time,
           passengerCount: isCharterBooking ? passengerCount : 1,
         })
@@ -8082,9 +8117,11 @@ app.post('/api/create-checkout-session', async (req, res) => {
       total_amount: expected.totalPrice,
       start_time: authoritativeBooking.start_time,
       end_time: isCharterBooking
-        ? new Date(new Date(String(authoritativeBooking.start_time)).getTime() + 60 * 60 * 1000).toISOString()
+        ? authoritativeEndTime.toISOString()
         : authoritativeBooking.end_time,
-      duration_hours: isCharterBooking ? 1 : Number(authoritativeBooking.duration_hours || 0),
+      duration_hours: isCharterBooking
+        ? authoritativeDurationHours
+        : Number(authoritativeBooking.duration_hours || 0),
       rental_type: authoritativeBooking.rental_type,
       captain_included: Boolean(authoritativeBooking.captain_included),
       captain_fee: captainFeeStored,

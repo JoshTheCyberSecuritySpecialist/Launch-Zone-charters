@@ -1,7 +1,6 @@
 /**
- * Catalog duration for captain-led packages (display + future variable-length SKUs).
- * Availability, overlap, and Stripe still use the existing 1-hour charter window
- * until variable-duration scheduling is enabled.
+ * Catalog duration for captain-led packages (display + variable-length SKUs).
+ * Sunset / Dolphin & Wildlife packages use 120 minutes; bio and rocket default to 60.
  */
 
 export const DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES = 60;

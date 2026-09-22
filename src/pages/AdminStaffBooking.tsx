@@ -1114,7 +1114,18 @@ export default function AdminStaffBooking() {
                     value={form.sunsetPackageId}
                     onChange={(e) => {
                       const id = e.target.value as SunsetPackageId | '';
-                      setForm((p) => ({ ...p, sunsetPackageId: id }));
+                      const pkg = id ? getSunsetPackageDisplay(id) : null;
+                      const hours = pkg ? pkg.durationMinutes / 60 : null;
+                      setForm((p) => ({
+                        ...p,
+                        sunsetPackageId: id,
+                        ...(hours
+                          ? {
+                              durationPreset: String(hours) as StaffDurationPreset,
+                              customDuration: '',
+                            }
+                          : {}),
+                      }));
                     }}
                   >
                     <option value="">Select package</option>
@@ -1125,11 +1136,11 @@ export default function AdminStaffBooking() {
                     ))}
                   </select>
                   <span className="mt-1 block text-xs font-normal text-slate-500">
-                    Solo $75 join-only · Two $140 opener · Three $210 opener · Family $250 · Private $325
+                    Solo $39 join-only · Two $75 · Three $110 · Private 4 $145 · Private 5 $179 · 2 hours
                   </span>
                   {selectedSunsetPackage?.id === 'sunset_solo' ? (
                     <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-950">
-                      Solo can only join a paid shared sunset already opened by Sunset for Two or Three. Unpaid holds are not
+                      Solo can only join a paid shared tour already opened by Tour for Two or Three. Unpaid holds are not
                       joinable.
                     </p>
                   ) : null}

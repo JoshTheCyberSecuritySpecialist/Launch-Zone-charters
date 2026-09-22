@@ -70,7 +70,7 @@ function experienceLabel(booking) {
   const charterType = String(booking.charter_type || '').trim().toLowerCase();
   if (charterType === 'bio') return 'Bioluminescence Night Tour';
   if (charterType === 'rocket') return 'Rocket Launch Viewing Charter';
-  if (charterType === 'sunset') return 'Sunset Cruise';
+  if (charterType === 'sunset') return 'Dolphin & Wildlife Tour';
   if (charterType === 'captain_charter') return 'Captain-Led Charter';
   if (String(booking.booking_type || '') === 'rental') {
     const rentalType = String(booking.rental_type || '').replace(/_/g, ' ');

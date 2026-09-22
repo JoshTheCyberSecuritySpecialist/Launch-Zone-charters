@@ -1,78 +1,89 @@
 /**
- * Authoritative direct-booking Sunset & Wildlife packages.
+ * Authoritative direct-booking Dolphin & Wildlife Tour packages
+ * (route key remains experience=sunset / charterType=sunset).
  * Prices are integer cents only — never trust browser-supplied amounts.
  *
  * Shared openers: sunset_two and sunset_three.
  * Shared joiners: sunset_solo only (cannot open a departure).
- * Exclusive: sunset_family and sunset_private.
+ * Exclusive (entire boat): sunset_family (up to 4) and sunset_private (up to 5).
  */
 
-const { DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES } = require('../lib/charterDuration');
+const SUNSET_PACKAGE_DURATION_MINUTES = 120;
 
 const SUNSET_PACKAGES = {
   sunset_solo: {
     id: 'sunset_solo',
-    name: 'Sunset Solo Seat',
+    name: 'Dolphin & Wildlife Solo Seat',
+    description:
+      'One shared seat on a two-hour Dolphin & Wildlife Tour. Joins an existing paid shared departure only.',
     guestCount: 1,
     maxGuests: 1,
-    standardValueCents: 8500,
-    priceCents: 7500,
+    standardValueCents: 4900,
+    priceCents: 3900,
     seating: 'shared',
     canOpenSharedDeparture: false,
     capacityReserved: 1,
-    durationMinutes: DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES,
+    durationMinutes: SUNSET_PACKAGE_DURATION_MINUTES,
     active: true,
   },
   sunset_two: {
     id: 'sunset_two',
-    name: 'Sunset for Two',
+    name: 'Dolphin & Wildlife Tour for Two',
+    description:
+      'Two-guest shared tour. Opens a shared departure; remaining seats may be booked by other guests.',
     guestCount: 2,
     maxGuests: 2,
-    standardValueCents: 16000,
-    priceCents: 14000,
+    standardValueCents: 8900,
+    priceCents: 7500,
     seating: 'shared',
     canOpenSharedDeparture: true,
     capacityReserved: 2,
-    durationMinutes: DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES,
+    durationMinutes: SUNSET_PACKAGE_DURATION_MINUTES,
     active: true,
   },
   sunset_three: {
     id: 'sunset_three',
-    name: 'Sunset for Three',
+    name: 'Dolphin & Wildlife Tour for Three',
+    description:
+      'Three-guest shared tour. Opens a shared departure; remaining seats may be booked by other guests.',
     guestCount: 3,
     maxGuests: 3,
-    standardValueCents: 24000,
-    priceCents: 21000,
+    standardValueCents: 12900,
+    priceCents: 11000,
     seating: 'shared',
     canOpenSharedDeparture: true,
     capacityReserved: 3,
-    durationMinutes: DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES,
+    durationMinutes: SUNSET_PACKAGE_DURATION_MINUTES,
     active: true,
   },
   sunset_family: {
     id: 'sunset_family',
-    name: 'Sunset Family',
+    name: 'Private Dolphin & Wildlife Tour for Four',
+    description:
+      'Private two-hour tour for up to four guests. Entire boat reserved — no other customers join.',
     guestCount: 1,
-    maxGuests: 5,
-    standardValueCents: 28500,
-    priceCents: 25000,
+    maxGuests: 4,
+    standardValueCents: 16900,
+    priceCents: 14500,
     seating: 'private',
     canOpenSharedDeparture: false,
     capacityReserved: 5,
-    durationMinutes: DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES,
+    durationMinutes: SUNSET_PACKAGE_DURATION_MINUTES,
     active: true,
   },
   sunset_private: {
     id: 'sunset_private',
-    name: 'Private Sunset Charter',
+    name: 'Private Dolphin & Wildlife Tour',
+    description:
+      'Private two-hour tour for up to five guests. Entire boat reserved — no other customers join.',
     guestCount: 1,
     maxGuests: 5,
-    standardValueCents: 37500,
-    priceCents: 32500,
+    standardValueCents: 20900,
+    priceCents: 17900,
     seating: 'private',
     canOpenSharedDeparture: false,
     capacityReserved: 5,
-    durationMinutes: DEFAULT_CAPTAIN_CHARTER_DURATION_MINUTES,
+    durationMinutes: SUNSET_PACKAGE_DURATION_MINUTES,
     active: true,
   },
 };
@@ -123,12 +134,20 @@ function sunsetPackageSavingsCents(pkg) {
   return Math.max(0, Number(pkg.standardValueCents || 0) - Number(pkg.priceCents || 0));
 }
 
+function sunsetPackageDurationHours(pkg) {
+  const minutes = Number(pkg?.durationMinutes);
+  if (!Number.isFinite(minutes) || minutes <= 0) return SUNSET_PACKAGE_DURATION_MINUTES / 60;
+  return Math.round((minutes / 60) * 100) / 100;
+}
+
 module.exports = {
   SUNSET_PACKAGES,
   SUNSET_PACKAGE_IDS,
+  SUNSET_PACKAGE_DURATION_MINUTES,
   isDirectSunsetPackagePricingEnabled,
   getSunsetPackage,
   isSunsetPackageId,
   getCapacityReservedForSunsetPackage,
   sunsetPackageSavingsCents,
+  sunsetPackageDurationHours,
 };

@@ -84,12 +84,13 @@ export function buildDirectExperienceCards(flags: DirectDealFlags): DirectExperi
     },
     {
       id: 'sunset',
-      category: 'Sunset & Wildlife',
-      name: 'Sunset & Wildlife Cruise',
-      description: 'Relax on the Indian River Lagoon while enjoying sunset views and local wildlife.',
-      supportingText: 'Shared and private cruise options available.',
+      category: 'Dolphin & Wildlife',
+      name: 'Dolphin & Wildlife Tour',
+      description:
+        "Explore Florida's Space Coast on a relaxing two-hour captain-led boat tour with chances to spot dolphins and other local wildlife.",
+      supportingText: 'Shared seats and private boat options. Wildlife sightings are never guaranteed.',
       fromPriceLabel: sunsetFrom,
-      ctaLabel: 'View Sunset Options',
+      ctaLabel: 'View Tour Options',
       href: directExperienceChooserPath('sunset'),
     },
   ];

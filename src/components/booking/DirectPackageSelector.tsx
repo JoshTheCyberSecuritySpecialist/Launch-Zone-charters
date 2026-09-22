@@ -19,5 +19,6 @@ export default function DirectPackageSelector({ experience, onSelect }: Props) {
   if (experience === 'rocket') {
     return <RocketLaunchPackageCards onSelect={(id) => onSelect(id)} />;
   }
-  return <SunsetPackageCards onSelect={(id) => onSelect(id)} />;
+  // Page hero already shows tour title, supporting text, and notices.
+  return <SunsetPackageCards showIntro={false} onSelect={(id) => onSelect(id)} />;
 }

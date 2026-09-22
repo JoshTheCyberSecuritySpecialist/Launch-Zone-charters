@@ -120,7 +120,8 @@ function run() {
     proposedGuestCount: 1,
   });
   assert.strictEqual(cap.available, true, '2 + 2 + 1 = 5 allowed');
-  assert.strictEqual(cap.capacity.remaining, 0);
+  assert.strictEqual(cap.capacity.remaining, 1);
+  assert.strictEqual(cap.capacity.remainingAfter, 0);
 
   cap = evaluateSharedCharterCapacity({
     overlappingBookings: [

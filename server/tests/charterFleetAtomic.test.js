@@ -7,6 +7,7 @@ const assert = require('assert');
 const {
   isCharterHoldContentionError,
   isMissingRpcError,
+  normalizeRpcCapacity,
   unwrapRpcPayload,
   BIO_DEPARTURE_JUST_FILLED_MESSAGE,
 } = require('../services/charterFleetAtomic');
@@ -33,6 +34,15 @@ function run() {
     true
   );
   assert.strictEqual(isMissingRpcError({ message: 'permission denied' }), false);
+
+  const emptyFourGuestRpc = normalizeRpcCapacity({ used: 0, remaining: 1, fleet_used: 0 }, 4);
+  assert.strictEqual(emptyFourGuestRpc.remaining, 5);
+  assert.strictEqual(emptyFourGuestRpc.remainingAfter, 1);
+  assert.strictEqual(emptyFourGuestRpc.requested, 4);
+
+  const partialSoloRpc = normalizeRpcCapacity({ used: 4, remaining: 0, fleet_used: 4 }, 1);
+  assert.strictEqual(partialSoloRpc.remaining, 1);
+  assert.strictEqual(partialSoloRpc.remainingAfter, 0);
 
   assert.strictEqual(isCharterHoldContentionError({ code: '23P01' }), true);
   assert.strictEqual(

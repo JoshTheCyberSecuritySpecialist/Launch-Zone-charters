@@ -93,7 +93,8 @@ function run() {
     proposedGuestCount: 1,
   });
   assert.strictEqual(result.available, true);
-  assert.strictEqual(result.capacity.remaining, 0);
+  assert.strictEqual(result.capacity.remaining, 1);
+  assert.strictEqual(result.capacity.remainingAfter, 0);
 
   result = evaluateSharedCharterCapacity({
     overlappingBookings: fiveSingles,
@@ -116,7 +117,8 @@ function run() {
     proposedGuestCount: 3,
   });
   assert.strictEqual(result.available, true);
-  assert.strictEqual(result.capacity.remaining, 0);
+  assert.strictEqual(result.capacity.remaining, 3);
+  assert.strictEqual(result.capacity.remainingAfter, 0);
 
   result = evaluateSharedCharterCapacity({
     overlappingBookings: [bookingRow({ id: 'a', guest_count: 3, start_time: friStart, end_time: friEnd })],
@@ -129,7 +131,8 @@ function run() {
     proposedGuestCount: 2,
   });
   assert.strictEqual(result.available, true);
-  assert.strictEqual(result.capacity.remaining, 3);
+  assert.strictEqual(result.capacity.remaining, 5);
+  assert.strictEqual(result.capacity.remainingAfter, 3);
 
   const overnightStart = DateTime.fromISO('2026-01-02T23:00', { zone }).toUTC().toISO();
   const overnightPartial = DateTime.fromISO('2026-01-03T00:30', { zone }).toUTC().toISO();

@@ -97,7 +97,8 @@ function run() {
     proposedGuestCount: 3,
   });
   assert.strictEqual(cap.available, true);
-  assert.strictEqual(cap.capacity.remaining, 0);
+  assert.strictEqual(cap.capacity.remaining, 3);
+  assert.strictEqual(cap.capacity.remainingAfter, 0);
 
   // 4: next hour opens when earlier departure is gone (empty remaining night shows all)
   const eightFullGone = [nine, ten];

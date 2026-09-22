@@ -194,6 +194,7 @@ function evaluateSharedCharterCapacity({
         max: CHARTER_MAX_PASSENGERS,
         used,
         remaining: remainingBefore,
+        remainingAfter: Math.max(0, remainingAfter),
         requested: proposed,
       },
       conflict: sharedRows[0] || null,
@@ -207,7 +208,8 @@ function evaluateSharedCharterCapacity({
     capacity: {
       max: CHARTER_MAX_PASSENGERS,
       used,
-      remaining: remainingAfter,
+      remaining: remainingBefore,
+      remainingAfter,
       requested: proposed,
     },
     conflict: null,

@@ -195,7 +195,8 @@ function runCapacityTests() {
     proposedGuestCount: 5,
   });
   assert.strictEqual(emptyFive.available, true);
-  assert.strictEqual(emptyFive.capacity.remaining, 0);
+  assert.strictEqual(emptyFive.capacity.remaining, 5);
+  assert.strictEqual(emptyFive.capacity.remainingAfter, 0);
   assert.strictEqual(emptyFive.capacity.requested, 5);
 
   const fiveConsumesBoat = evaluateSharedCharterCapacity({

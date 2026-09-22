@@ -2240,6 +2240,7 @@ function staffAvailabilityConflictPayload(result) {
           max: capacity.max,
           used: capacity.used,
           remaining: capacity.remaining,
+          remainingAfter: capacity.remainingAfter,
           requested: capacity.requested,
         }
       : null,

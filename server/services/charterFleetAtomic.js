@@ -31,6 +31,29 @@ function isMissingRpcError(err) {
   );
 }
 
+function requestedGuestCount(value) {
+  return Math.max(1, Math.floor(Number(value) || 1));
+}
+
+function normalizeRpcCapacity(payload = {}, passengerCount = 1) {
+  const max = 5;
+  const requested = requestedGuestCount(passengerCount);
+  const used = Math.max(0, Math.floor(Number(payload?.used) || 0));
+  const remainingBefore = Math.max(0, max - used);
+  const rpcRemaining = Number(payload?.remaining);
+  const remainingAfter = Number.isFinite(rpcRemaining)
+    ? Math.max(0, Math.floor(rpcRemaining))
+    : Math.max(0, remainingBefore - requested);
+  return {
+    max,
+    used,
+    remaining: remainingBefore,
+    remainingAfter,
+    fleetUsed: Number(payload?.fleet_used) || used,
+    requested,
+  };
+}
+
 /**
  * @returns {Promise<{
  *   available: boolean,
@@ -100,32 +123,19 @@ async function pickCharterFleetBoatAtomic(supabase, boatCapacityService, input =
       boatId: null,
       reason: payload?.reason || 'charter_capacity',
       message: payload?.message || BIO_DEPARTURE_JUST_FILLED_MESSAGE,
-      capacity: {
-        max: 5,
-        used: Number(payload?.used) || 0,
-        remaining: Number(payload?.remaining) || 0,
-        fleetUsed: Number(payload?.fleet_used) || 0,
-        requested: Math.max(1, Math.floor(Number(passengerCount) || 1)),
-      },
+      capacity: normalizeRpcCapacity(payload || {}, passengerCount),
       source: 'rpc',
     };
   }
 
-  const used = Number(payload.used) || 0;
-  const remaining = Number.isFinite(Number(payload.remaining))
-    ? Number(payload.remaining)
-    : Math.max(0, 5 - used);
+  const capacity = normalizeRpcCapacity(payload, passengerCount);
   return {
     available: true,
     boatId: String(payload.boat_id),
     reason: null,
     message: null,
     capacity: {
-      max: 5,
-      used,
-      remaining,
-      fleetUsed: Number(payload.fleet_used) || used,
-      requested: Math.max(1, Math.floor(Number(passengerCount) || 1)),
+      ...capacity,
       assignedBoatRole: fleet.find((row) => row.boatId === String(payload.boat_id))?.role || null,
     },
     source: 'rpc',
@@ -148,6 +158,7 @@ module.exports = {
   BIO_DEPARTURE_JUST_FILLED_MESSAGE,
   isCharterHoldContentionError,
   isMissingRpcError,
+  normalizeRpcCapacity,
   pickCharterFleetBoatAtomic,
   unwrapRpcPayload,
 };

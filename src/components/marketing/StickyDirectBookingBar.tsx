@@ -94,11 +94,11 @@ export default function StickyDirectBookingBar({
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <Link
-            to="/bioluminescent-tours#packages"
+            to="/bioluminescent-tours"
             className="hidden text-xs font-semibold text-cyan-300 underline underline-offset-2 sm:inline"
-            onClick={() => trackDirectBookingEvent('sticky_direct_bar_clicked', { target: 'packages' })}
+            onClick={() => trackDirectBookingEvent('sticky_direct_bar_clicked', { target: 'bio_2027' })}
           >
-            View Packages
+            2027 Bio Season
           </Link>
           <button
             type="button"

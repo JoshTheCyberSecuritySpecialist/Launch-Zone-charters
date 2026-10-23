@@ -39,6 +39,7 @@ const damageFeeAcknowledgment = require('./lib/damageFeeAcknowledgment');
 const bookingDateTimeRange = require('./lib/bookingDateTimeRange');
 const { isSharedCharterBooking, formatCapacityMessage } = require('./lib/sharedCharterCapacity');
 const shopService = require('./services/shopService');
+const bioGiftCheckout = require('./services/bioGiftCheckout');
 const disputeService = require('./services/disputeService');
 const disputeEvidenceService = require('./services/disputeEvidenceService');
 const disputeExportService = require('./services/disputeExportService');
@@ -1863,6 +1864,44 @@ async function processStripeWebhookEvent(event) {
         console.error('[stripe-webhook] shop finalize:', session.id, err.message || err);
         await bookingReliability.updateWebhookEventStatus(supabase, eventId, 'failed', {
           error: err.message || 'Shop webhook finalization failed',
+        });
+        return { ok: false, error: err };
+      }
+    }
+    if (orderType === bioGiftCheckout.BIO_GIFT_KIND || orderType === 'bio_gift') {
+      try {
+        const out = await bioGiftCheckout.finalizeBioGiftCheckoutFromSession({
+          stripe,
+          supabase,
+          sessionId: session.id,
+          source: 'stripe_webhook',
+        });
+        await bookingReliability.updateWebhookEventStatus(supabase, eventId, 'processed', {
+          error: null,
+        });
+        await bookingReliability.insertActivity(supabase, {
+          checkout_session_id: session.id,
+          payment_intent_id: ids.paymentIntentId || null,
+          event_type: 'bio_gift_paid',
+          message: 'Stripe bioluminescence gift payment succeeded and gift tickets were recorded.',
+          payload: {
+            event_id: eventId,
+            ticket_quantity: out.ticketQuantity,
+            alreadyFinalized: out.alreadyFinalized,
+          },
+        });
+        console.log(
+          '[stripe-webhook] finalized bio gift',
+          session.id,
+          out.alreadyFinalized ? '(idempotent)' : '',
+          'tickets=',
+          out.ticketQuantity
+        );
+        return { ok: true, gift: true, ticketQuantity: out.ticketQuantity };
+      } catch (err) {
+        console.error('[stripe-webhook] bio gift finalize:', session.id, err.message || err);
+        await bookingReliability.updateWebhookEventStatus(supabase, eventId, 'failed', {
+          error: err.message || 'Bio gift webhook finalization failed',
         });
         return { ok: false, error: err };
       }
@@ -8381,6 +8420,53 @@ app.post('/api/shop/create-checkout-session', async (req, res) => {
   } catch (err) {
     console.error('[shop/create-checkout-session]', err);
     return res.status(err.statusCode || 500).json({ error: err.message || 'Failed to create checkout session' });
+  }
+});
+
+/** Bioluminescence gift checkout — no departure date; does not hold boat capacity. */
+app.post('/api/create-bio-gift-checkout-session', async (req, res) => {
+  try {
+    if (!supabaseConfigured) {
+      return res.status(503).json({ error: 'Server not configured' });
+    }
+    if (!stripe) {
+      return res.status(503).json({ error: 'Stripe not configured' });
+    }
+    const out = await bioGiftCheckout.createBioGiftCheckoutSession({
+      stripe,
+      supabase,
+      body: req.body || {},
+    });
+    return res.json(out);
+  } catch (err) {
+    console.error('[create-bio-gift-checkout-session]', err);
+    return res
+      .status(err.statusCode || 500)
+      .json({ error: err.message || 'Failed to create gift checkout session' });
+  }
+});
+
+app.post('/api/finalize-bio-gift-checkout-session', async (req, res) => {
+  try {
+    if (!supabaseConfigured) {
+      return res.status(503).json({ error: 'Server not configured' });
+    }
+    if (!stripe) {
+      return res.status(503).json({ error: 'Stripe not configured' });
+    }
+    const sessionId = req.body && req.body.sessionId ? String(req.body.sessionId).trim() : '';
+    const out = await bioGiftCheckout.finalizeBioGiftCheckoutFromSession({
+      stripe,
+      supabase,
+      sessionId,
+      source: 'success_page',
+    });
+    return res.json(out);
+  } catch (err) {
+    console.error('[finalize-bio-gift-checkout-session]', err);
+    return res
+      .status(err.statusCode || 500)
+      .json({ error: err.message || 'Failed to finalize gift checkout' });
   }
 });
 

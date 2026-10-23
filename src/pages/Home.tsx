@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import WhyBookDirectSection from '../components/marketing/WhyBookDirectSection';
 import StickyDirectBookingBar from '../components/marketing/StickyDirectBookingBar';
 import { Helmet } from 'react-helmet-async';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { Anchor, Award, Calendar, Clock, Loader2, Shield, Star, Volume2, VolumeX } from 'lucide-react';
 import SmartImage from '../components/ui/SmartImage';
 import LaunchCountdown from '../components/LaunchCountdown';
@@ -63,6 +63,7 @@ function HomeExperienceCard({
   const kindLabel = entry.kind === 'captain-led' ? 'Captain-led' : 'Self-drive rental';
   const location =
     entry.id === 'rental' ? EXPERIENCE_RENTAL.locationLabel : entry.locationLabel;
+  const isBio = entry.id === 'bio';
 
   return (
     <article className="lz-card-glass flex h-full flex-col p-5 text-left md:p-6">
@@ -73,13 +74,31 @@ function HomeExperienceCard({
       <h3 className="mt-2 font-display text-lg font-bold text-white">{entry.publicName}</h3>
       <p className="mt-1 text-xs font-medium text-slate-400">{location}</p>
       <p className="mt-3 flex-1 text-sm leading-relaxed text-slate-300">{entry.tagline}</p>
-      <button
-        type="button"
-        onClick={wrapNavigateClick('home', pageKey, onNavigate)}
-        className="lz-btn-secondary mt-5 w-full min-h-[44px] justify-center"
-      >
-        {entry.exploreCta}
-      </button>
+      {isBio ? (
+        <div className="mt-5 flex flex-col gap-2">
+          <button
+            type="button"
+            onClick={wrapNavigateClick('home', pageKey, onNavigate)}
+            className="lz-btn-primary w-full min-h-[44px] justify-center"
+          >
+            {entry.bookCta}
+          </button>
+          <Link
+            to="/bioluminescent-tours#give-as-gift"
+            className="inline-flex min-h-[44px] w-full items-center justify-center rounded-xl border-2 border-[var(--lz-cta)] bg-[rgba(255,140,43,0.12)] px-4 text-xs font-bold uppercase tracking-[0.1em] text-[var(--lz-cta)] transition hover:bg-[rgba(255,140,43,0.2)]"
+          >
+            Give as a Gift
+          </Link>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={wrapNavigateClick('home', pageKey, onNavigate)}
+          className="lz-btn-secondary mt-5 w-full min-h-[44px] justify-center"
+        >
+          {entry.exploreCta}
+        </button>
+      )}
     </article>
   );
 }

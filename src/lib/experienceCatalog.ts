@@ -52,9 +52,9 @@ export const EXPERIENCE_BIO: CaptainLedExperience = {
   bookingUrl: '/bioluminescent-tours#packages',
   locationLabel: 'Titusville · Indian River Lagoon',
   icon: '✨',
-  bookCta: 'View Bioluminescence Packages',
+  bookCta: 'Book a 2027 Tour',
   exploreCta: 'Explore Bioluminescence Tours',
-  tagline: 'From $44.99 · packages for one, two, three, or four guests.',
+  tagline: '2027 season open · Reserve a date or give the glow as a gift.',
 };
 
 export const EXPERIENCE_ROCKET: CaptainLedExperience = {

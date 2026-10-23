@@ -18,7 +18,6 @@ interface BioGuidePageProps {
   onNavigate: (page: string) => void;
 }
 
-const PACKAGES_HREF = '/bioluminescent-tours#packages';
 const GLOW_SECTION_ID = 'tonights-conditions';
 
 const SEE_CARDS = [
@@ -150,11 +149,18 @@ export default function BioGuidePage({ onNavigate }: BioGuidePageProps) {
           </p>
           <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-center">
             <Link
-              to={PACKAGES_HREF}
-              className="inline-flex items-center justify-center rounded-xl bg-orange-500 px-6 py-3.5 text-center text-base font-bold text-white shadow-lg shadow-orange-900/40 transition hover:bg-orange-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-300"
+              to="/bioluminescent-tours"
+              className="inline-flex min-h-[44px] items-center justify-center rounded-xl bg-orange-500 px-6 py-3.5 text-center text-base font-bold text-white shadow-lg shadow-orange-900/40 transition hover:bg-orange-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-300"
               onClick={wrapSyncClick('bio_guide_hero_packages')}
             >
-              View Bioluminescence Packages
+              Book a 2027 Tour
+            </Link>
+            <Link
+              to="/bioluminescent-tours#give-as-gift"
+              className="inline-flex min-h-[44px] items-center justify-center rounded-xl border-2 border-orange-400/80 bg-orange-500/10 px-6 py-3.5 text-center text-base font-bold text-orange-200 transition hover:bg-orange-500/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-300"
+              onClick={wrapSyncClick('bio_guide_hero_gift')}
+            >
+              Give as a Gift
             </Link>
             <button
               type="button"
@@ -259,11 +265,18 @@ export default function BioGuidePage({ onNavigate }: BioGuidePageProps) {
           <LiveBioConditionsWidget />
           <div className="mt-6 flex flex-col gap-3 sm:flex-row">
             <Link
-              to={PACKAGES_HREF}
-              className="inline-flex items-center justify-center rounded-xl bg-orange-500 px-5 py-3 text-center text-sm font-bold text-white transition hover:bg-orange-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-300"
+              to="/bioluminescent-tours"
+              className="inline-flex min-h-[44px] items-center justify-center rounded-xl bg-orange-500 px-5 py-3 text-center text-sm font-bold text-white transition hover:bg-orange-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-300"
               onClick={wrapSyncClick('bio_guide_mid_packages')}
             >
-              View Packages
+              Book a 2027 Tour
+            </Link>
+            <Link
+              to="/bioluminescent-tours#give-as-gift"
+              className="inline-flex min-h-[44px] items-center justify-center rounded-xl border-2 border-orange-400/80 bg-orange-500/10 px-5 py-3 text-center text-sm font-bold text-orange-200 transition hover:bg-orange-500/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-300"
+              onClick={wrapSyncClick('bio_guide_mid_gift')}
+            >
+              Give as a Gift
             </Link>
             <button
               type="button"
@@ -403,18 +416,25 @@ export default function BioGuidePage({ onNavigate }: BioGuidePageProps) {
           aria-labelledby="heading-book"
         >
           <h2 id="heading-book" className="text-2xl font-bold text-white sm:text-3xl">
-            Ready for a night on the lagoon?
+            2027 season — book now or give as a gift
           </h2>
           <p className="mx-auto mt-3 max-w-xl text-slate-300">
-            Pick a package that fits your group, or check tonight&apos;s glow outlook before you decide.
+            June–October nights on the Indian River Lagoon. Reserve your package, or gift a digital ticket for someone special.
           </p>
           <div className="mt-8 flex flex-col items-stretch justify-center gap-3 sm:flex-row sm:items-center">
             <Link
-              to={PACKAGES_HREF}
-              className="inline-flex items-center justify-center rounded-xl bg-orange-500 px-6 py-3.5 text-center text-base font-bold text-white shadow-lg shadow-orange-900/40 transition hover:bg-orange-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-300"
+              to="/bioluminescent-tours"
+              className="inline-flex min-h-[44px] items-center justify-center rounded-xl bg-orange-500 px-6 py-3.5 text-center text-base font-bold text-white shadow-lg shadow-orange-900/40 transition hover:bg-orange-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-300"
               onClick={wrapSyncClick('bio_guide_footer_packages')}
             >
-              View Bioluminescence Packages
+              Book a 2027 Tour
+            </Link>
+            <Link
+              to="/bioluminescent-tours#give-as-gift"
+              className="inline-flex min-h-[44px] items-center justify-center rounded-xl border-2 border-orange-400/80 bg-orange-500/10 px-6 py-3.5 text-center text-base font-bold text-orange-200 transition hover:bg-orange-500/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-300"
+              onClick={wrapSyncClick('bio_guide_footer_gift')}
+            >
+              Give as a Gift
             </Link>
             <button
               type="button"

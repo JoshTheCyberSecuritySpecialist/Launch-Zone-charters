@@ -10,8 +10,10 @@ import {
 import {
   bookingUrlForDirectPackage,
   DIRECT_DEALS_PATH,
+  isGiftIntentParam,
   parseDirectExperienceParam,
 } from '../lib/directBookingFlow.js';
+import { BIO_GIFT_NO_DATE_MESSAGE } from '../lib/bioGiftBooking';
 import { trackDirectBookingEvent } from '../lib/directBookingMarketing';
 import {
   buildDirectExperienceCards,
@@ -128,6 +130,8 @@ export default function DirectDeals({ onNavigate }: DirectDealsProps) {
   const unknownExperience = Boolean(experienceParam) && !selectedExperience;
   const packageParam = searchParams.get('package');
   const unknownPackage = Boolean(packageParam) && !isKnownDirectPackageId(packageParam);
+  const isGiftIntent = isGiftIntentParam(searchParams.get('intent'));
+  const isBioGiftMode = isGiftIntent && selectedExperience === 'bio';
 
   const bioPackagesEnabled = isDirectBioPackagePricingEnabled() || serverBioEnabled === true;
   const rocketPackagesEnabled =
@@ -147,27 +151,57 @@ export default function DirectDeals({ onNavigate }: DirectDealsProps) {
 
   if (selectedExperience) {
     const copy = EXPERIENCE_COPY[selectedExperience];
+    const giftBlockedForExperience = isGiftIntent && selectedExperience !== 'bio';
     return (
       <div className="min-h-screen bg-lz-bg text-slate-100">
         <Helmet prioritizeSeoTags>
-          <title>{copy.title} | Book Direct | Launch Zone Charters</title>
-          <meta name="description" content={`${copy.heading} before choosing a date.`} />
+          <title>
+            {isBioGiftMode ? 'Give a Bio Gift' : copy.title} | Book Direct | Launch Zone Charters
+          </title>
+          <meta
+            name="description"
+            content={
+              isBioGiftMode
+                ? BIO_GIFT_NO_DATE_MESSAGE
+                : `${copy.heading} before choosing a date.`
+            }
+          />
           <link rel="canonical" href="https://launchzonecharters.com/booking/direct" />
         </Helmet>
 
         <section className="lz-page-hero py-12 md:py-16">
           <div className="mx-auto max-w-3xl px-4 text-center sm:px-6">
-            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-cyan-300/90">Direct booking</p>
-            <h1 className="lz-page-hero-heading mt-3 font-display text-white">{copy.title}</h1>
+            <p
+              className={`text-xs font-semibold uppercase tracking-[0.22em] ${
+                isBioGiftMode ? 'text-[var(--lz-cta)]' : 'text-cyan-300/90'
+              }`}
+            >
+              {isBioGiftMode ? 'Gift mode · Direct booking' : 'Direct booking'}
+            </p>
+            <h1 className="lz-page-hero-heading mt-3 font-display text-white">
+              {isBioGiftMode ? 'Give a Bioluminescence Gift' : copy.title}
+            </h1>
             <p className="mx-auto mt-4 max-w-2xl text-base leading-relaxed text-slate-300 md:text-lg">
-              {copy.heading}
+              {isBioGiftMode ? 'Choose the package on the gift ticket.' : copy.heading}
             </p>
             <p className="mx-auto mt-3 max-w-2xl text-sm leading-relaxed text-slate-400 md:text-base">
-              {copy.note}
+              {isBioGiftMode ? BIO_GIFT_NO_DATE_MESSAGE : copy.note}
             </p>
-            {copy.extraNote ? (
+            {!isBioGiftMode && copy.extraNote ? (
               <p className="mx-auto mt-3 max-w-2xl text-sm font-medium leading-relaxed text-cyan-100/90 md:text-base">
                 {copy.extraNote}
+              </p>
+            ) : null}
+            {giftBlockedForExperience ? (
+              <p className="mx-auto mt-4 max-w-2xl rounded-xl border border-amber-500/30 bg-amber-950/25 px-4 py-3 text-sm text-amber-100">
+                Gift tickets are available for bioluminescence tours. Choose a bio package from{' '}
+                <Link
+                  to="/booking/direct?experience=bio&intent=gift"
+                  className="font-semibold underline underline-offset-2"
+                >
+                  gift mode
+                </Link>
+                .
               </p>
             ) : null}
           </div>
@@ -180,25 +214,34 @@ export default function DirectDeals({ onNavigate }: DirectDealsProps) {
           >
             All experiences
           </Link>
-          <div className="mt-6">
-            <DirectPackageSelector
-              experience={selectedExperience}
-              onSelect={(packageId) => {
-                const href = bookingUrlForDirectPackage(selectedExperience, packageId);
-                if (!href) return;
-                trackDirectBookingEvent('direct_package_selected', {
-                  experienceId: selectedExperience,
-                  packageId,
-                });
-                const date = searchParams.get('date');
-                const next =
-                  date && /^\d{4}-\d{2}-\d{2}$/.test(date)
-                    ? `${href}&date=${encodeURIComponent(date)}`
-                    : href;
-                navigate(next);
-              }}
-            />
-          </div>
+          {!giftBlockedForExperience ? (
+            <div className="mt-6">
+              <DirectPackageSelector
+                experience={selectedExperience}
+                onSelect={(packageId) => {
+                  const href = bookingUrlForDirectPackage(selectedExperience, packageId, {
+                    intent: isBioGiftMode ? 'gift' : null,
+                  });
+                  if (!href) return;
+                  trackDirectBookingEvent('direct_package_selected', {
+                    experienceId: selectedExperience,
+                    packageId,
+                    intent: isBioGiftMode ? 'gift' : 'book',
+                  });
+                  if (isBioGiftMode) {
+                    navigate(href);
+                    return;
+                  }
+                  const date = searchParams.get('date');
+                  const next =
+                    date && /^\d{4}-\d{2}-\d{2}$/.test(date)
+                      ? `${href}&date=${encodeURIComponent(date)}`
+                      : href;
+                  navigate(next);
+                }}
+              />
+            </div>
+          ) : null}
         </div>
       </div>
     );
@@ -220,10 +263,14 @@ export default function DirectDeals({ onNavigate }: DirectDealsProps) {
           <p className="text-xs font-semibold uppercase tracking-[0.22em] text-cyan-300/90">Direct booking</p>
           <h1 className="lz-page-hero-heading mt-3 font-display text-white">Book Direct</h1>
           <p className="mx-auto mt-4 max-w-2xl text-base leading-relaxed text-slate-300 md:text-lg">
-            Choose the experience you want. Package options, dates, and checkout come next.
+            {isGiftIntent
+              ? 'Gift tickets are for bioluminescence. Choose Bio Tours to continue.'
+              : 'Choose the experience you want. Package options, dates, and checkout come next.'}
           </p>
           <p className="mx-auto mt-3 max-w-2xl text-sm leading-relaxed text-slate-400 md:text-base">
-            Book directly with Launch Zone Charters for simple scheduling and local support.
+            {isGiftIntent
+              ? BIO_GIFT_NO_DATE_MESSAGE
+              : 'Book directly with Launch Zone Charters for simple scheduling and local support.'}
           </p>
         </div>
       </section>
@@ -233,8 +280,23 @@ export default function DirectDeals({ onNavigate }: DirectDealsProps) {
           className="rounded-2xl border border-cyan-400/20 bg-cyan-950/25 px-4 py-3 text-sm text-cyan-50"
           role="note"
         >
-          We assign your vessel — you do not pick a boat here. Choose an experience to see packages,
-          then pick a date.
+          {isGiftIntent ? (
+            <>
+              {BIO_GIFT_NO_DATE_MESSAGE}{' '}
+              <Link
+                to="/booking/direct?experience=bio&intent=gift"
+                className="font-semibold underline underline-offset-2"
+              >
+                Continue to bio gift packages
+              </Link>
+              .
+            </>
+          ) : (
+            <>
+              We assign your vessel — you do not pick a boat here. Choose an experience to see packages,
+              then pick a date.
+            </>
+          )}
         </p>
 
         {unknownExperience || unknownPackage ? (

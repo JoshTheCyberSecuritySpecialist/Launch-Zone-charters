@@ -81,6 +81,11 @@ import {
   type BioPackageId,
 } from '../lib/bioluminescencePackages';
 import {
+  bioBookingSeasonClosedMessage,
+  bioSeasonDefaultCalendarMonth,
+  getActiveBioBookingSeason,
+} from '../lib/bioluminescenceSeason';
+import {
   formatCharterDurationLabel,
   resolvePackageDurationMinutes,
 } from '../lib/charterDuration';
@@ -107,8 +112,10 @@ import {
   type SunsetPackageId,
 } from '../lib/sunsetPackages';
 import {
+  bioGiftBookingUrl,
   DIRECT_DEALS_PATH,
   directExperienceChooserPath,
+  isGiftIntentParam,
 } from '../lib/directBookingFlow.js';
 
 interface BookNowProps {
@@ -614,6 +621,16 @@ export default function BookNow({ onNavigate }: BookNowProps) {
         next.charterType = 'night_bio';
         next.time = '20:00';
         next.hours = 1;
+        const bioSeason = getActiveBioBookingSeason();
+        setCalendarMonth(bioSeasonDefaultCalendarMonth(bioSeason));
+        if (
+          next.date &&
+          bioSeason &&
+          (next.date < bioSeason.bookingStart || next.date > bioSeason.bookingEnd)
+        ) {
+          next.date = '';
+          next.slotStartIso = '';
+        }
         const packageParam = searchParams.get('package');
         const pkgFromUrl = packageParam ? getBioPackageDisplay(packageParam) : null;
         if (pkgFromUrl) {
@@ -634,6 +651,16 @@ export default function BookNow({ onNavigate }: BookNowProps) {
         next.charterType = 'night_bio';
         next.time = '20:00';
         next.hours = 1;
+        const bioSeasonOnly = getActiveBioBookingSeason();
+        setCalendarMonth(bioSeasonDefaultCalendarMonth(bioSeasonOnly));
+        if (
+          next.date &&
+          bioSeasonOnly &&
+          (next.date < bioSeasonOnly.bookingStart || next.date > bioSeasonOnly.bookingEnd)
+        ) {
+          next.date = '';
+          next.slotStartIso = '';
+        }
         setBioPackageId(packageOnly.id);
         next.passengerCount =
           packageOnly.seating === 'private' ? 1 : packageOnly.guestCount;
@@ -1149,21 +1176,30 @@ export default function BookNow({ onNavigate }: BookNowProps) {
       setSelectedBoat(null);
       if (charterType === 'night_bio') {
         const pkg = getBioPackageDisplay(bioPackageId);
+        const bioSeason = getActiveBioBookingSeason();
         setRocketPackageId(null);
         setSunsetPackageId(null);
         setBioFifthPassengerAddon(false);
         setRocketSharedMinimumAcknowledged(false);
-        setBookingData((prev) => ({
-          ...prev,
-          captainIncluded: true,
-          charterType: 'night_bio',
-          charterVariant: 'shared',
-          passengerCount: pkg?.guestCount ?? prev.passengerCount ?? 1,
-          rentalType: 'half_day',
-          hours: 1,
-          time: '20:00',
-          slotStartIso: '',
-        }));
+        setCalendarMonth(bioSeasonDefaultCalendarMonth(bioSeason));
+        setBookingData((prev) => {
+          const dateOutsideSeason =
+            Boolean(prev.date) &&
+            bioSeason &&
+            (prev.date < bioSeason.bookingStart || prev.date > bioSeason.bookingEnd);
+          return {
+            ...prev,
+            captainIncluded: true,
+            charterType: 'night_bio',
+            charterVariant: 'shared',
+            passengerCount: pkg?.guestCount ?? prev.passengerCount ?? 1,
+            rentalType: 'half_day',
+            hours: 1,
+            time: '20:00',
+            slotStartIso: '',
+            date: dateOutsideSeason ? '' : prev.date,
+          };
+        });
         syncCharterExperienceUrl('night_bio', bioPackageId);
       } else {
         if (charterType === 'rocket_launch') {
@@ -2552,6 +2588,8 @@ export default function BookNow({ onNavigate }: BookNowProps) {
     return slot?.rocketDepartureLabel || null;
   })();
 
+  const activeBioSeason = isBioCharter ? getActiveBioBookingSeason() : null;
+  const bioSeasonNotice = isBioCharter ? bioBookingSeasonClosedMessage(activeBioSeason) : null;
   const urgencyHint =
     bookingMode === 'charter' &&
     bookingData.date &&
@@ -2562,11 +2600,10 @@ export default function BookNow({ onNavigate }: BookNowProps) {
       : bookingMode === 'charter' &&
           bookingData.charterType === 'night_bio' &&
           bookingData.date &&
-          (() => {
-            const mo = parseInt(bookingData.date.slice(5, 7), 10);
-            return mo >= 6 && mo <= 9;
-          })()
-        ? 'Popular season for bioluminescence · book ahead'
+          activeBioSeason &&
+          bookingData.date >= activeBioSeason.bookingStart &&
+          bookingData.date <= activeBioSeason.bookingEnd
+        ? `${activeBioSeason.year} bioluminescence season · book ahead`
         : null;
 
   const bookingModeFromUrl = searchParams.get('bookingMode');
@@ -2579,6 +2616,20 @@ export default function BookNow({ onNavigate }: BookNowProps) {
   const pageHeroTitle =
     productBookingTitle ??
     (showNeutralChooser ? 'What would you like to book?' : 'Book your adventure');
+
+  if (isGiftIntentParam(searchParams.get('intent'))) {
+    const giftPackage = searchParams.get('package');
+    const giftHref = bioGiftBookingUrl(giftPackage);
+    if (giftHref) {
+      return <Navigate to={giftHref} replace />;
+    }
+    return (
+      <Navigate
+        to={`${DIRECT_DEALS_PATH}?experience=bio&intent=gift`}
+        replace
+      />
+    );
+  }
 
   if (missingRequiredDirectPackage && requiredDirectExperience) {
     const chooser = new URLSearchParams();
@@ -2960,6 +3011,14 @@ export default function BookNow({ onNavigate }: BookNowProps) {
                       <span className="text-slate-500"> — viewing weather does not reserve a departure.</span>
                     </p>
                     {calendarAvailabilityLegend}
+                    {isBioCharter && bioSeasonNotice ? (
+                      <p
+                        className="mt-4 rounded-xl border border-cyan-400/30 bg-cyan-950/30 px-4 py-3 text-sm leading-relaxed text-cyan-50"
+                        role="note"
+                      >
+                        {bioSeasonNotice}
+                      </p>
+                    ) : null}
                     <div
                       id="availability-calendar"
                       ref={availabilityCalendarRef}

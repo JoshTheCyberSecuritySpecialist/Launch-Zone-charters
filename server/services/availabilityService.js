@@ -26,6 +26,7 @@ const bioSharedFillForward = require('./bioSharedFillForward');
 const charterFleetAllocation = require('./charterFleetAllocation');
 const charterFleetAtomic = require('./charterFleetAtomic');
 const { isBioPrivatePackageId } = require('../config/bioluminescencePackages');
+const { validateBioBookingSeason } = require('../config/bioluminescenceSeason');
 const { getMaxSimultaneousCharterBoats } = require('../config/charterFleetPriority');
 const { resolvePackageDurationMinutes } = require('../lib/charterDuration');
 
@@ -985,6 +986,13 @@ function validateCharterSlotWindow({ charterType, startIso, endIso, launchId = n
       return {
         valid: false,
         message: BIO_CHARTER_TIME_MESSAGE,
+      };
+    }
+    const seasonCheck = validateBioBookingSeason({ startIso: start.toUTC().toISO() });
+    if (!seasonCheck.ok) {
+      return {
+        valid: false,
+        message: seasonCheck.message || BIO_CHARTER_TIME_MESSAGE,
       };
     }
   } else if (type === 'rocket') {

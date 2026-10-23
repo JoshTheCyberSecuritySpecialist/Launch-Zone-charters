@@ -52,14 +52,20 @@ export default function PillarHero({ readingTimeMinutes, onScrollToConditions }:
             <div className="mt-6 flex flex-wrap gap-3 print:hidden">
               <Link
                 to="/bioluminescent-tours"
-                className="inline-flex items-center justify-center rounded-xl bg-[var(--lz-cta)] px-5 py-2.5 text-xs font-semibold uppercase tracking-[0.18em] text-slate-950 shadow-lg transition hover:brightness-110"
+                className="inline-flex min-h-[44px] items-center justify-center rounded-xl bg-[var(--lz-cta)] px-5 py-2.5 text-xs font-semibold uppercase tracking-[0.18em] text-slate-950 shadow-lg transition hover:brightness-110"
               >
-                Book a Bioluminescence Tour
+                Book a 2027 Tour
+              </Link>
+              <Link
+                to="/bioluminescent-tours#give-as-gift"
+                className="inline-flex min-h-[44px] items-center justify-center rounded-xl border-2 border-[var(--lz-cta)] bg-[rgba(255,140,43,0.12)] px-5 py-2.5 text-xs font-semibold uppercase tracking-[0.18em] text-[var(--lz-cta)] transition hover:bg-[rgba(255,140,43,0.2)]"
+              >
+                Give as a Gift
               </Link>
               <button
                 type="button"
                 onClick={wrapSyncClick('bio_guide_hero_conditions', onScrollToConditions)}
-                className="inline-flex items-center justify-center gap-2 rounded-xl border border-cyan-400/35 bg-transparent px-5 py-2.5 text-xs font-semibold uppercase tracking-[0.18em] text-cyan-200 transition hover:border-cyan-300/55 hover:bg-cyan-500/10"
+                className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl border border-cyan-400/35 bg-transparent px-5 py-2.5 text-xs font-semibold uppercase tracking-[0.18em] text-cyan-200 transition hover:border-cyan-300/55 hover:bg-cyan-500/10"
               >
                 View Tonight&apos;s Conditions
                 <ArrowDown className="h-3.5 w-3.5" aria-hidden />

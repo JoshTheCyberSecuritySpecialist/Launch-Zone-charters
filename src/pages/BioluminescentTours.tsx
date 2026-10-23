@@ -24,6 +24,8 @@ import {
   formatBioPackagePriceUsd,
   type BioPackageId,
 } from '../lib/bioluminescencePackages';
+import { bioSeasonAdvanceSaleCopy, getActiveBioBookingSeason } from '../lib/bioluminescenceSeason';
+import { directExperienceChooserPath } from '../lib/directBookingFlow.js';
 
 const BIO_HERO_IMAGE =
   '/images/bioluminescent-boat-tour-titusville-florida-glowing-water-night-kayak-indian-river-lagoon-adventure-launch-zone-charters.png';
@@ -153,15 +155,31 @@ export default function BioluminescentTours({ onNavigate }: BioluminescentToursP
     []
   );
 
+  const seasonSale = useMemo(() => bioSeasonAdvanceSaleCopy(getActiveBioBookingSeason()), []);
+
   const navigateBookBioCharter = useMemo(
     () =>
       wrapRouterNavigate(
         'bio_tours',
-        'book_charter_bio',
+        'book_2027_tour',
         navigate,
-        '/bioluminescent-tours#packages'
+        directExperienceChooserPath('bio')
       ),
     [navigate]
+  );
+
+  const navigateGiftBio = useMemo(
+    () =>
+      wrapSyncClick('bio_scroll_give_gift', () => {
+        const reduced =
+          typeof window !== 'undefined' &&
+          window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        document.getElementById('give-as-gift')?.scrollIntoView({
+          behavior: reduced ? 'auto' : 'smooth',
+          block: 'start',
+        });
+      }),
+    []
   );
 
   const navigateBioPackageBooking = useCallback(
@@ -282,55 +300,95 @@ export default function BioluminescentTours({ onNavigate }: BioluminescentToursP
         <div className="lz-hero-content relative border-t border-white/5 bg-lz-bg">
           <div className="lz-hero-fade lz-hero-fade--delay-2 mx-auto w-full max-w-2xl px-4 py-8 text-center sm:px-6 md:py-10 lg:px-8">
             <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-cyan-200/90">
-              Captain-led experience · Night tour
+              {seasonSale.eyebrow} · Captain-led night tour
             </p>
-            <h1 className="font-display text-balance text-xl font-bold tracking-tight text-white sm:text-2xl md:text-[1.65rem] md:leading-snug">
-              Bioluminescence Night Tours in Titusville
+            <h1 className="font-display text-balance text-xl font-bold tracking-tight text-white sm:text-2xl md:text-[1.75rem] md:leading-snug">
+              {seasonSale.headline}
             </h1>
             <p
-              className="mt-3 text-pretty text-sm font-semibold leading-snug tracking-wide text-cyan-100 sm:text-base"
+              className="mt-3 text-pretty text-sm font-medium leading-relaxed tracking-wide text-cyan-50/95 sm:text-base"
               style={{ textShadow: BIO_HERO_LINE_SHADOW }}
             >
-              Direct booking from {formatBioPackagePriceUsd(Math.min(...BIO_PACKAGE_DISPLAY.map((p) => p.directPriceUsd)))}
+              {seasonSale.supporting}
             </p>
             <p
-              className="mt-2 text-xs font-normal leading-relaxed text-white/85 sm:text-[0.8125rem]"
+              className="mt-3 text-xs font-normal leading-relaxed text-white/80 sm:text-[0.8125rem]"
               style={{ textShadow: '0 1px 8px rgba(0,0,0,0.65), 0 0 1px rgba(0,0,0,0.9)' }}
             >
-              Choose a package for one, two, three, or four guests. Captain and fuel included. {CHARTER_GUEST_LIMIT_LABEL}.
+              Packages from{' '}
+              {formatBioPackagePriceUsd(Math.min(...BIO_PACKAGE_DISPLAY.map((p) => p.directPriceUsd)))}
+              . Captain and fuel included. {CHARTER_GUEST_LIMIT_LABEL}.
             </p>
             <div className="mt-6 flex flex-col items-center gap-4 md:mt-7 md:gap-5">
-              <div className="max-w-xl space-y-2">
-                <p className="text-pretty text-sm font-semibold leading-relaxed text-slate-200/95 sm:text-base">
-                  Want to check the conditions first? View tonight&apos;s glow forecast before choosing
-                  your package.
-                </p>
-                <p className="text-pretty text-xs leading-relaxed text-slate-400 sm:text-sm">
-                  Captain-led tour — this is not a self-drive boat rental.
-                </p>
-              </div>
               <div className="flex w-full max-w-lg flex-col gap-3 sm:flex-row sm:justify-center sm:gap-4">
                 <button
                   type="button"
                   onClick={navigateBookBioCharter}
-                  className="btn-primary order-1 w-full min-h-[56px] sm:order-none sm:min-w-0 sm:flex-1 sm:max-w-[min(100%,280px)]"
+                  className="btn-primary order-1 w-full min-h-[56px] uppercase tracking-[0.08em] sm:order-none sm:min-w-0 sm:flex-1 sm:max-w-[min(100%,280px)]"
                 >
-                  {EXPERIENCE_BIO.bookCta}
+                  {seasonSale.bookCta}
                 </button>
                 <button
                   type="button"
-                  onClick={scrollToGlowCheck}
-                  className={`${glowCheckSecondaryBtn} order-2 sm:order-none sm:min-w-0 sm:flex-1 sm:max-w-[min(100%,280px)]`}
+                  onClick={navigateGiftBio}
+                  className="order-2 inline-flex min-h-[56px] w-full items-center justify-center rounded-xl border-2 border-[var(--lz-cta)] bg-[rgba(255,140,43,0.12)] px-5 text-sm font-bold uppercase tracking-[0.1em] text-[var(--lz-cta)] shadow-[0_0_24px_rgba(255,140,43,0.2)] transition hover:bg-[rgba(255,140,43,0.2)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--lz-cta)]/50 sm:order-none sm:min-w-0 sm:flex-1 sm:max-w-[min(100%,280px)]"
                 >
-                  <Moon className="h-4 w-4 shrink-0 text-cyan-100" aria-hidden />
-                  <span className="min-w-0 flex-1 text-balance">View tonight&apos;s glow forecast</span>
-                  <ChevronRight className="h-4 w-4 shrink-0 text-cyan-100" aria-hidden />
+                  {seasonSale.giftCta}
                 </button>
               </div>
+              <button
+                type="button"
+                onClick={scrollToGlowCheck}
+                className={`${glowCheckSecondaryBtn} w-full max-w-lg`}
+              >
+                <Moon className="h-4 w-4 shrink-0 text-cyan-100" aria-hidden />
+                <span className="min-w-0 flex-1 text-balance">View tonight&apos;s glow forecast</span>
+                <ChevronRight className="h-4 w-4 shrink-0 text-cyan-100" aria-hidden />
+              </button>
               <p className="max-w-md text-center text-[11px] font-medium uppercase tracking-[0.18em] text-white/65 sm:text-xs">
                 Licensed &amp; Insured • Titusville, FL • Indian River Lagoon
               </p>
             </div>
+          </div>
+        </div>
+      </section>
+
+      <section
+        id="give-as-gift"
+        className="scroll-mt-24 border-t border-[var(--lz-cta)]/25 bg-gradient-to-b from-[#1a1208] via-lz-bg to-lz-bg py-12 md:py-16"
+        aria-labelledby="give-as-gift-heading"
+      >
+        <div className="mx-auto max-w-3xl px-4 text-center sm:px-6 lg:px-8">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-[var(--lz-cta)]">
+            {seasonSale.giftEyebrow}
+          </p>
+          <h2
+            id="give-as-gift-heading"
+            className="mt-3 font-display text-2xl font-bold text-white md:text-3xl"
+          >
+            {seasonSale.giftHeadline}
+          </h2>
+          <p className="mx-auto mt-4 max-w-xl text-sm leading-relaxed text-slate-300 md:text-base">
+            {seasonSale.giftSupporting}
+          </p>
+          <ul className="mx-auto mt-5 max-w-md space-y-2 text-left text-sm text-slate-400 sm:text-center">
+            <li>Christmas · birthdays · anniversaries · graduations</li>
+            <li>Digital gift ticket delivered after purchase</li>
+            <li>Recipient picks a June–October {getActiveBioBookingSeason()?.year ?? 2027} night</li>
+          </ul>
+          <div className="mt-8 flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
+            <Link
+              to={seasonSale.giftIntentHref}
+              className="inline-flex min-h-[56px] w-full max-w-sm items-center justify-center rounded-xl border-2 border-[var(--lz-cta)] bg-[var(--lz-cta)] px-6 text-sm font-bold uppercase tracking-[0.1em] text-[#02111f] shadow-[0_0_28px_rgba(255,140,43,0.35)] transition hover:brightness-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--lz-cta)]/60 sm:w-auto"
+            >
+              {seasonSale.giftCta}
+            </Link>
+            <Link
+              to={directExperienceChooserPath('bio')}
+              className="inline-flex min-h-[48px] items-center justify-center px-4 text-sm font-semibold text-cyan-300 underline underline-offset-2"
+            >
+              Or book a {getActiveBioBookingSeason()?.year ?? 2027} date now
+            </Link>
           </div>
         </div>
       </section>
@@ -342,11 +400,11 @@ export default function BioluminescentTours({ onNavigate }: BioluminescentToursP
       >
         <div className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
           <h2 id="bio-packages-heading" className="font-display text-center text-2xl font-bold text-white md:text-3xl">
-            Choose Your Group Size
+            Book Your {getActiveBioBookingSeason()?.year ?? 2027} Package
           </h2>
           <p className="mx-auto mt-3 max-w-2xl text-center text-sm text-slate-400 md:text-base">
-            Guest packages for 1, 2, 3, or 4 people — not boat selection. Launch Zone assigns your vessel.{' '}
-            {BIO_PACKAGE_PRICING_DISCLAIMER}
+            Pick a group size, then choose a June–October departure. Guest packages — not boat selection.
+            Launch Zone assigns your vessel. {BIO_PACKAGE_PRICING_DISCLAIMER}
           </p>
           <ul className="mx-auto mt-4 max-w-xl list-inside list-disc text-left text-sm text-slate-400 md:text-center md:list-none md:space-y-1">
             <li>Book in one step · live availability · instant confirmation</li>

@@ -56,8 +56,9 @@ export default function BioGiftTicket({ ticket, className = '' }: BioGiftTicketP
 
   return (
     <article
-      className={`bio-gift-ticket relative overflow-hidden rounded-2xl border border-cyan-300/25 bg-[#071018] text-left shadow-[0_18px_50px_rgba(0,0,0,0.55)] ${className}`.trim()}
+      className={`bio-gift-ticket relative overflow-hidden rounded-2xl border border-cyan-300/25 bg-[#071018] text-left shadow-[0_18px_50px_rgba(0,0,0,0.55)] print:break-inside-avoid print:shadow-none ${className}`.trim()}
       aria-label={`Gift ticket ${ticket.giftCode}`}
+      data-gift-code={ticket.giftCode}
     >
       {/* Night lagoon atmosphere — CSS only, no clip art */}
       <div

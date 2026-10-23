@@ -2525,3 +2525,23 @@ body:has(.contact-page) {
     background: transparent !important;
   }
 }
+
+/* Bioluminescence gift tickets — print for letter / gift card */
+@media print {
+  .bio-gift-success {
+    background: #fff !important;
+  }
+
+  .bio-gift-ticket-print-stack {
+    margin-top: 0 !important;
+  }
+
+  .bio-gift-success .bio-gift-ticket {
+    break-inside: avoid;
+    page-break-inside: avoid;
+    box-shadow: none !important;
+    margin: 0 0 0.5in;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+}

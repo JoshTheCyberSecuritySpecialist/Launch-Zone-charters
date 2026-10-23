@@ -1,6 +1,7 @@
 /**
  * Bioluminescence gift checkout — Stripe payment without a departure date or capacity hold.
- * Draft + paid payloads live in checkout_drafts until the dedicated gift table (later phase).
+ * Paid tickets are written to gift_certificates (one row each) when the migration is applied.
+ * checkout_drafts remains a Stripe hold/draft mirror for recovery.
  */
 
 const crypto = require('crypto');
@@ -9,6 +10,7 @@ const {
   isDirectBioPackagePricingEnabled,
 } = require('../config/bioluminescencePackages');
 const { getActiveBioBookingSeason } = require('../config/bioluminescenceSeason');
+const giftCertificateService = require('./giftCertificateService');
 
 const BIO_GIFT_MIN_TICKETS = 1;
 const BIO_GIFT_MAX_TICKETS = 10;
@@ -399,6 +401,34 @@ async function finalizeBioGiftCheckoutFromSession({ stripe, supabase, sessionId,
     draftRow?.payload && typeof draftRow.payload === 'object' ? draftRow.payload : null;
 
   if (existingPayload?.kind === BIO_GIFT_KIND && existingPayload.status === 'paid') {
+    // Prefer authoritative gift_certificates rows when the migration is applied.
+    try {
+      const { rows, tableMissing } = await giftCertificateService.loadGiftCertificatesBySession(
+        supabase,
+        sid
+      );
+      if (!tableMissing && rows.length) {
+        const fromTable = giftCertificateService.payloadFromGiftCertificateRows(rows, sid);
+        return publicGiftResult(fromTable || existingPayload, { alreadyFinalized: true });
+      }
+      if (!tableMissing && !rows.length) {
+        await giftCertificateService.persistGiftCertificatesFromPaidPayload(
+          supabase,
+          existingPayload,
+          sid
+        );
+        const reloaded = await giftCertificateService.loadGiftCertificatesBySession(supabase, sid);
+        if (reloaded.rows.length) {
+          const fromTable = giftCertificateService.payloadFromGiftCertificateRows(
+            reloaded.rows,
+            sid
+          );
+          return publicGiftResult(fromTable || existingPayload, { alreadyFinalized: true });
+        }
+      }
+    } catch (persistErr) {
+      console.warn('[bio-gift/finalize] gift_certificates reload:', persistErr.message || persistErr);
+    }
     return publicGiftResult(existingPayload, { alreadyFinalized: true });
   }
 
@@ -499,11 +529,22 @@ async function finalizeBioGiftCheckoutFromSession({ stripe, supabase, sessionId,
     code: uniqueCodes[index],
   }));
 
+  let guestCount = null;
+  try {
+    if (base.packageId) {
+      const pkg = getBioluminescencePackage(base.packageId);
+      guestCount = giftCertificateService.guestCountForPackage(pkg);
+    }
+  } catch {
+    guestCount = null;
+  }
+
   const paidPayload = {
     ...base,
     kind: BIO_GIFT_KIND,
     status: 'paid',
     packageName: pkgName || base.packageName || 'Bioluminescence Gift',
+    guestCount,
     unitPriceCents: unitPriceCents || base.unitPriceCents || null,
     totalCents:
       base.totalCents ||
@@ -538,6 +579,17 @@ async function finalizeBioGiftCheckoutFromSession({ stripe, supabase, sessionId,
     throw err;
   }
 
+  const persistResult = await giftCertificateService.persistGiftCertificatesFromPaidPayload(
+    supabase,
+    paidPayload,
+    sid
+  );
+  if (persistResult.tableMissing) {
+    console.warn(
+      '[bio-gift/finalize] gift_certificates migration not applied yet; draft-only persistence.'
+    );
+  }
+
   console.info(
     '[bio-gift/finalize]',
     sid,
@@ -546,8 +598,18 @@ async function finalizeBioGiftCheckoutFromSession({ stripe, supabase, sessionId,
     'source=',
     source,
     'codes=',
-    uniqueCodes.join(',')
+    uniqueCodes.join(','),
+    'gift_rows=',
+    persistResult.inserted
   );
+
+  if (!persistResult.tableMissing && persistResult.rows?.length) {
+    const fromTable = giftCertificateService.payloadFromGiftCertificateRows(
+      persistResult.rows,
+      sid
+    );
+    return publicGiftResult(fromTable || paidPayload, { alreadyFinalized: false });
+  }
 
   return publicGiftResult(paidPayload, { alreadyFinalized: false });
 }

@@ -40,6 +40,7 @@ const bookingDateTimeRange = require('./lib/bookingDateTimeRange');
 const { isSharedCharterBooking, formatCapacityMessage } = require('./lib/sharedCharterCapacity');
 const shopService = require('./services/shopService');
 const bioGiftCheckout = require('./services/bioGiftCheckout');
+const bioGiftTicketPdf = require('./services/bioGiftTicketPdf');
 const disputeService = require('./services/disputeService');
 const disputeEvidenceService = require('./services/disputeEvidenceService');
 const disputeExportService = require('./services/disputeExportService');
@@ -8461,12 +8462,83 @@ app.post('/api/finalize-bio-gift-checkout-session', async (req, res) => {
       sessionId,
       source: 'success_page',
     });
+
+    // First confirmation: email PDF tickets to purchaser (idempotent via ticketEmailSentAt).
+    if (!out.alreadyFinalized && !out.ticketEmailSentAt && resend && resendFrom) {
+      try {
+        const emailed = await bioGiftTicketPdf.emailGiftTickets({
+          resend,
+          resendFrom,
+          supabase,
+          sessionId,
+          source: 'finalize',
+        });
+        out.ticketEmailSentAt = new Date().toISOString();
+        out.ticketEmailSentTo = emailed.to;
+      } catch (emailErr) {
+        console.warn(
+          '[finalize-bio-gift-checkout-session] ticket email skipped:',
+          emailErr.message || emailErr
+        );
+      }
+    }
+
     return res.json(out);
   } catch (err) {
     console.error('[finalize-bio-gift-checkout-session]', err);
     return res
       .status(err.statusCode || 500)
       .json({ error: err.message || 'Failed to finalize gift checkout' });
+  }
+});
+
+/** Download gift ticket PDF after Stripe payment (one page per ticket). */
+app.get('/api/bio-gift/tickets.pdf', async (req, res) => {
+  try {
+    if (!supabaseConfigured) {
+      return res.status(503).json({ error: 'Server not configured' });
+    }
+    const sessionId = String(req.query.sessionId || req.query.session_id || '').trim();
+    const ticketCode = String(req.query.code || req.query.ticketCode || '').trim();
+    const { payload } = await bioGiftTicketPdf.loadPaidGiftPayload(supabase, sessionId);
+    const pdfBuffer = await bioGiftTicketPdf.buildGiftTicketsPdfBuffer(payload, { ticketCode });
+    const year = Number(payload.seasonYear) || 2027;
+    const filename = bioGiftTicketPdf.safeFileName(
+      ticketCode
+        ? `LZC-gift-${ticketCode}`
+        : `LZC-${year}-bioluminescence-gift-tickets`,
+      'bioluminescence-gift-tickets'
+    );
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}.pdf"`);
+    return res.send(pdfBuffer);
+  } catch (err) {
+    console.error('[bio-gift/tickets.pdf]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not build gift ticket PDF' });
+  }
+});
+
+/** Email gift ticket PDF(s) to the purchaser. */
+app.post('/api/bio-gift/email-tickets', async (req, res) => {
+  try {
+    if (!supabaseConfigured) {
+      return res.status(503).json({ error: 'Server not configured' });
+    }
+    if (!resend || !resendFrom) {
+      return res.status(503).json({ error: 'Email is not configured right now.' });
+    }
+    const sessionId = String(req.body?.sessionId || req.body?.session_id || '').trim();
+    const out = await bioGiftTicketPdf.emailGiftTickets({
+      resend,
+      resendFrom,
+      supabase,
+      sessionId,
+      source: 'success_page',
+    });
+    return res.json(out);
+  } catch (err) {
+    console.error('[bio-gift/email-tickets]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not email gift tickets' });
   }
 });
 

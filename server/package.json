@@ -24,7 +24,7 @@
     "test:groupon-booking": "node --test tests/grouponImportService.test.js tests/grouponVoucherEligibility.test.js tests/grouponRequestNotifications.test.js tests/grouponApprovalService.test.js tests/adminSupportService.test.js tests/availabilityService.test.js",
     "test:bio-packages": "node tests/bioluminescencePackages.test.js && node tests/bioPackageCapacityCombinations.test.js && node tests/bioPackageLegacy.test.js && node tests/bioPackageStripeCheckout.test.js && node tests/bioFourFifthPassenger.test.js && node tests/charterDuration.test.js && node tests/bioSharedFillForward.test.js && node tests/bioAvailabilityRemainingSeats.test.js && node tests/bioPackagePromotion.test.js && node tests/charterFleetAllocation.test.js && node tests/charterFleetAtomic.test.js && node tests/bioluminescenceSeason.test.js",
     "test:bio-season": "node tests/bioluminescenceSeason.test.js",
-    "test:bio-gift": "node tests/bioGiftCheckout.test.js",
+    "test:bio-gift": "node tests/bioGiftCheckout.test.js && node tests/bioGiftTicketPdf.test.js && node tests/giftCertificateService.test.js",
     "test:rocket-packages": "node tests/rocketLaunchPackages.test.js && node tests/rocketDepartureCapacity.test.js && node tests/rocketLaunchEmailService.test.js && node tests/rocketDepartureAdmin.test.js && node tests/rocketLaunchAvailability.test.js",
     "test:sunset-packages": "node tests/sunsetPackages.test.js",
     "test:admin-ops": "node tests/adminOperationsDashboard.test.js && node tests/charterDualCaptainRules.test.js",

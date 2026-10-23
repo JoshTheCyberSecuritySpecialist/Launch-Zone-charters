@@ -8,6 +8,7 @@ const path = require('path');
 const PDFDocument = require('pdfkit');
 const QRCode = require('qrcode');
 const { getBioluminescencePackage } = require('../config/bioluminescencePackages');
+const giftCertificateService = require('./giftCertificateService');
 
 const BIO_GIFT_KIND = 'bio_gift';
 const TAGLINE = 'YOUR NIGHT ON THE GLOWING WATER AWAITS';
@@ -112,6 +113,14 @@ async function loadPaidGiftPayload(supabase, sessionId) {
     err.statusCode = 400;
     throw err;
   }
+
+  // Prefer gift_certificates (Phase 8) when the migration is applied.
+  const fromTable = await giftCertificateService.loadGiftCertificatesBySession(supabase, sid);
+  if (!fromTable.tableMissing && fromTable.rows.length) {
+    const payload = giftCertificateService.payloadFromGiftCertificateRows(fromTable.rows, sid);
+    if (payload) return { sessionId: sid, payload, source: 'gift_certificates' };
+  }
+
   const { data, error } = await supabase
     .from('checkout_drafts')
     .select('stripe_session_id, payload')
@@ -133,7 +142,13 @@ async function loadPaidGiftPayload(supabase, sessionId) {
     err.statusCode = 402;
     throw err;
   }
-  return { sessionId: sid, payload };
+
+  // Backfill table rows from draft if migration just landed.
+  if (!fromTable.tableMissing) {
+    await giftCertificateService.persistGiftCertificatesFromPaidPayload(supabase, payload, sid);
+  }
+
+  return { sessionId: sid, payload, source: 'checkout_drafts' };
 }
 
 function drawTicketPage(doc, ticket, payload, qrPng, logoPath, ticketCount) {
@@ -436,9 +451,12 @@ async function emailGiftTickets({
     ],
   });
 
+  const sentAt = new Date().toISOString();
+  await giftCertificateService.markGiftCertificateEmailSent(supabase, sessionId, sentAt);
+
   const nextPayload = {
     ...payload,
-    ticketEmailSentAt: new Date().toISOString(),
+    ticketEmailSentAt: sentAt,
     ticketEmailSentTo: to,
     ticketEmailSource: source,
   };

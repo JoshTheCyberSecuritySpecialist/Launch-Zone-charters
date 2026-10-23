@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Helmet } from 'react-helmet-async';
 import { Link, useSearchParams } from 'react-router-dom';
-import { CheckCircle, Loader2 } from 'lucide-react';
+import { CheckCircle, Download, Loader2, Mail, Printer } from 'lucide-react';
 import BioGiftTicket from '../components/gift/BioGiftTicket';
 import { BIO_GIFT_NO_DATE_MESSAGE } from '../lib/bioGiftBooking';
+import { downloadBioGiftTicketsPdf, emailBioGiftTickets } from '../lib/bioGiftTicketApi';
 import { buildBioGiftTicketViewModel } from '../lib/bioGiftTicket';
 import { env } from '../config/env.js';
 
@@ -33,6 +34,9 @@ type GiftFinalizeResult = {
   seasonYear?: number;
   seasonStart?: string | null;
   seasonEnd?: string | null;
+  purchaserEmail?: string | null;
+  ticketEmailSentAt?: string | null;
+  ticketEmailSentTo?: string | null;
   alreadyFinalized?: boolean;
   error?: string;
 };
@@ -44,6 +48,9 @@ export default function BioGiftSuccess({ onNavigate }: BioGiftSuccessProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [result, setResult] = useState<GiftFinalizeResult | null>(null);
+  const [actionBusy, setActionBusy] = useState<'download' | 'email' | null>(null);
+  const [actionMessage, setActionMessage] = useState('');
+  const [actionError, setActionError] = useState('');
   const finalizedRef = useRef(false);
 
   useEffect(() => {
@@ -72,6 +79,13 @@ export default function BioGiftSuccess({ onNavigate }: BioGiftSuccessProps) {
           throw new Error(data.error || 'Could not confirm your gift purchase.');
         }
         setResult(data);
+        if (data.ticketEmailSentTo || data.ticketEmailSentAt) {
+          setActionMessage(
+            data.ticketEmailSentTo
+              ? `Gift ticket PDF sent to ${data.ticketEmailSentTo}.`
+              : 'Gift ticket PDF emailed to the purchaser.'
+          );
+        }
         setLoading(false);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Could not confirm your gift purchase.');
@@ -115,8 +129,57 @@ export default function BioGiftSuccess({ onNavigate }: BioGiftSuccessProps) {
     [ticketRows, result]
   );
 
+  const handleDownload = async () => {
+    if (!sessionId) return;
+    setActionBusy('download');
+    setActionError('');
+    try {
+      const year = result?.seasonYear || 2027;
+      await downloadBioGiftTicketsPdf(sessionId, {
+        filenameHint: `LZC-${year}-bioluminescence-gift-tickets.pdf`,
+      });
+      setActionMessage('PDF download started.');
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Could not download PDF.');
+    } finally {
+      setActionBusy(null);
+    }
+  };
+
+  const handlePrint = () => {
+    setActionError('');
+    window.print();
+  };
+
+  const handleEmail = async () => {
+    if (!sessionId) return;
+    setActionBusy('email');
+    setActionError('');
+    try {
+      const out = await emailBioGiftTickets(sessionId);
+      setActionMessage(
+        out.to
+          ? `Gift ticket PDF sent to ${out.to}.`
+          : 'Gift ticket PDF emailed to the purchaser.'
+      );
+      setResult((prev) =>
+        prev
+          ? {
+              ...prev,
+              ticketEmailSentAt: new Date().toISOString(),
+              ticketEmailSentTo: out.to || prev.ticketEmailSentTo,
+            }
+          : prev
+      );
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Could not email gift tickets.');
+    } finally {
+      setActionBusy(null);
+    }
+  };
+
   return (
-    <div className="min-h-screen bg-[#020617] text-slate-200">
+    <div className="bio-gift-success min-h-screen bg-[#020617] text-slate-200">
       <Helmet>
         <title>Gift Confirmed | Launch Zone Charters</title>
         <meta name="robots" content="noindex" />
@@ -124,12 +187,12 @@ export default function BioGiftSuccess({ onNavigate }: BioGiftSuccessProps) {
 
       <div className="mx-auto max-w-3xl px-4 py-12 sm:px-6 sm:py-16">
         {loading ? (
-          <div className="flex flex-col items-center text-center" role="status">
+          <div className="flex flex-col items-center text-center print:hidden" role="status">
             <Loader2 className="h-10 w-10 animate-spin text-cyan-400 motion-reduce:animate-none" aria-hidden />
             <p className="mt-4 text-slate-300">Confirming your gift purchase…</p>
           </div>
         ) : error ? (
-          <div className="rounded-2xl border border-amber-500/30 bg-amber-950/20 p-8 text-center">
+          <div className="rounded-2xl border border-amber-500/30 bg-amber-950/20 p-8 text-center print:hidden">
             <p className="text-lg font-semibold text-amber-100">We received your payment</p>
             <p className="mt-3 text-sm leading-relaxed text-slate-300">{error}</p>
             <p className="mt-4 text-sm text-slate-400">
@@ -142,24 +205,63 @@ export default function BioGiftSuccess({ onNavigate }: BioGiftSuccessProps) {
           </div>
         ) : (
           <div>
-            <div className="text-center">
+            <div className="text-center print:hidden">
               <CheckCircle className="mx-auto h-14 w-14 text-emerald-400" aria-hidden />
               <h1 className="mt-6 font-display text-3xl font-bold text-white">Gift purchase confirmed</h1>
               <p className="mx-auto mt-3 max-w-md text-slate-300">{BIO_GIFT_NO_DATE_MESSAGE}</p>
               <p className="mx-auto mt-2 max-w-lg text-sm text-slate-400">
-                Your adventure tickets are ready. Download, print, and email options come next.
+                Download a PDF, print for a card or envelope, or email the tickets to yourself.
               </p>
             </div>
 
-            <div className="mt-10 space-y-8">
+            <div className="bio-gift-success-actions mt-8 flex flex-col gap-3 print:hidden sm:flex-row sm:flex-wrap sm:justify-center">
+              <button
+                type="button"
+                className="lz-btn-primary inline-flex min-h-[48px] items-center justify-center gap-2 px-5"
+                disabled={actionBusy !== null || !sessionId}
+                onClick={() => void handleDownload()}
+              >
+                <Download className="h-4 w-4" aria-hidden />
+                {actionBusy === 'download' ? 'Preparing PDF…' : 'Download ticket'}
+              </button>
+              <button
+                type="button"
+                className="lz-btn-secondary inline-flex min-h-[48px] items-center justify-center gap-2 px-5"
+                disabled={actionBusy !== null}
+                onClick={handlePrint}
+              >
+                <Printer className="h-4 w-4" aria-hidden />
+                Print ticket
+              </button>
+              <button
+                type="button"
+                className="inline-flex min-h-[48px] items-center justify-center gap-2 rounded-xl border-2 border-[var(--lz-cta)] bg-[rgba(255,140,43,0.12)] px-5 text-sm font-bold uppercase tracking-[0.08em] text-[var(--lz-cta)] transition hover:bg-[rgba(255,140,43,0.2)] disabled:opacity-60"
+                disabled={actionBusy !== null || !sessionId}
+                onClick={() => void handleEmail()}
+              >
+                <Mail className="h-4 w-4" aria-hidden />
+                {actionBusy === 'email' ? 'Sending…' : 'Email ticket'}
+              </button>
+            </div>
+
+            {actionMessage ? (
+              <p className="mt-4 text-center text-sm text-emerald-300/90 print:hidden" role="status">
+                {actionMessage}
+              </p>
+            ) : null}
+            {actionError ? (
+              <p className="mt-4 text-center text-sm text-amber-200 print:hidden" role="alert">
+                {actionError}
+              </p>
+            ) : null}
+
+            <div className="bio-gift-ticket-print-stack mt-10 space-y-8">
               {ticketViews.map((ticket) =>
-                ticket ? (
-                  <BioGiftTicket key={ticket.giftCode} ticket={ticket} />
-                ) : null
+                ticket ? <BioGiftTicket key={ticket.giftCode} ticket={ticket} /> : null
               )}
             </div>
 
-            <div className="mt-10 flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
+            <div className="mt-10 flex flex-col items-center gap-3 print:hidden sm:flex-row sm:justify-center">
               <Link to="/" className="lz-btn-primary min-h-[48px] px-6">
                 Back to home
               </Link>

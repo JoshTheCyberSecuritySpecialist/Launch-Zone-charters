@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Shield, Award, Star, ClipboardCheck } from 'lucide-react';
+import { X, Shield, Award, Star, ClipboardCheck, Gift } from 'lucide-react';
 import { useAuth } from '../contexts/useAuth';
 import Logo from './ui/Logo';
 import { perfActionSegment, wrapSyncClick } from '../lib/clickPerf';
+import { useBioGiftStorefrontOpen } from '../lib/bioGiftSalesStatus';
 
 interface HeaderProps {
   onNavigate: (page: string) => void;
@@ -89,6 +90,7 @@ function TrustTickerIcon({ kind }: { kind: 'shield' | 'award' | 'star' | 'clipbo
 export default function Header({ onNavigate, currentPage }: HeaderProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const { isAdmin } = useAuth();
+  const giftStorefrontOpen = useBioGiftStorefrontOpen();
   const headerRef = useRef<HTMLElement>(null);
   const lastScrollY = useRef(0);
 
@@ -228,6 +230,21 @@ export default function Header({ onNavigate, currentPage }: HeaderProps) {
           </div>
 
           <nav className="lz-nav-drawer__body flex flex-col gap-6" aria-label="Primary">
+            {giftStorefrontOpen ? (
+              <div className="px-0">
+                <button
+                  type="button"
+                  onClick={() => handleNavigation('book-gift')}
+                  className="lz-nav-drawer__gift"
+                >
+                  <Gift className="h-5 w-5 shrink-0" aria-hidden />
+                  Gift a Charter
+                </button>
+                <p className="mt-2 text-center text-[11px] leading-snug text-slate-400">
+                  2027 bioluminescence gift tickets — redeem for an available night later
+                </p>
+              </div>
+            ) : null}
             {MENU_SECTIONS.map((section, idx) => (
               <div key={section.title} className={idx === 0 ? '' : 'border-t border-white/10 pt-5'}>
                 <h3 className="lz-nav-drawer__section-title">{section.title}</h3>
@@ -390,6 +407,28 @@ export default function Header({ onNavigate, currentPage }: HeaderProps) {
               >
                 Book Direct
               </button>
+              {giftStorefrontOpen ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => handleNavigation('book-gift')}
+                    className="lz-btn-nav-gift lz-btn-nav-gift--toolbar hidden shrink-0 whitespace-nowrap sm:inline-flex"
+                  >
+                    <Gift className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                    <span className="hidden lg:inline">Gift a Charter</span>
+                    <span className="lg:hidden">Gift</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleNavigation('book-gift')}
+                    className="lz-btn-nav-gift lz-btn-nav-gift--icon inline-flex sm:hidden"
+                    aria-label="Gift a Charter"
+                    title="Gift a Charter"
+                  >
+                    <Gift className="h-5 w-5" aria-hidden />
+                  </button>
+                </>
+              ) : null}
               <button
                 type="button"
                 onClick={() => handleNavigation('experiences')}

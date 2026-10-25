@@ -228,6 +228,160 @@ async function markGiftCertificateEmailSent(supabase, sessionId, sentAt = new Da
   return { updated: Array.isArray(data) ? data.length : 0, tableMissing: false };
 }
 
+/**
+ * Conditional claim: only succeeds when status is still `active`.
+ * Caller must roll back the booking if this returns ok:false.
+ */
+async function claimGiftCertificateRedemption(
+  supabase,
+  { giftCode, bookingId, redeemedAt = new Date().toISOString() } = {}
+) {
+  const code = String(giftCode || '')
+    .trim()
+    .toUpperCase();
+  const bid = String(bookingId || '').trim();
+  if (!code || !bid) {
+    return { ok: false, code: 'gift_claim_invalid', message: 'Gift code and booking are required.' };
+  }
+
+  const { data, error } = await supabase
+    .from('gift_certificates')
+    .update({
+      status: 'redeemed',
+      redeemed_booking_id: bid,
+      redeemed_at: redeemedAt,
+      updated_at: redeemedAt,
+    })
+    .eq('gift_code', code)
+    .eq('status', 'active')
+    .select('id, gift_code, status, redeemed_booking_id, redeemed_at')
+    .maybeSingle();
+
+  if (error) {
+    if (isMissingGiftCertificatesTable(error)) {
+      return {
+        ok: false,
+        code: 'gift_table_missing',
+        message: 'Gift certificates are not available yet.',
+      };
+    }
+    console.error('[gift-certificates] redeem claim:', error.message || error);
+    return {
+      ok: false,
+      code: 'gift_claim_failed',
+      message: error.message || 'Could not redeem gift certificate.',
+    };
+  }
+
+  if (!data) {
+    return {
+      ok: false,
+      code: 'gift_already_redeemed',
+      message: 'This gift ticket was just redeemed. Please use another ticket.',
+    };
+  }
+
+  return { ok: true, row: data };
+}
+
+/**
+ * Mark unpaid-redeem gift tickets as refunded after a Stripe refund.
+ * Does not change already-redeemed rows (booking already consumes capacity).
+ */
+async function markGiftCertificatesRefunded(
+  supabase,
+  { paymentIntentId = null, checkoutSessionId = null, source = 'stripe_refund' } = {}
+) {
+  const pi = String(paymentIntentId || '').trim();
+  const sid = String(checkoutSessionId || '').trim();
+  if (!pi && !sid) {
+    return { updated: 0, skippedRedeemed: 0, alreadyRefunded: 0, rows: [], tableMissing: false };
+  }
+
+  let lookup = supabase
+    .from('gift_certificates')
+    .select('id, gift_code, status, stripe_payment_intent_id, stripe_checkout_session_id');
+
+  if (pi && sid) {
+    lookup = lookup.or(
+      `stripe_payment_intent_id.eq.${pi},stripe_checkout_session_id.eq.${sid}`
+    );
+  } else if (pi) {
+    lookup = lookup.eq('stripe_payment_intent_id', pi);
+  } else {
+    lookup = lookup.eq('stripe_checkout_session_id', sid);
+  }
+
+  const { data: found, error: loadErr } = await lookup;
+  if (loadErr) {
+    if (isMissingGiftCertificatesTable(loadErr)) {
+      return { updated: 0, skippedRedeemed: 0, alreadyRefunded: 0, rows: [], tableMissing: true };
+    }
+    console.error('[gift-certificates] refund lookup:', loadErr.message || loadErr);
+    const err = new Error(loadErr.message || 'Could not look up gift certificates for refund.');
+    err.statusCode = 500;
+    throw err;
+  }
+
+  const rows = Array.isArray(found) ? found : [];
+  if (!rows.length) {
+    return { updated: 0, skippedRedeemed: 0, alreadyRefunded: 0, rows: [], tableMissing: false };
+  }
+
+  const skippedRedeemed = rows.filter((r) => String(r.status).toLowerCase() === 'redeemed');
+  const alreadyRefunded = rows.filter((r) => String(r.status).toLowerCase() === 'refunded');
+  const toRefund = rows.filter((r) => {
+    const s = String(r.status || '').toLowerCase();
+    return s === 'active' || s === 'cancelled';
+  });
+
+  if (!toRefund.length) {
+    return {
+      updated: 0,
+      skippedRedeemed: skippedRedeemed.length,
+      alreadyRefunded: alreadyRefunded.length,
+      rows: [],
+      skippedRedeemedRows: skippedRedeemed,
+      tableMissing: false,
+      source,
+    };
+  }
+
+  const now = new Date().toISOString();
+  const ids = toRefund.map((r) => r.id);
+  const { data: updated, error: updErr } = await supabase
+    .from('gift_certificates')
+    .update({
+      status: 'refunded',
+      redeemed_booking_id: null,
+      redeemed_at: null,
+      updated_at: now,
+    })
+    .in('id', ids)
+    .in('status', ['active', 'cancelled'])
+    .select('id, gift_code, status');
+
+  if (updErr) {
+    if (isMissingGiftCertificatesTable(updErr)) {
+      return { updated: 0, skippedRedeemed: 0, alreadyRefunded: 0, rows: [], tableMissing: true };
+    }
+    console.error('[gift-certificates] refund update:', updErr.message || updErr);
+    const err = new Error(updErr.message || 'Could not mark gift certificates refunded.');
+    err.statusCode = 500;
+    throw err;
+  }
+
+  return {
+    updated: Array.isArray(updated) ? updated.length : 0,
+    skippedRedeemed: skippedRedeemed.length,
+    alreadyRefunded: alreadyRefunded.length,
+    rows: updated || [],
+    skippedRedeemedRows: skippedRedeemed,
+    tableMissing: false,
+    source,
+  };
+}
+
 module.exports = {
   GIFT_CERTIFICATE_STATUSES,
   isMissingGiftCertificatesTable,
@@ -236,5 +390,7 @@ module.exports = {
   loadGiftCertificatesBySession,
   loadGiftCertificateByCode,
   markGiftCertificateEmailSent,
+  claimGiftCertificateRedemption,
+  markGiftCertificatesRefunded,
   guestCountForPackage,
 };

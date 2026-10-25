@@ -52,7 +52,17 @@ type BookingType = 'rental' | 'captain_charter';
 type CharterProduct = 'general' | 'bio_night' | 'rocket_launch' | 'sunset';
 type LocationValue = 'Port Orange' | 'Titusville';
 type PaymentStatus = 'pending' | 'deposit_paid' | 'paid';
-type PaymentMethod = '' | 'stripe' | 'cash' | 'venmo' | 'zelle' | 'paypal' | 'groupon' | 'comp' | 'other';
+type PaymentMethod =
+  | ''
+  | 'stripe'
+  | 'cash'
+  | 'venmo'
+  | 'zelle'
+  | 'paypal'
+  | 'groupon'
+  | 'comp'
+  | 'other'
+  | 'gift_certificate';
 
 type BoatRow = {
   id: string;
@@ -1432,6 +1442,7 @@ export default function AdminStaffBooking() {
                   <option value="zelle">Zelle</option>
                   <option value="paypal">PayPal</option>
                   <option value="groupon">Groupon</option>
+                  <option value="gift_certificate">Gift certificate</option>
                   <option value="comp">Comp</option>
                   <option value="other">Other</option>
                 </select>

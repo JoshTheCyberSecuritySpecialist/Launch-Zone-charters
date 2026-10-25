@@ -1,11 +1,24 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Helmet } from 'react-helmet-async';
 import { Link, useSearchParams } from 'react-router-dom';
-import { CheckCircle, Download, Loader2, Mail, Printer } from 'lucide-react';
+import { CheckCircle, Download, Image as ImageIcon, Loader2, Mail, Printer } from 'lucide-react';
 import BioGiftTicket from '../components/gift/BioGiftTicket';
 import { BIO_GIFT_NO_DATE_MESSAGE } from '../lib/bioGiftBooking';
-import { downloadBioGiftTicketsPdf, emailBioGiftTickets } from '../lib/bioGiftTicketApi';
+import {
+  downloadBioGiftTicketsPdf,
+  downloadBioGiftTicketsPng,
+  emailBioGiftTickets,
+  saveBioGiftTicketTheme,
+} from '../lib/bioGiftTicketApi';
 import { buildBioGiftTicketViewModel } from '../lib/bioGiftTicket';
+import {
+  BIO_GIFT_TICKET_THEME_IDS,
+  BIO_GIFT_TICKET_THEMES,
+  normalizeBioGiftTicketTheme,
+  readStoredBioGiftTheme,
+  writeStoredBioGiftTheme,
+  type BioGiftTicketThemeId,
+} from '../lib/bioGiftTicketThemes';
 import { env } from '../config/env.js';
 
 interface BioGiftSuccessProps {
@@ -37,6 +50,7 @@ type GiftFinalizeResult = {
   purchaserEmail?: string | null;
   ticketEmailSentAt?: string | null;
   ticketEmailSentTo?: string | null;
+  ticketTheme?: string | null;
   alreadyFinalized?: boolean;
   error?: string;
 };
@@ -48,10 +62,12 @@ export default function BioGiftSuccess({ onNavigate }: BioGiftSuccessProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [result, setResult] = useState<GiftFinalizeResult | null>(null);
-  const [actionBusy, setActionBusy] = useState<'download' | 'email' | null>(null);
+  const [theme, setTheme] = useState<BioGiftTicketThemeId>('glow');
+  const [actionBusy, setActionBusy] = useState<'pdf' | 'png' | 'email' | null>(null);
   const [actionMessage, setActionMessage] = useState('');
   const [actionError, setActionError] = useState('');
   const finalizedRef = useRef(false);
+  const ticketNodeRefs = useRef<Array<HTMLElement | null>>([]);
 
   useEffect(() => {
     if (!sessionId) {
@@ -79,6 +95,10 @@ export default function BioGiftSuccess({ onNavigate }: BioGiftSuccessProps) {
           throw new Error(data.error || 'Could not confirm your gift purchase.');
         }
         setResult(data);
+        const stored = readStoredBioGiftTheme(sessionId);
+        const nextTheme = normalizeBioGiftTicketTheme(data.ticketTheme || stored || 'glow');
+        setTheme(nextTheme);
+        writeStoredBioGiftTheme(sessionId, nextTheme);
         if (data.ticketEmailSentTo || data.ticketEmailSentAt) {
           setActionMessage(
             data.ticketEmailSentTo
@@ -129,18 +149,51 @@ export default function BioGiftSuccess({ onNavigate }: BioGiftSuccessProps) {
     [ticketRows, result]
   );
 
-  const handleDownload = async () => {
+  const handleThemeChange = useCallback(
+    (next: BioGiftTicketThemeId) => {
+      setTheme(next);
+      if (sessionId) writeStoredBioGiftTheme(sessionId, next);
+      if (!sessionId || !env.apiUrlConfigured) return;
+      void saveBioGiftTicketTheme(sessionId, next)
+        .then(() => {
+          setResult((prev) => (prev ? { ...prev, ticketTheme: next } : prev));
+        })
+        .catch(() => {
+          /* local selection still applies for on-screen / PNG */
+        });
+    },
+    [sessionId]
+  );
+
+  const handleDownloadPdf = async () => {
     if (!sessionId) return;
-    setActionBusy('download');
+    setActionBusy('pdf');
     setActionError('');
     try {
       const year = result?.seasonYear || 2027;
       await downloadBioGiftTicketsPdf(sessionId, {
+        theme,
         filenameHint: `LZC-${year}-bioluminescence-gift-tickets.pdf`,
       });
       setActionMessage('PDF download started.');
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Could not download PDF.');
+    } finally {
+      setActionBusy(null);
+    }
+  };
+
+  const handleDownloadPng = async () => {
+    setActionBusy('png');
+    setActionError('');
+    try {
+      const year = result?.seasonYear || 2027;
+      const count = await downloadBioGiftTicketsPng(ticketNodeRefs.current, {
+        filenamePrefix: `LZC-${year}-gift`,
+      });
+      setActionMessage(count === 1 ? 'PNG download started.' : `${count} PNG downloads started.`);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Could not export PNG.');
     } finally {
       setActionBusy(null);
     }
@@ -156,6 +209,8 @@ export default function BioGiftSuccess({ onNavigate }: BioGiftSuccessProps) {
     setActionBusy('email');
     setActionError('');
     try {
+      // Persist theme first so emailed PDF matches the on-screen design.
+      await saveBioGiftTicketTheme(sessionId, theme).catch(() => null);
       const out = await emailBioGiftTickets(sessionId);
       setActionMessage(
         out.to
@@ -166,6 +221,7 @@ export default function BioGiftSuccess({ onNavigate }: BioGiftSuccessProps) {
         prev
           ? {
               ...prev,
+              ticketTheme: theme,
               ticketEmailSentAt: new Date().toISOString(),
               ticketEmailSentTo: out.to || prev.ticketEmailSentTo,
             }
@@ -210,8 +266,36 @@ export default function BioGiftSuccess({ onNavigate }: BioGiftSuccessProps) {
               <h1 className="mt-6 font-display text-3xl font-bold text-white">Gift purchase confirmed</h1>
               <p className="mx-auto mt-3 max-w-md text-slate-300">{BIO_GIFT_NO_DATE_MESSAGE}</p>
               <p className="mx-auto mt-2 max-w-lg text-sm text-slate-400">
-                Download a PDF, print for a card or envelope, or email the tickets to yourself.
+                Pick a ticket look, then download PDF or PNG, print, or email.
               </p>
+            </div>
+
+            <div className="mt-8 print:hidden" role="group" aria-label="Ticket theme">
+              <p className="mb-3 text-center text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
+                Ticket design
+              </p>
+              <div className="flex flex-col gap-2 sm:flex-row sm:justify-center">
+                {BIO_GIFT_TICKET_THEME_IDS.map((id) => {
+                  const meta = BIO_GIFT_TICKET_THEMES[id];
+                  const selected = theme === id;
+                  return (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() => handleThemeChange(id)}
+                      className={`rounded-xl border px-4 py-3 text-left transition ${meta.chipClass} ${
+                        selected ? 'ring-2 ring-white/70' : 'opacity-80 hover:opacity-100'
+                      }`}
+                      aria-pressed={selected}
+                    >
+                      <span className="block text-sm font-bold">{meta.shortLabel}</span>
+                      <span className="mt-0.5 block text-[11px] leading-snug opacity-90">
+                        {meta.description}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
             <div className="bio-gift-success-actions mt-8 flex flex-col gap-3 print:hidden sm:flex-row sm:flex-wrap sm:justify-center">
@@ -219,10 +303,19 @@ export default function BioGiftSuccess({ onNavigate }: BioGiftSuccessProps) {
                 type="button"
                 className="lz-btn-primary inline-flex min-h-[48px] items-center justify-center gap-2 px-5"
                 disabled={actionBusy !== null || !sessionId}
-                onClick={() => void handleDownload()}
+                onClick={() => void handleDownloadPdf()}
               >
                 <Download className="h-4 w-4" aria-hidden />
-                {actionBusy === 'download' ? 'Preparing PDF…' : 'Download ticket'}
+                {actionBusy === 'pdf' ? 'Preparing PDF…' : 'Download PDF'}
+              </button>
+              <button
+                type="button"
+                className="lz-btn-secondary inline-flex min-h-[48px] items-center justify-center gap-2 px-5"
+                disabled={actionBusy !== null || ticketViews.length === 0}
+                onClick={() => void handleDownloadPng()}
+              >
+                <ImageIcon className="h-4 w-4" aria-hidden />
+                {actionBusy === 'png' ? 'Preparing PNG…' : 'Download PNG'}
               </button>
               <button
                 type="button"
@@ -256,8 +349,17 @@ export default function BioGiftSuccess({ onNavigate }: BioGiftSuccessProps) {
             ) : null}
 
             <div className="bio-gift-ticket-print-stack mt-10 space-y-8">
-              {ticketViews.map((ticket) =>
-                ticket ? <BioGiftTicket key={ticket.giftCode} ticket={ticket} /> : null
+              {ticketViews.map((ticket, index) =>
+                ticket ? (
+                  <BioGiftTicket
+                    key={ticket.giftCode}
+                    ref={(el) => {
+                      ticketNodeRefs.current[index] = el;
+                    }}
+                    ticket={ticket}
+                    theme={theme}
+                  />
+                ) : null
               )}
             </div>
 

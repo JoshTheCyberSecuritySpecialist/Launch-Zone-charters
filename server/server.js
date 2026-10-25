@@ -41,6 +41,8 @@ const { isSharedCharterBooking, formatCapacityMessage } = require('./lib/sharedC
 const shopService = require('./services/shopService');
 const bioGiftCheckout = require('./services/bioGiftCheckout');
 const bioGiftTicketPdf = require('./services/bioGiftTicketPdf');
+const giftCertificateRedeemService = require('./services/giftCertificateRedeemService');
+const giftCertificateAdminService = require('./services/giftCertificateAdminService');
 const disputeService = require('./services/disputeService');
 const disputeEvidenceService = require('./services/disputeEvidenceService');
 const disputeExportService = require('./services/disputeExportService');
@@ -1877,6 +1879,25 @@ async function processStripeWebhookEvent(event) {
           sessionId: session.id,
           source: 'stripe_webhook',
         });
+        if (!out.ticketEmailSentAt && resend && resendFrom) {
+          try {
+            const emailed = await bioGiftTicketPdf.emailGiftTickets({
+              resend,
+              resendFrom,
+              supabase,
+              sessionId: session.id,
+              source: 'stripe_webhook',
+            });
+            out.ticketEmailSentAt = new Date().toISOString();
+            out.ticketEmailSentTo = emailed.to;
+          } catch (emailErr) {
+            console.warn(
+              '[stripe-webhook] bio gift email skipped:',
+              session.id,
+              emailErr.message || emailErr
+            );
+          }
+        }
         await bookingReliability.updateWebhookEventStatus(supabase, eventId, 'processed', {
           error: null,
         });
@@ -1889,6 +1910,7 @@ async function processStripeWebhookEvent(event) {
             event_id: eventId,
             ticket_quantity: out.ticketQuantity,
             alreadyFinalized: out.alreadyFinalized,
+            ticket_email_sent: Boolean(out.ticketEmailSentAt),
           },
         });
         console.log(
@@ -1896,7 +1918,9 @@ async function processStripeWebhookEvent(event) {
           session.id,
           out.alreadyFinalized ? '(idempotent)' : '',
           'tickets=',
-          out.ticketQuantity
+          out.ticketQuantity,
+          'email=',
+          out.ticketEmailSentAt ? 'sent' : 'pending'
         );
         return { ok: true, gift: true, ticketQuantity: out.ticketQuantity };
       } catch (err) {
@@ -2071,6 +2095,50 @@ async function processStripeWebhookEvent(event) {
   }
 
   if (eventType === 'charge.refunded' || eventType.startsWith('refund.')) {
+    const giftCertificateService = require('./services/giftCertificateService');
+    let giftRefund = {
+      updated: 0,
+      skippedRedeemed: 0,
+      alreadyRefunded: 0,
+      rows: [],
+    };
+    try {
+      giftRefund = await giftCertificateService.markGiftCertificatesRefunded(supabase, {
+        paymentIntentId: ids.paymentIntentId || null,
+        checkoutSessionId: ids.checkoutSessionId || null,
+        source: eventType,
+      });
+      if (giftRefund.updated > 0 || giftRefund.skippedRedeemed > 0) {
+        await bookingReliability.insertActivity(supabase, {
+          checkout_session_id: ids.checkoutSessionId || null,
+          payment_intent_id: ids.paymentIntentId || null,
+          event_type: 'bio_gift_refunded',
+          message:
+            giftRefund.updated > 0
+              ? `Marked ${giftRefund.updated} gift ticket(s) refunded after Stripe ${eventType}.`
+              : `Stripe ${eventType} for gift payment; ${giftRefund.skippedRedeemed} ticket(s) already redeemed (status unchanged).`,
+          payload: {
+            event_id: eventId,
+            event_type: eventType,
+            updated: giftRefund.updated,
+            skipped_redeemed: giftRefund.skippedRedeemed,
+            gift_codes: (giftRefund.rows || []).map((r) => r.gift_code),
+            skipped_codes: (giftRefund.skippedRedeemedRows || []).map((r) => r.gift_code),
+          },
+        });
+        console.log(
+          '[stripe-webhook] gift certificates refunded=',
+          giftRefund.updated,
+          'skipped_redeemed=',
+          giftRefund.skippedRedeemed,
+          'pi=',
+          ids.paymentIntentId || null
+        );
+      }
+    } catch (giftErr) {
+      console.warn('[stripe-webhook] gift refund sync:', giftErr.message || giftErr);
+    }
+
     const { data: shopOrder } = await supabase
       .from('shop_orders')
       .select('id')
@@ -2091,7 +2159,7 @@ async function processStripeWebhookEvent(event) {
       await bookingReliability.updateWebhookEventStatus(supabase, eventId, 'processed', {
         error: null,
       });
-      return { ok: true, orderId: shopOrder.id };
+      return { ok: true, orderId: shopOrder.id, giftUpdated: giftRefund.updated };
     }
 
     const { data: booking } = await supabase
@@ -2118,7 +2186,7 @@ async function processStripeWebhookEvent(event) {
     await bookingReliability.updateWebhookEventStatus(supabase, eventId, 'processed', {
       booking_id: booking?.id || null,
     });
-    return { ok: true };
+    return { ok: true, giftUpdated: giftRefund.updated };
   }
 
   if (eventType.startsWith('charge.dispute.')) {
@@ -8424,6 +8492,25 @@ app.post('/api/shop/create-checkout-session', async (req, res) => {
   }
 });
 
+/** Public: whether the gift storefront should be offered (nav CTA, marketing). */
+app.get('/api/bio-gift/sales-status', async (_req, res) => {
+  try {
+    return res.json({
+      salesEnabled: giftCertificateAdminService.isGiftSalesEnabled(),
+      storefrontOpen: giftCertificateAdminService.isGiftStorefrontOpen(),
+      giftPath: '/booking/gift',
+    });
+  } catch (err) {
+    console.error('[bio-gift/sales-status]', err);
+    return res.status(500).json({
+      salesEnabled: false,
+      storefrontOpen: false,
+      giftPath: '/booking/gift',
+      error: 'Could not load gift sales status',
+    });
+  }
+});
+
 /** Bioluminescence gift checkout — no departure date; does not hold boat capacity. */
 app.post('/api/create-bio-gift-checkout-session', async (req, res) => {
   try {
@@ -8463,8 +8550,8 @@ app.post('/api/finalize-bio-gift-checkout-session', async (req, res) => {
       source: 'success_page',
     });
 
-    // First confirmation: email PDF tickets to purchaser (idempotent via ticketEmailSentAt).
-    if (!out.alreadyFinalized && !out.ticketEmailSentAt && resend && resendFrom) {
+    // Email PDF whenever not yet stamped — including webhook-first finalize (idempotent).
+    if (!out.ticketEmailSentAt && resend && resendFrom) {
       try {
         const emailed = await bioGiftTicketPdf.emailGiftTickets({
           resend,
@@ -8500,8 +8587,9 @@ app.get('/api/bio-gift/tickets.pdf', async (req, res) => {
     }
     const sessionId = String(req.query.sessionId || req.query.session_id || '').trim();
     const ticketCode = String(req.query.code || req.query.ticketCode || '').trim();
+    const theme = String(req.query.theme || req.query.ticketTheme || '').trim();
     const { payload } = await bioGiftTicketPdf.loadPaidGiftPayload(supabase, sessionId);
-    const pdfBuffer = await bioGiftTicketPdf.buildGiftTicketsPdfBuffer(payload, { ticketCode });
+    const pdfBuffer = await bioGiftTicketPdf.buildGiftTicketsPdfBuffer(payload, { ticketCode, theme });
     const year = Number(payload.seasonYear) || 2027;
     const filename = bioGiftTicketPdf.safeFileName(
       ticketCode
@@ -8515,6 +8603,22 @@ app.get('/api/bio-gift/tickets.pdf', async (req, res) => {
   } catch (err) {
     console.error('[bio-gift/tickets.pdf]', err);
     return res.status(err.statusCode || 500).json({ error: err.message || 'Could not build gift ticket PDF' });
+  }
+});
+
+/** Persist gift ticket visual theme on paid checkout draft. */
+app.post('/api/bio-gift/ticket-theme', async (req, res) => {
+  try {
+    if (!supabaseConfigured) {
+      return res.status(503).json({ error: 'Server not configured' });
+    }
+    const sessionId = String(req.body?.sessionId || req.body?.session_id || '').trim();
+    const theme = String(req.body?.theme || req.body?.ticketTheme || '').trim();
+    const out = await bioGiftTicketPdf.saveGiftTicketTheme(supabase, sessionId, theme);
+    return res.json(out);
+  } catch (err) {
+    console.error('[bio-gift/ticket-theme]', err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Could not save ticket theme' });
   }
 });
 
@@ -8539,6 +8643,146 @@ app.post('/api/bio-gift/email-tickets', async (req, res) => {
   } catch (err) {
     console.error('[bio-gift/email-tickets]', err);
     return res.status(err.statusCode || 500).json({ error: err.message || 'Could not email gift tickets' });
+  }
+});
+
+/** Admin: list / search bioluminescence gift certificates. */
+app.get('/api/admin/gift-certificates', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const out = await giftCertificateAdminService.listGiftCertificatesForAdmin(supabase, req.query || {});
+    return res.json(out);
+  } catch (err) {
+    console.error('[admin/gift-certificates]', err.message || err);
+    return res.status(err.statusCode || 500).json({
+      error: err.message || 'Could not load gift certificates.',
+    });
+  }
+});
+
+/** Admin: gift platform season / sales settings (read-only config + env). */
+app.get('/api/admin/gift-certificates/settings', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  return res.json(giftCertificateAdminService.giftPlatformSettings());
+});
+
+/** Admin: single gift certificate by id or code. */
+app.get('/api/admin/gift-certificates/:idOrCode', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const out = await giftCertificateAdminService.getGiftCertificateForAdmin(
+      supabase,
+      req.params.idOrCode
+    );
+    return res.json(out);
+  } catch (err) {
+    console.error('[admin/gift-certificates:get]', err.message || err);
+    return res.status(err.statusCode || 500).json({
+      error: err.message || 'Could not load gift certificate.',
+    });
+  }
+});
+
+/** Admin: cancel / mark refunded / reactivate (not redeemed). */
+app.patch('/api/admin/gift-certificates/:id', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    const out = await giftCertificateAdminService.updateGiftCertificateStatus(supabase, {
+      id: req.params.id,
+      status: req.body?.status,
+      actorId: adminUser.id,
+    });
+    return res.json(out);
+  } catch (err) {
+    console.error('[admin/gift-certificates:patch]', err.message || err);
+    return res.status(err.statusCode || 500).json({
+      error: err.message || 'Could not update gift certificate.',
+    });
+  }
+});
+
+/** Admin: Stripe refund gift purchase + mark tickets refunded. */
+app.post('/api/admin/gift-certificates/:id/refund', async (req, res) => {
+  const adminUser = await verifyAdminRequest(req, res);
+  if (!adminUser) return;
+  try {
+    if (!stripe) return res.status(503).json({ error: 'Stripe is not configured.' });
+    const out = await giftCertificateAdminService.refundGiftCertificate(supabase, stripe, {
+      id: req.params.id,
+      actorId: adminUser.id,
+    });
+    return res.json(out);
+  } catch (err) {
+    console.error('[admin/gift-certificates:refund]', err.message || err);
+    return res.status(err.statusCode || 500).json({
+      error: err.message || 'Could not refund gift certificate.',
+    });
+  }
+});
+
+/** Public gift certificate lookup (QR /redeem/:code). */
+app.get('/api/gift-certificates/:code', async (req, res) => {
+  try {
+    if (!supabaseConfigured) {
+      return res.status(503).json({ error: 'Server not configured' });
+    }
+    const { view } = await giftCertificateRedeemService.lookupGiftCertificate(
+      supabase,
+      req.params.code
+    );
+    return res.json(view);
+  } catch (err) {
+    console.error('[gift-certificates/lookup]', err.message || err);
+    return res.status(err.statusCode || 500).json({
+      error: err.message || 'Could not look up gift certificate',
+      code: err.code || null,
+    });
+  }
+});
+
+/** Redeem gift certificate → dated bioluminescence booking (consumes capacity). */
+app.post('/api/gift-certificates/:code/redeem', async (req, res) => {
+  try {
+    if (!supabaseConfigured) {
+      return res.status(503).json({ error: 'Server not configured' });
+    }
+    const out = await giftCertificateRedeemService.redeemGiftCertificate(supabase, {
+      ...(req.body || {}),
+      giftCode: req.params.code,
+    });
+
+    // Confirmation email is best-effort — redemption already succeeded.
+    if (out?.bookingId && resend && resendFrom) {
+      try {
+        const email =
+          String(req.body?.customer?.email || req.body?.customer?.Email || '').trim() || undefined;
+        await sendBookingConfirmationInternal({
+          bookingId: out.bookingId,
+          email,
+          source: 'gift_redemption',
+          verifyEmailMatch: Boolean(email),
+        });
+        out.confirmationEmailSent = true;
+      } catch (emailErr) {
+        console.warn(
+          '[gift-certificates/redeem] confirmation email skipped:',
+          emailErr.message || emailErr
+        );
+        out.confirmationEmailSent = false;
+      }
+    }
+
+    return res.json(out);
+  } catch (err) {
+    console.error('[gift-certificates/redeem]', err.message || err);
+    return res.status(err.statusCode || 500).json({
+      error: err.message || 'Could not redeem gift certificate',
+      code: err.code || null,
+    });
   }
 });
 

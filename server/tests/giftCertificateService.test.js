@@ -84,4 +84,60 @@ test('detects missing-table errors', () => {
   assert.strictEqual(isMissingGiftCertificatesTable({ message: 'other error' }), false);
 });
 
+test('markGiftCertificatesRefunded updates active, skips redeemed', async () => {
+  const { markGiftCertificatesRefunded } = require('../services/giftCertificateService');
+  const rows = [
+    { id: '1', gift_code: 'LZC-2027-AAAA', status: 'active' },
+    { id: '2', gift_code: 'LZC-2027-BBBB', status: 'redeemed' },
+    { id: '3', gift_code: 'LZC-2027-CCCC', status: 'cancelled' },
+  ];
+  const updatedIds = [];
+  const supabase = {
+    from() {
+      return {
+        select() {
+          return {
+            or() {
+              return Promise.resolve({ data: rows, error: null });
+            },
+            eq() {
+              return Promise.resolve({ data: rows, error: null });
+            },
+          };
+        },
+        update() {
+          return {
+            in(_col, ids) {
+              updatedIds.push(...ids);
+              return {
+                in() {
+                  return {
+                    select() {
+                      return Promise.resolve({
+                        data: [
+                          { id: '1', gift_code: 'LZC-2027-AAAA', status: 'refunded' },
+                          { id: '3', gift_code: 'LZC-2027-CCCC', status: 'refunded' },
+                        ],
+                        error: null,
+                      });
+                    },
+                  };
+                },
+              };
+            },
+          };
+        },
+      };
+    },
+  };
+
+  const out = await markGiftCertificatesRefunded(supabase, {
+    paymentIntentId: 'pi_test',
+    source: 'test',
+  });
+  assert.strictEqual(out.updated, 2);
+  assert.strictEqual(out.skippedRedeemed, 1);
+  assert.deepStrictEqual(updatedIds.sort(), ['1', '3']);
+});
+
 console.log('giftCertificateService tests passed');

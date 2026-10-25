@@ -201,6 +201,16 @@ async function createBioGiftCheckoutSession({ stripe, supabase, body }) {
     throw err;
   }
 
+  const giftCertificateAdminService = require('./giftCertificateAdminService');
+  if (!giftCertificateAdminService.isGiftSalesEnabled()) {
+    const err = new Error(
+      'Bioluminescence gift tickets are not on sale right now. Please call 803-542-1761 for help.'
+    );
+    err.statusCode = 503;
+    err.code = 'gift_sales_closed';
+    throw err;
+  }
+
   const gift = validateGiftCheckoutBody(body);
   const domain = normalizeCheckoutBaseUrl(getPublicBaseUrl());
   if (!domain) {
@@ -368,6 +378,7 @@ function publicGiftResult(payload, { alreadyFinalized = false } = {}) {
     seasonEnd: payload?.seasonEnd || null,
     purchaserEmail: payload?.purchaser?.email || null,
     ticketEmailSentAt: payload?.ticketEmailSentAt || null,
+    ticketTheme: payload?.ticketTheme || 'glow',
     alreadyFinalized,
   };
 }
@@ -409,7 +420,10 @@ async function finalizeBioGiftCheckoutFromSession({ stripe, supabase, sessionId,
       );
       if (!tableMissing && rows.length) {
         const fromTable = giftCertificateService.payloadFromGiftCertificateRows(rows, sid);
-        return publicGiftResult(fromTable || existingPayload, { alreadyFinalized: true });
+        const merged = fromTable
+          ? { ...fromTable, ticketTheme: existingPayload.ticketTheme || fromTable.ticketTheme }
+          : existingPayload;
+        return publicGiftResult(merged, { alreadyFinalized: true });
       }
       if (!tableMissing && !rows.length) {
         await giftCertificateService.persistGiftCertificatesFromPaidPayload(
@@ -423,7 +437,10 @@ async function finalizeBioGiftCheckoutFromSession({ stripe, supabase, sessionId,
             reloaded.rows,
             sid
           );
-          return publicGiftResult(fromTable || existingPayload, { alreadyFinalized: true });
+          const merged = fromTable
+            ? { ...fromTable, ticketTheme: existingPayload.ticketTheme || fromTable.ticketTheme }
+            : existingPayload;
+          return publicGiftResult(merged, { alreadyFinalized: true });
         }
       }
     } catch (persistErr) {

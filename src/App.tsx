@@ -18,6 +18,7 @@ import BookNow from './pages/BookNow';
 import DirectDeals from './pages/DirectDeals';
 import BioGiftBooking from './pages/BioGiftBooking';
 import BioGiftSuccess from './pages/BioGiftSuccess';
+import BioGiftRedeem from './pages/BioGiftRedeem';
 import BookingReceived from './pages/BookingReceived';
 import BookingSuccess from './pages/BookingSuccess';
 import InsuranceRequired from './pages/InsuranceRequired';
@@ -32,6 +33,7 @@ import AdminMessages from './pages/AdminMessages';
 import AdminPreTrip from './pages/AdminPreTrip';
 import AdminPreTripDetail from './pages/AdminPreTripDetail';
 import AdminPromoCodes from './pages/AdminPromoCodes';
+import AdminGiftCertificates from './pages/AdminGiftCertificates';
 import AdminGroupon from './pages/AdminGroupon';
 import AdminSupport from './pages/AdminSupport';
 import GrouponBook from './pages/GrouponBook';
@@ -118,6 +120,7 @@ function AppLayout() {
           <Route path="/booking/direct" element={<DirectDeals onNavigate={onNavigate} />} />
           <Route path="/booking/gift" element={<BioGiftBooking onNavigate={onNavigate} />} />
           <Route path="/booking/gift/success" element={<BioGiftSuccess onNavigate={onNavigate} />} />
+          <Route path="/redeem/:code" element={<BioGiftRedeem />} />
           <Route path="/booking/groupon" element={<GrouponBook />} />
           <Route path="/booking/groupon/received" element={<GrouponRequestReceived onNavigate={onNavigate} />} />
           <Route path="/booking-received" element={<BookingReceived onNavigate={onNavigate} />} />
@@ -189,6 +192,7 @@ function AppLayout() {
           <Route path="/admin/pre-trip" element={<AdminPreTrip />} />
           <Route path="/admin/pre-trip/:id" element={<AdminPreTripDetail />} />
           <Route path="/admin/promo-codes" element={<AdminPromoCodes />} />
+          <Route path="/admin/gift-certificates" element={<AdminGiftCertificates />} />
           <Route path="/admin/groupon" element={<AdminGroupon />} />
           <Route path="/admin/support" element={<AdminSupport />} />
           <Route path="/admin/captains-log" element={<AdminCaptainsLog />} />

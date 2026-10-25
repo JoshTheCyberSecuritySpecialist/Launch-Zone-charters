@@ -132,7 +132,18 @@ type RefundPreview = {
 
 const statusOptions = ['hold', 'pending', 'pending_verification', 'confirmed', 'ready_for_departure', 'completed', 'cancelled'];
 const sourceOptions = ['website', 'admin', 'phone', 'groupon', 'boatsetter', 'airbnb', 'walk-in', 'repeat customer'];
-const paymentMethods = ['', 'stripe', 'cash', 'venmo', 'zelle', 'paypal', 'groupon', 'comp', 'other'];
+const paymentMethods = [
+  '',
+  'stripe',
+  'cash',
+  'venmo',
+  'zelle',
+  'paypal',
+  'groupon',
+  'comp',
+  'other',
+  'gift_certificate',
+];
 const paymentStatuses = ['pending', 'deposit_paid', 'paid'];
 const communicationButtons = [
   ['booking_confirmation', 'Send Confirmation'],

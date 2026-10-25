@@ -9,6 +9,10 @@ const PDFDocument = require('pdfkit');
 const QRCode = require('qrcode');
 const { getBioluminescencePackage } = require('../config/bioluminescencePackages');
 const giftCertificateService = require('./giftCertificateService');
+const {
+  normalizeBioGiftTicketTheme,
+  themePdfTokens,
+} = require('../lib/bioGiftTicketThemes');
 
 const BIO_GIFT_KIND = 'bio_gift';
 const TAGLINE = 'YOUR NIGHT ON THE GLOWING WATER AWAITS';
@@ -114,13 +118,6 @@ async function loadPaidGiftPayload(supabase, sessionId) {
     throw err;
   }
 
-  // Prefer gift_certificates (Phase 8) when the migration is applied.
-  const fromTable = await giftCertificateService.loadGiftCertificatesBySession(supabase, sid);
-  if (!fromTable.tableMissing && fromTable.rows.length) {
-    const payload = giftCertificateService.payloadFromGiftCertificateRows(fromTable.rows, sid);
-    if (payload) return { sessionId: sid, payload, source: 'gift_certificates' };
-  }
-
   const { data, error } = await supabase
     .from('checkout_drafts')
     .select('stripe_session_id, payload')
@@ -131,7 +128,22 @@ async function loadPaidGiftPayload(supabase, sessionId) {
     err.statusCode = 500;
     throw err;
   }
-  const payload = data?.payload && typeof data.payload === 'object' ? data.payload : null;
+  const draftPayload = data?.payload && typeof data.payload === 'object' ? data.payload : null;
+  const draftTheme = draftPayload?.ticketTheme
+    ? normalizeBioGiftTicketTheme(draftPayload.ticketTheme)
+    : null;
+
+  // Prefer gift_certificates (Phase 8) when the migration is applied.
+  const fromTable = await giftCertificateService.loadGiftCertificatesBySession(supabase, sid);
+  if (!fromTable.tableMissing && fromTable.rows.length) {
+    const payload = giftCertificateService.payloadFromGiftCertificateRows(fromTable.rows, sid);
+    if (payload) {
+      if (draftTheme) payload.ticketTheme = draftTheme;
+      return { sessionId: sid, payload, source: 'gift_certificates' };
+    }
+  }
+
+  const payload = draftPayload;
   if (!payload || payload.kind !== BIO_GIFT_KIND) {
     const err = new Error('Gift purchase not found.');
     err.statusCode = 404;
@@ -151,7 +163,8 @@ async function loadPaidGiftPayload(supabase, sessionId) {
   return { sessionId: sid, payload, source: 'checkout_drafts' };
 }
 
-function drawTicketPage(doc, ticket, payload, qrPng, logoPath, ticketCount) {
+function drawTicketPage(doc, ticket, payload, qrPng, logoPath, ticketCount, themeId) {
+  const t = themePdfTokens(themeId || payload?.ticketTheme);
   const pageW = doc.page.width;
   const pageH = doc.page.height;
   const margin = 36;
@@ -162,19 +175,16 @@ function drawTicketPage(doc, ticket, payload, qrPng, logoPath, ticketCount) {
   const stubW = 150;
   const mainW = cardW - stubW;
 
-  // Night lagoon card
   doc.save();
-  doc.roundedRect(cardX, cardY, cardW, cardH, 12).fill('#071018');
+  doc.roundedRect(cardX, cardY, cardW, cardH, 12).fill(t.cardBg);
 
-  // Soft cyan wash at bottom (glowing water suggestion)
   doc
-    .fillColor('#22d3ee')
+    .fillColor(t.glow)
     .opacity(0.12)
     .ellipse(cardX + mainW * 0.5, cardY + cardH + 20, mainW * 0.55, 90)
     .fill();
   doc.opacity(1);
 
-  // Main panel
   let y = cardY + 28;
   const left = cardX + 28;
   const contentW = mainW - 48;
@@ -188,28 +198,28 @@ function drawTicketPage(doc, ticket, payload, qrPng, logoPath, ticketCount) {
   }
 
   doc
-    .fillColor('#94a3b8')
+    .fillColor(t.muted)
     .font('Helvetica')
     .fontSize(8)
     .text(COORDINATES, left, y, { width: contentW, align: 'right' });
 
   y += 58;
   doc
-    .fillColor('#a5f3fc')
+    .fillColor(t.accentSoft)
     .font('Helvetica-Bold')
     .fontSize(9)
     .text('LAUNCH ZONE CHARTERS', left, y, { characterSpacing: 1.5 });
 
   y += 18;
   doc
-    .fillColor('#67e8f9')
+    .fillColor(t.label)
     .font('Helvetica-Bold')
     .fontSize(10)
     .text(`${Number(payload.seasonYear) || 2027} BIOLUMINESCENCE ADVENTURE`, left, y);
 
   y += 20;
   doc
-    .fillColor('#ffffff')
+    .fillColor(t.text)
     .font('Helvetica-Bold')
     .fontSize(16)
     .text(TAGLINE, left, y, { width: contentW });
@@ -217,7 +227,7 @@ function drawTicketPage(doc, ticket, payload, qrPng, logoPath, ticketCount) {
   if (ticketCount > 1) {
     y += 28;
     doc
-      .fillColor('#fb923c')
+      .fillColor(t.multi)
       .font('Helvetica-Bold')
       .fontSize(9)
       .text(`Ticket ${ticket.index} of ${ticketCount}`, left, y);
@@ -239,18 +249,18 @@ function drawTicketPage(doc, ticket, payload, qrPng, logoPath, ticketCount) {
     const rowY = y;
     const leftField = fields[i];
     const rightField = fields[i + 1];
-    doc.fillColor('#67e8f9').font('Helvetica-Bold').fontSize(7).text(leftField[0], left, rowY);
-    doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(11).text(leftField[1], left, rowY + 11, {
+    doc.fillColor(t.label).font('Helvetica-Bold').fontSize(7).text(leftField[0], left, rowY);
+    doc.fillColor(t.text).font('Helvetica-Bold').fontSize(11).text(leftField[1], left, rowY + 11, {
       width: colW,
     });
     if (rightField) {
       doc
-        .fillColor('#67e8f9')
+        .fillColor(t.label)
         .font('Helvetica-Bold')
         .fontSize(7)
         .text(rightField[0], left + colW + 16, rowY);
       doc
-        .fillColor('#ffffff')
+        .fillColor(t.text)
         .font('Helvetica-Bold')
         .fontSize(11)
         .text(rightField[1], left + colW + 16, rowY + 11, { width: colW });
@@ -260,7 +270,7 @@ function drawTicketPage(doc, ticket, payload, qrPng, logoPath, ticketCount) {
 
   if (ticket.giftMessage) {
     doc
-      .fillColor('#cbd5e1')
+      .fillColor(t.quote)
       .font('Helvetica-Oblique')
       .fontSize(10)
       .text(`"${ticket.giftMessage}"`, left, y, { width: contentW });
@@ -268,7 +278,7 @@ function drawTicketPage(doc, ticket, payload, qrPng, logoPath, ticketCount) {
   }
 
   doc
-    .fillColor('#94a3b8')
+    .fillColor(t.muted)
     .font('Helvetica')
     .fontSize(8)
     .text('Titusville · Florida Space Coast', left, Math.max(y, cardY + cardH - 70), {
@@ -277,17 +287,15 @@ function drawTicketPage(doc, ticket, payload, qrPng, logoPath, ticketCount) {
   doc.text('Dates subject to availability and weather conditions.', left, doc.y + 2, {
     width: contentW,
   });
-  doc.fillColor('#67e8f9').text('launchzonecharters.com', left, doc.y + 2, { width: contentW });
+  doc.fillColor(t.label).text('launchzonecharters.com', left, doc.y + 2, { width: contentW });
 
-  // Perforation stub
   const stubX = cardX + mainW;
   doc.save();
-  doc.rect(stubX, cardY, stubW, cardH).fill('#050d16');
+  doc.rect(stubX, cardY, stubW, cardH).fill(t.stubBg);
   doc.restore();
 
-  // Dashed perforation
   doc
-    .strokeColor('#67e8f9')
+    .strokeColor(t.accent)
     .opacity(0.45)
     .lineWidth(1)
     .dash(4, { space: 4 })
@@ -299,7 +307,7 @@ function drawTicketPage(doc, ticket, payload, qrPng, logoPath, ticketCount) {
 
   const stubCenterX = stubX + stubW / 2;
   doc
-    .fillColor('#a5f3fc')
+    .fillColor(t.accentSoft)
     .font('Helvetica-Bold')
     .fontSize(8)
     .text('BOARDING STUB', stubX + 10, cardY + 28, { width: stubW - 20, align: 'center' });
@@ -308,17 +316,17 @@ function drawTicketPage(doc, ticket, payload, qrPng, logoPath, ticketCount) {
     const qrSize = 110;
     const qrX = stubCenterX - qrSize / 2;
     const qrY = cardY + 70;
-    doc.roundedRect(qrX - 6, qrY - 6, qrSize + 12, qrSize + 12, 6).fill('#e8f7ff');
+    doc.roundedRect(qrX - 6, qrY - 6, qrSize + 12, qrSize + 12, 6).fill(t.qrLight);
     doc.image(qrPng, qrX, qrY, { width: qrSize, height: qrSize });
   }
 
   doc
-    .fillColor('#ffffff')
+    .fillColor(t.text)
     .font('Courier-Bold')
     .fontSize(9)
     .text(ticket.code, stubX + 8, cardY + cardH - 90, { width: stubW - 16, align: 'center' });
   doc
-    .fillColor('#94a3b8')
+    .fillColor(t.muted)
     .font('Helvetica')
     .fontSize(7)
     .text(QR_HINT, stubX + 10, cardY + cardH - 68, { width: stubW - 20, align: 'center' });
@@ -345,6 +353,8 @@ async function buildGiftTicketsPdfBuffer(payload, options = {}) {
     }
   }
 
+  const themeId = normalizeBioGiftTicketTheme(options.theme || payload?.ticketTheme);
+  const theme = themePdfTokens(themeId);
   const logoPath = resolveLogoPath();
   const qrBuffers = await Promise.all(
     tickets.map((ticket) =>
@@ -353,7 +363,7 @@ async function buildGiftTicketsPdfBuffer(payload, options = {}) {
         errorCorrectionLevel: 'M',
         margin: 1,
         width: 280,
-        color: { dark: '#0B1220', light: '#E8F7FF' },
+        color: { dark: theme.qrDark, light: theme.qrLight },
       })
     )
   );
@@ -374,11 +384,53 @@ async function buildGiftTicketsPdfBuffer(payload, options = {}) {
 
     tickets.forEach((ticket, index) => {
       if (index > 0) doc.addPage();
-      drawTicketPage(doc, ticket, payload, qrBuffers[index], logoPath, allTickets.length);
+      drawTicketPage(doc, ticket, payload, qrBuffers[index], logoPath, allTickets.length, themeId);
     });
 
     doc.end();
   });
+}
+
+/**
+ * Persist selected ticket theme on paid checkout draft (no new DB column).
+ */
+async function saveGiftTicketTheme(supabase, sessionId, themeRaw) {
+  const sid = String(sessionId || '').trim();
+  const theme = normalizeBioGiftTicketTheme(themeRaw);
+  if (!sid) {
+    const err = new Error('sessionId is required');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const { data, error } = await supabase
+    .from('checkout_drafts')
+    .select('stripe_session_id, payload')
+    .eq('stripe_session_id', sid)
+    .maybeSingle();
+  if (error) {
+    const err = new Error(error.message || 'Could not load gift purchase');
+    err.statusCode = 500;
+    throw err;
+  }
+  const payload = data?.payload && typeof data.payload === 'object' ? data.payload : null;
+  if (!payload || payload.kind !== BIO_GIFT_KIND || payload.status !== 'paid') {
+    const err = new Error('Gift purchase not found or not paid yet.');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const nextPayload = { ...payload, ticketTheme: theme };
+  const { error: updErr } = await supabase
+    .from('checkout_drafts')
+    .update({ payload: nextPayload, updated_at: new Date().toISOString() })
+    .eq('stripe_session_id', sid);
+  if (updErr) {
+    const err = new Error(updErr.message || 'Could not save ticket theme');
+    err.statusCode = 500;
+    throw err;
+  }
+  return { ticketTheme: theme };
 }
 
 async function emailGiftTickets({
@@ -480,8 +532,10 @@ module.exports = {
   loadPaidGiftPayload,
   buildGiftTicketsPdfBuffer,
   emailGiftTickets,
+  saveGiftTicketTheme,
   normalizePaidTickets,
   safeFileName,
   redeemUrlForCode,
   formatValidSeasonLabel,
+  normalizeBioGiftTicketTheme,
 };

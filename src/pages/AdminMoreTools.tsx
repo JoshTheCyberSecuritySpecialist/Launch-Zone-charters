@@ -12,6 +12,7 @@ import {
   Anchor,
   UserRound,
   Ticket,
+  Gift,
   Headphones,
 } from 'lucide-react';
 import { useAuth } from '../contexts/useAuth';
@@ -56,6 +57,12 @@ const TOOLS = [
     title: 'Promo Codes',
     description: 'Checkout discounts.',
     icon: <Tag className="h-6 w-6" />,
+  },
+  {
+    to: '/admin/gift-certificates',
+    title: 'Gift Tickets',
+    description: 'Bioluminescence gift codes, status, and redeem links.',
+    icon: <Gift className="h-6 w-6" />,
   },
   {
     to: '/admin/groupon',

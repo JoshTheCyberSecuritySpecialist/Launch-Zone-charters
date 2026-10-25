@@ -699,6 +699,88 @@
     }
   }
 
+  /* Secondary gift CTA — amber/gold, distinct from orange Book Direct */
+  .lz-btn-nav-gift {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem;
+    flex-shrink: 0;
+    border-radius: var(--lz-radius);
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #fffbeb;
+    border: 1px solid rgba(251, 191, 36, 0.55);
+    background: linear-gradient(135deg, rgba(180, 83, 9, 0.92), rgba(217, 119, 6, 0.95));
+    box-shadow: 0 0 12px rgba(251, 191, 36, 0.22);
+    cursor: pointer;
+    transition:
+      transform 0.2s ease,
+      box-shadow 0.2s ease,
+      border-color 0.2s ease,
+      filter 0.2s ease;
+  }
+
+  .lz-btn-nav-gift:hover {
+    transform: translateY(-1px);
+    border-color: rgba(252, 211, 77, 0.75);
+    box-shadow:
+      0 6px 16px rgba(0, 0, 0, 0.22),
+      0 0 14px rgba(251, 191, 36, 0.28);
+    filter: brightness(1.04);
+  }
+
+  .lz-btn-nav-gift:focus-visible {
+    outline: 2px solid rgba(252, 211, 77, 0.9);
+    outline-offset: 2px;
+  }
+
+  .lz-btn-nav-gift:active {
+    transform: translateY(0);
+  }
+
+  .lz-btn-nav-gift--toolbar {
+    padding: 0.34rem 0.55rem;
+    font-size: 0.58rem;
+    min-height: 36px;
+    min-width: 36px;
+  }
+
+  @media (min-width: 400px) {
+    .lz-btn-nav-gift--toolbar {
+      padding: 0.4rem 0.65rem;
+      font-size: 0.62rem;
+      min-height: 38px;
+    }
+  }
+
+  .lz-btn-nav-gift--icon {
+    padding: 0;
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .lz-nav-drawer__gift {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    min-height: 48px;
+    border-radius: var(--lz-radius);
+    font-size: 0.875rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #fffbeb;
+    border: 1px solid rgba(251, 191, 36, 0.55);
+    background: linear-gradient(135deg, rgba(180, 83, 9, 0.95), rgba(217, 119, 6, 0.98));
+    box-shadow: 0 0 16px rgba(251, 191, 36, 0.2);
+  }
+
   /* Hero headlines — one paint layer: gradient fill only (no filter/drop-shadow: those duplicate glyphs with bg-clip text) */
   .lz-hero-title {
     @apply font-display font-bold uppercase tracking-[0.14em];

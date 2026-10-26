@@ -5,10 +5,7 @@
  */
 
 const crypto = require('crypto');
-const {
-  getBioluminescencePackage,
-  isDirectBioPackagePricingEnabled,
-} = require('../config/bioluminescencePackages');
+const { getBioluminescencePackage } = require('../config/bioluminescencePackages');
 const { getActiveBioBookingSeason } = require('../config/bioluminescenceSeason');
 const giftCertificateService = require('./giftCertificateService');
 
@@ -112,12 +109,8 @@ function buildTicketRecipients(body, ticketQuantity, recipientMode) {
 }
 
 function validateGiftCheckoutBody(body) {
-  if (!isDirectBioPackagePricingEnabled()) {
-    const err = new Error('Bioluminescence gift checkout is not available right now.');
-    err.statusCode = 503;
-    throw err;
-  }
-
+  // Gift checkout uses the bio package catalog directly; sales are gated by
+  // BIO_GIFT_SALES_ENABLED in createBioGiftCheckoutSession (not the direct-booking pricing flag).
   const packageId = cleanText(body?.packageId || body?.package_id, 40);
   let pkg;
   try {

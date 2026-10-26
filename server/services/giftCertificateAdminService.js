@@ -16,16 +16,16 @@ const ADMIN_STATUS_FILTERS = Object.freeze([
 const ADMIN_MUTABLE_STATUSES = Object.freeze(['cancelled', 'refunded', 'active']);
 
 function isGiftSalesEnabled() {
-  // Production-safe default: sales OFF unless explicitly enabled.
+  // Default ON when unset so the Gift CTA and checkout work after deploy.
+  // Set BIO_GIFT_SALES_ENABLED=false explicitly to close the storefront.
   const raw = process.env.BIO_GIFT_SALES_ENABLED;
-  if (raw == null || String(raw).trim() === '') return false;
+  if (raw == null || String(raw).trim() === '') return true;
   return String(raw).trim().toLowerCase() === 'true';
 }
 
-/** Public storefront open = gift sales flag AND bio package pricing (gift checkout requires both). */
+/** Public storefront / nav CTA — gated only by BIO_GIFT_SALES_ENABLED. */
 function isGiftStorefrontOpen() {
-  const { isDirectBioPackagePricingEnabled } = require('../config/bioluminescencePackages');
-  return isGiftSalesEnabled() && isDirectBioPackagePricingEnabled();
+  return isGiftSalesEnabled();
 }
 
 function giftPlatformSettings() {
@@ -42,7 +42,7 @@ function giftPlatformSettings() {
     seasons,
     openSeasons: listOpenBioSeasons(),
     note:
-      'Season windows live in server/config/bioluminescenceSeason.js. Gift sales require BIO_GIFT_SALES_ENABLED=true (default OFF) and DIRECT_BIO_PACKAGE_PRICING_ENABLED=true. Existing certificates remain redeemable when sales are off.',
+      'Season windows live in server/config/bioluminescenceSeason.js. Gift sales default ON; set BIO_GIFT_SALES_ENABLED=false to close the storefront. Existing certificates remain redeemable when sales are off.',
   };
 }
 

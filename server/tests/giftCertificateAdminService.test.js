@@ -49,10 +49,10 @@ test('maps admin row view', () => {
   assert.ok(ADMIN_STATUS_FILTERS.includes('active'));
 });
 
-test('gift sales default disabled until explicitly true', () => {
+test('gift sales default enabled until explicitly false', () => {
   const prev = process.env.BIO_GIFT_SALES_ENABLED;
   delete process.env.BIO_GIFT_SALES_ENABLED;
-  assert.strictEqual(isGiftSalesEnabled(), false);
+  assert.strictEqual(isGiftSalesEnabled(), true);
   process.env.BIO_GIFT_SALES_ENABLED = 'false';
   assert.strictEqual(isGiftSalesEnabled(), false);
   process.env.BIO_GIFT_SALES_ENABLED = 'true';
@@ -70,18 +70,16 @@ test('settings expose 2027 season', () => {
   assert.strictEqual(settings.giftSalesEnv, 'BIO_GIFT_SALES_ENABLED');
 });
 
-test('storefront open requires sales flag and package pricing', () => {
+test('storefront open follows gift sales flag only', () => {
   const prevSales = process.env.BIO_GIFT_SALES_ENABLED;
-  const prevPkg = process.env.DIRECT_BIO_PACKAGE_PRICING_ENABLED;
   process.env.BIO_GIFT_SALES_ENABLED = 'true';
-  process.env.DIRECT_BIO_PACKAGE_PRICING_ENABLED = 'true';
   assert.strictEqual(isGiftStorefrontOpen(), true);
   process.env.BIO_GIFT_SALES_ENABLED = 'false';
   assert.strictEqual(isGiftStorefrontOpen(), false);
+  delete process.env.BIO_GIFT_SALES_ENABLED;
+  assert.strictEqual(isGiftStorefrontOpen(), true);
   if (prevSales === undefined) delete process.env.BIO_GIFT_SALES_ENABLED;
   else process.env.BIO_GIFT_SALES_ENABLED = prevSales;
-  if (prevPkg === undefined) delete process.env.DIRECT_BIO_PACKAGE_PRICING_ENABLED;
-  else process.env.DIRECT_BIO_PACKAGE_PRICING_ENABLED = prevPkg;
 });
 
 console.log('giftCertificateAdminService tests passed');

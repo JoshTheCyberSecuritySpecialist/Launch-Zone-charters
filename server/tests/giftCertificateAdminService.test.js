@@ -49,37 +49,37 @@ test('maps admin row view', () => {
   assert.ok(ADMIN_STATUS_FILTERS.includes('active'));
 });
 
-test('gift sales default enabled until explicitly false', () => {
-  const prev = process.env.BIO_GIFT_SALES_ENABLED;
-  delete process.env.BIO_GIFT_SALES_ENABLED;
-  assert.strictEqual(isGiftSalesEnabled(), true);
+test('gift sales open unless BIO_GIFT_SALES_CLOSED=true', () => {
+  const prevClosed = process.env.BIO_GIFT_SALES_CLOSED;
+  const prevEnabled = process.env.BIO_GIFT_SALES_ENABLED;
+  delete process.env.BIO_GIFT_SALES_CLOSED;
   process.env.BIO_GIFT_SALES_ENABLED = 'false';
-  assert.strictEqual(isGiftSalesEnabled(), false);
-  process.env.BIO_GIFT_SALES_ENABLED = 'true';
   assert.strictEqual(isGiftSalesEnabled(), true);
-  process.env.BIO_GIFT_SALES_ENABLED = 'yes';
+  process.env.BIO_GIFT_SALES_CLOSED = 'true';
   assert.strictEqual(isGiftSalesEnabled(), false);
-  if (prev === undefined) delete process.env.BIO_GIFT_SALES_ENABLED;
-  else process.env.BIO_GIFT_SALES_ENABLED = prev;
+  process.env.BIO_GIFT_SALES_CLOSED = 'false';
+  assert.strictEqual(isGiftSalesEnabled(), true);
+  if (prevClosed === undefined) delete process.env.BIO_GIFT_SALES_CLOSED;
+  else process.env.BIO_GIFT_SALES_CLOSED = prevClosed;
+  if (prevEnabled === undefined) delete process.env.BIO_GIFT_SALES_ENABLED;
+  else process.env.BIO_GIFT_SALES_ENABLED = prevEnabled;
 });
 
 test('settings expose 2027 season', () => {
   const settings = giftPlatformSettings();
   assert.ok(Array.isArray(settings.seasons));
   assert.ok(settings.seasons.some((s) => s.year === 2027));
-  assert.strictEqual(settings.giftSalesEnv, 'BIO_GIFT_SALES_ENABLED');
+  assert.strictEqual(settings.giftSalesEnv, 'BIO_GIFT_SALES_CLOSED');
 });
 
-test('storefront open follows gift sales flag only', () => {
-  const prevSales = process.env.BIO_GIFT_SALES_ENABLED;
-  process.env.BIO_GIFT_SALES_ENABLED = 'true';
+test('storefront open follows closed kill switch', () => {
+  const prevClosed = process.env.BIO_GIFT_SALES_CLOSED;
+  delete process.env.BIO_GIFT_SALES_CLOSED;
   assert.strictEqual(isGiftStorefrontOpen(), true);
-  process.env.BIO_GIFT_SALES_ENABLED = 'false';
+  process.env.BIO_GIFT_SALES_CLOSED = 'true';
   assert.strictEqual(isGiftStorefrontOpen(), false);
-  delete process.env.BIO_GIFT_SALES_ENABLED;
-  assert.strictEqual(isGiftStorefrontOpen(), true);
-  if (prevSales === undefined) delete process.env.BIO_GIFT_SALES_ENABLED;
-  else process.env.BIO_GIFT_SALES_ENABLED = prevSales;
+  if (prevClosed === undefined) delete process.env.BIO_GIFT_SALES_CLOSED;
+  else process.env.BIO_GIFT_SALES_CLOSED = prevClosed;
 });
 
 console.log('giftCertificateAdminService tests passed');

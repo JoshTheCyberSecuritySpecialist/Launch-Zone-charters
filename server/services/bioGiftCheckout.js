@@ -110,7 +110,7 @@ function buildTicketRecipients(body, ticketQuantity, recipientMode) {
 
 function validateGiftCheckoutBody(body) {
   // Gift checkout uses the bio package catalog directly; sales are gated by
-  // BIO_GIFT_SALES_ENABLED in createBioGiftCheckoutSession (not the direct-booking pricing flag).
+  // isGiftSalesEnabled() in createBioGiftCheckoutSession.
   const packageId = cleanText(body?.packageId || body?.package_id, 40);
   let pkg;
   try {
